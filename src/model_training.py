@@ -1,23 +1,28 @@
+import os
+
 import numpy as np
-from keras.src.applications.inception_v3 import InceptionV3
-from keras.src.applications.resnet import ResNet50
-from keras.src.applications.xception import Xception
+import tensorflow as tf
+from tensorflow.keras.applications import VGG19, InceptionV3, ResNet50, Xception
+from tensorflow.keras.applications.vgg19 import preprocess_input as preprocess_input_vgg19
+from tensorflow.keras.applications.inception_v3 import preprocess_input as preprocess_input_inception
+from tensorflow.keras.applications.resnet50 import preprocess_input as preprocess_input_resnet
+from tensorflow.keras.applications.xception import preprocess_input as preprocess_input_xception
+from tensorflow.keras.models import Sequential, Model, load_model
+from tensorflow.keras.layers import Dense, Dropout, GlobalAveragePooling2D
+from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.backend import clear_session
 from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier, VotingClassifier
+from sklearn.model_selection import KFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import classification_report, confusion_matrix
-from keras.models import Sequential, Model
-from keras.layers import Dense, Dropout, GlobalAveragePooling2D
-from keras.applications import VGG19
-from keras.applications.vgg19 import preprocess_input
-from keras.utils import to_categorical
 import cv2
 import matplotlib.pyplot as plt
 
 # Parâmetros
-num_classes = 6
+num_classes = 7
 img_size = (224, 224)
 batch_size = 64
 n_epochs = 10  # Para experimentos iniciais, use menos épocas para acelerar.
@@ -29,10 +34,13 @@ val_files_path = "../res/val_files.txt"
 def load_paths_labels(file_path):
     paths, labels = [], []
     with open(file_path, 'r') as f:
-        for line in f:
-            path, label = line.strip().split(',')
-            paths.append(path)
-            labels.append(int(label))
+        for idx, line in enumerate(f):
+            try:
+                path, label = line.strip().split('\t')
+                paths.append(path)
+                labels.append(int(label))
+            except ValueError:
+                print(f"Line {idx+1} is malformed: {line}")
     return np.array(paths), np.array(labels)
 
 def remove_hairs(image_path, visualize=False):
@@ -50,17 +58,17 @@ def remove_hairs(image_path, visualize=False):
     image = cv2.imread(image_path)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    # Passo 1: Aplicar filtro morfológico para destacar os pelos
+    #Aplicar filtro morfológico para destacar os pelos
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (17, 17))  # Kernel para top-hat
     blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, kernel)
 
-    # Passo 2: Criar uma máscara binária para os pelos
+    #Criar uma máscara binária para os pelos
     _, mask = cv2.threshold(blackhat, 10, 255, cv2.THRESH_BINARY)
 
-    # Passo 3: Preencher as regiões dos pelos com inpainting
+    #Preencher as regiões dos pelos com inpainting
     cleaned_image = cv2.inpaint(image, mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
 
-    # Visualizar resultados
+    #Visualizar resultados
     if visualize:
         plt.figure(figsize=(15, 10))
         plt.subplot(1, 3, 1)
@@ -87,129 +95,233 @@ def extract_roi(image, visualize=False):
         image (numpy.ndarray): Imagem.
         visualize (bool): Se True, exibe a imagem original e os resultados intermediários.
     Returns:
-        roi (numpy.ndarray): Imagem da região de interesse extraída e pré-processada (em grayscale).
+        roi (numpy.ndarray): Imagem da região de interesse extraída e pré-processada (em RGB).
     """
+    # Converter para escala de cinza apenas para processamento
+    gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    #Remoção de ruído com filtro Gaussiano
-    blurred = cv2.GaussianBlur(image, (5, 5), 0)
+    # Remoção de ruído com filtro Gaussiano
+    blurred = cv2.GaussianBlur(gray_image, (5, 5), 0)
 
-    #Limiarização para binarizar a imagem
+    # Limiarização para binarizar a imagem
     _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-    #Encontrar contornos e extrair a ROI
+    # Encontrar contornos e extrair a ROI
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        # Se nenhum contorno for encontrado, retornar a imagem original redimensionada
+        roi = cv2.resize(image, img_size)
+        return roi
+
     largest_contour = max(contours, key=cv2.contourArea)
     x, y, w, h = cv2.boundingRect(largest_contour)
-    roi = image[y:y + h, x:x + w]  # Recortar a ROI da imagem original
+
+    # Recortar a ROI da imagem original (em colorido)
+    roi = image[y:y + h, x:x + w]
 
     # Visualizar resultados
     if visualize:
         plt.figure(figsize=(15, 10))
         plt.subplot(1, 2, 1)
         plt.title("Imagem Original")
-        plt.imshow(image, cmap="gray")
+        plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
 
         plt.subplot(1, 2, 2)
-        plt.title("ROI Pré-processada (Grayscale)")
-        plt.imshow(roi, cmap="gray")
-
+        plt.title("ROI Extraída (RGB)")
+        plt.imshow(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
 
         plt.show()
 
-    return roi  # Retorna a ROI em escala de cinza
+    return roi  # Retorna a ROI em RGB
 
 # Pré-processamento gráfico (ROI, ruído, HSV, resize)
-def preprocess_image(path, use_graphic_preprocessing=False, use_hair_removal=True):
+def preprocess_image(path, model_name, use_graphic_preprocessing=False, use_hair_removal=True, visualize=False):
     if use_hair_removal:
-        image = remove_hairs(path, visualize=False)
+        image = remove_hairs(path, visualize=visualize)
     else:
         image = cv2.imread(path)
 
-    gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    #gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
     if use_graphic_preprocessing:
-        roi = extract_roi(gray_image, visualize=False)
+        roi = extract_roi(image, visualize=visualize)
     else:
-        roi = gray_image
+        roi = image
 
     # Redimensionar para o tamanho esperado pela CNN
     roi_resized = cv2.resize(roi, img_size)
     # Normalizar para o formato esperado pela CNN
-    roi_resized = preprocess_input(roi_resized)
+    if model_name == "VGG19":
+        roi_resized = preprocess_input_vgg19(roi_resized)
+    elif model_name == "Inception":
+        roi_resized = preprocess_input_inception(roi_resized)
+    elif model_name == "ResNet":
+        roi_resized = preprocess_input_resnet(roi_resized)
+    elif model_name == "Xception":
+        roi_resized = preprocess_input_xception(roi_resized)
+    else:
+        raise ValueError(
+            f"Modelo {model_name} não suportado. Escolha entre 'VGG19', 'Inception', 'ResNet' ou 'Xception'.")
+
     return roi_resized
 
 # Carregar e pré-processar imagens
-def load_and_preprocess_images(paths, labels, use_graphic_preprocessing=False):
-    images = [preprocess_image(path, use_graphic_preprocessing) for path in paths]
+def load_and_preprocess_images(paths, model_name, labels, use_graphic_preprocessing=False):
+    images = [preprocess_image(path, model_name, use_graphic_preprocessing) for path in paths]
     return np.array(images), to_categorical(labels, num_classes)
 
 # Pré-processamento de dados com PCA
-def apply_pca(features, n_components=100):
+def apply_pca(train_features, val_features, n_components=100):
     pca = PCA(n_components=n_components)
-    return pca.fit_transform(features)
+    train_features_pca = pca.fit_transform(train_features)
+    val_features_pca = pca.transform(val_features)
+    return train_features_pca, val_features_pca
 
-# Pré-processamento de dados com batch normalization
-def apply_batch_normalization(features):
+# Pré-processamento de dados com normalização
+def apply_batch_normalization(train_features, val_features):
     scaler = StandardScaler()
-    normalized_features = scaler.fit_transform(features)
-    return normalized_features
+    train_features_scaled = scaler.fit_transform(train_features)
+    val_features_scaled = scaler.transform(val_features)
+    return train_features_scaled, val_features_scaled
 
 # Pré-processamento de dados
-def pre_process_data(features, n_components=100):
-    features = apply_pca(features, n_components=n_components)
-    features = apply_batch_normalization(features)
-    return features
+def pre_process_data(train_features, val_features, n_components=100):
+    train_features_scaled, val_features_scaled = apply_batch_normalization(train_features, val_features)
+    train_features_pca, val_features_pca = apply_pca(train_features_scaled, val_features_scaled, n_components=n_components)
+    return train_features_pca, val_features_pca
 
-def load_cnn_model(model_name, input_shape=(224, 224, 3)):
+
+def load_or_train_cnn_model(model_name, use_cnn_classifier, input_shape=(224, 224, 3), fine_tune=False, fine_tune_at=0,
+                   save_path="", x_train=None, y_train=None, x_val=None, y_val=None):
     """
-    Carrega um modelo CNN pré-treinado.
+    Carrega ou treina uma CNN pré-treinada e a salva conforme o uso (classificador ou extrator de características).
 
     Args:
         model_name (str): Nome do modelo ('VGG19', 'Inception', 'ResNet', 'Xception').
+        use_cnn_classifier (bool): Define se o modelo terá a camada densamente conectada (True) ou não (False).
         input_shape (tuple): Tamanho de entrada das imagens.
+        fine_tune (bool): Se True, realiza fine-tuning.
+        fine_tune_at (int): Camada a partir da qual será realizado o fine-tuning.
+        save_path (str): Caminho em que deve ser salvo o modelo.
+        x_train (numpy.ndarray): Conjunto de dados de treino.
+        y_train (numpy.ndarray): Conjunto de classes de treino.
+        x_val (numpy.ndarray): Conjunto de dados de validação.
+        y_val (numpy.ndarray): Conjunto de classes de validação.
 
     Returns:
-        model (keras.Model): Modelo pré-treinado configurado para extração de características.
+        model (keras.Model): Modelo configurado e salvo.
+        loaded (bool): Define se o modelo foi criado ou se foi carregado.
     """
+    if os.path.exists(save_path):
+        print(f"Carregando modelo existente: {save_path}")
+        return load_model(save_path), True
+
     if model_name == "VGG19":
         base_model = VGG19(weights='imagenet', include_top=False, input_shape=input_shape)
+        fine_tune_at = fine_tune_at or 15
     elif model_name == "Inception":
         base_model = InceptionV3(weights='imagenet', include_top=False, input_shape=input_shape)
+        fine_tune_at = fine_tune_at or 40
     elif model_name == "ResNet":
         base_model = ResNet50(weights='imagenet', include_top=False, input_shape=input_shape)
+        fine_tune_at = fine_tune_at or 25
     elif model_name == "Xception":
         base_model = Xception(weights='imagenet', include_top=False, input_shape=input_shape)
+        fine_tune_at = fine_tune_at or 30
     else:
-        raise ValueError(f"Modelo {model_name} não suportado. Escolha entre 'VGG19', 'Inception', 'ResNet' ou 'Xception'.")
+        raise ValueError(
+            f"Modelo {model_name} não suportado. Escolha entre 'VGG19', 'Inception', 'ResNet' ou 'Xception'.")
 
-    # Conectar a camada de pooling global para extração de características
-    model = Model(inputs=base_model.input, outputs=GlobalAveragePooling2D()(base_model.output))
-    return model
+    if fine_tune:
+        for layer in base_model.layers[:fine_tune_at]:
+            layer.trainable = False  # Congelar camadas iniciais
+        for layer in base_model.layers[fine_tune_at:]:
+            layer.trainable = True  # Descongelar camadas superiores
+    else:
+        base_model.trainable = False  # Congelar todas as camadas se não for fine-tuning
+
+    if use_cnn_classifier:
+        model = Sequential([
+            base_model,
+            GlobalAveragePooling2D(),
+            Dense(256, activation='relu'),
+            Dropout(0.5),
+            Dense(num_classes, activation='softmax')
+        ])
+    else:
+        model = Sequential([
+            base_model,
+            GlobalAveragePooling2D(),
+            Dense(256, activation='relu'),
+            Dropout(0.5)
+        ])
+
+    if x_train is not None and y_train is not None:
+        print("Treinando modelo...")
+        model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+        model.fit(x_train, y_train, validation_data=(x_val, y_val), epochs=n_epochs, batch_size=batch_size, verbose=1)
+
+        if not os.path.exists(os.path.dirname(save_path)):
+            os.makedirs(os.path.dirname(save_path))
+
+        print(f"Salvando modelo treinado em: {save_path}")
+        model.save(save_path)
+
+    return model, False
 
 
-def extract_features_with_cnn(paths, model_name="VGG19", use_graphic_preprocessing=False):
+def extract_features_with_cnn(paths, model_name="VGG19", use_graphic_preprocessing=False,
+                              fine_tune=False, fine_tune_at=0, save_path="", train_paths="",
+                              train_labels="", val_paths="", val_labels=""):
     """
     Extrai características de imagens usando um modelo CNN pré-treinado.
 
     Args:
-        paths (list): Lista de caminhos das imagens.
         model_name (str): Nome do modelo ('VGG19', 'Inception', 'ResNet', 'Xception').
         use_graphic_preprocessing (bool): Se True, aplica pré-processamento gráfico.
-
+        fine_tune (bool): Se True, realiza fine-tuning.
+        fine_tune_at (int): Camada a partir da qual será realizado o fine-tuning.
+        save_path (str): Caminho em que deve ser salvo o modelo.
+        train_paths (numpy.ndarray): Lista de imagens de treinamento
+        train_labels (numpy.ndarray): Lista de classes de treinamento
+        val_paths (numpy.ndarray): Lista de imagens de validação
+        val_labels (numpy.ndarray): Lista de classes de validação
     Returns:
         features (numpy.ndarray): Vetores de características extraídos.
     """
-    # Carregar o modelo CNN
-    model = load_cnn_model(model_name, input_shape=(224, 224, 3))
+    x_train, y_train = None, None  # Somente necessário para fine-tuning
+    x_val, y_val = None, None  # Somente necessário para fine-tuning
+    if fine_tune:
+        x_train, y_train = load_and_preprocess_images(train_paths, model_name, train_labels, use_graphic_preprocessing)
+        x_val, y_val = load_and_preprocess_images(val_paths, model_name, val_labels, use_graphic_preprocessing)
 
-    features = []
-    for path in paths:
-        img = preprocess_image(path, use_graphic_preprocessing)
-        features.append(model.predict(np.expand_dims(img, axis=0)).flatten())
-    return np.array(features)
+    model, loaded = load_or_train_cnn_model(
+        model_name=model_name,
+        use_cnn_classifier=False,
+        input_shape=(224, 224, 3),
+        fine_tune=fine_tune,
+        fine_tune_at=fine_tune_at,
+        save_path=save_path,
+        x_train=x_train,
+        y_train=y_train,
+        x_val=x_val,
+        y_val=y_val
+    )
+
+    images = [preprocess_image(path, model_name, use_graphic_preprocessing) for path in paths]
+    images = np.array(images)
+
+    # Extrair características
+    features = model.predict(images)
+    return features
+
 
 # Classificadores clássicos
-def train_classical_classifier(features, labels, classifier_type="RandomForest"):
+def train_classical_classifier(features, labels, classifier_type="RandomForest", save_model=False, save_path=""):
+    if save_model and os.path.exists(save_path):
+        from joblib import load
+        print(f"Carregando modelo clássico existente: {save_path}")
+        model = load(save_path)
     if classifier_type == "RandomForest":
         model = RandomForestClassifier(random_state=42)
     elif classifier_type == "SVM":
@@ -223,64 +335,100 @@ def train_classical_classifier(features, labels, classifier_type="RandomForest")
             ('knn', knn),
             ('svm', svm)
         ], voting='soft') #'soft' usa as probabilidades para combinação
+    else:
+        raise ValueError(
+            f"Modelo {classifier_type} não suportado. Escolha entre 'RandomForest', 'SVM', 'KNN' ou 'KNN+SVM'.")
     model.fit(features, labels)
+
+    if save_model:
+        from joblib import dump
+        dump(model, save_path)
+        print(f"Salvando modelo treinado em: {save_path}")
+
     return model
 
 # Treinamento e comparação de cenários
-def run_experiment(train_paths, train_labels, val_paths, val_labels,
+def run_experiment(all_paths, all_labels,
                    model_name="VGG19", use_graphic_preprocessing=False,
                    use_data_preprocessing=False, use_cnn_classifier=True,
-                   classical_classifier="RandomForest"):
+                   classical_classifier="RandomForest", fine_tune=False, fine_tune_at=0,
+                   k_folds=5):
 
-    if use_cnn_classifier:
-        print(f"\nCenário - Modelo: {model_name}, Pré-Processamento Gráfico: {use_graphic_preprocessing}, Pré-Processamento de Dados: {use_data_preprocessing}")
-    else:
-        print(f"\nCenário - Classificador: {classical_classifier}, Pré-Processamento Gráfico: {use_graphic_preprocessing}, Pré-Processamento de Dados: {use_data_preprocessing}")
+    kf = KFold(n_splits=k_folds, shuffle=True, random_state=42)
+    fold = 1
+    all_val_labels = []
+    all_val_predictions = []
 
-    if use_cnn_classifier:
-        # CNN como classificador
-        x_train, y_train = load_and_preprocess_images(train_paths, train_labels, use_graphic_preprocessing)
-        x_val, y_val = load_and_preprocess_images(val_paths, val_labels, use_graphic_preprocessing)
+    for train_index, val_index in kf.split(all_paths):
+        print(f"\nFold {fold}/{k_folds}")
+        train_paths, val_paths = all_paths[train_index], all_paths[val_index]
+        train_labels, val_labels = all_labels[train_index], all_labels[val_index]
 
-        # Construir modelo CNN
-        base_model = load_cnn_model(model_name, input_shape=(224, 224, 3))
-        base_model.trainable = False
-        model = Sequential([
-            base_model,
-            GlobalAveragePooling2D(),
-            Dense(128, activation='relu'),
-            Dropout(0.5),
-            Dense(num_classes, activation='softmax')
-        ])
-        model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-        model.fit(x_train, y_train, validation_data=(x_val, y_val), epochs=n_epochs, batch_size=batch_size, verbose=1)
-        model.save(f"../models/{model_name}_classifier.h5")
-        val_predictions = np.argmax(model.predict(x_val), axis=1)
-    else:
-        # CNN como extratora de características
-        train_features = extract_features_with_cnn(train_paths, model_name=model_name, use_graphic_preprocessing=use_graphic_preprocessing)
-        val_features = extract_features_with_cnn(val_paths, model_name=model_name, use_graphic_preprocessing=use_graphic_preprocessing)
+        model_type = "classifier" if use_cnn_classifier else "extractor"
+        save_path = f"../models/CNN/{model_name}/{model_name.lower()}_graphic_{use_graphic_preprocessing}_fine_tune_{fine_tune}{f'_fine_tune_at_{fine_tune_at}' if fine_tune_at != 0 else ''}_{model_type}.h5"
 
-        # Aplicar pré-processamento
-        if use_data_preprocessing:
-            train_features = pre_process_data(train_features)
-            val_features = pre_process_data(val_features)
+        if use_cnn_classifier:
+            # CNN como classificador
+            print(f"\nCenário - Modelo: {model_name}, Fine-Tune: {fine_tune}, {f"Camada: {fine_tune_at}, " if fine_tune_at != 0 else ""}Pré-Processamento Gráfico: {use_graphic_preprocessing}")
+            x_train, y_train = load_and_preprocess_images(train_paths, model_name, train_labels, use_graphic_preprocessing)
+            x_val, y_val = load_and_preprocess_images(val_paths, model_name, val_labels, use_graphic_preprocessing)
 
-        # Classificador clássico
-        clf = train_classical_classifier(train_features, train_labels, classical_classifier)
-        val_predictions = clf.predict(val_features)
+            # Construir modelo CNN
+            model, loaded = load_or_train_cnn_model(
+                model_name=model_name,
+                fine_tune=fine_tune,
+                fine_tune_at=fine_tune_at,
+                save_path=save_path,
+                x_train=x_train,
+                y_train=y_train,
+                x_val=x_val,
+                y_val=y_val
+            )
 
-    # Relatório e matriz de confusão
-    print("\nRelatório de Classificação:")
-    print(classification_report(val_labels, val_predictions, digits=4))
-    print("\nMatriz de Confusão:")
-    print(confusion_matrix(val_labels, val_predictions))
+            val_predictions = np.argmax(model.predict(x_val), axis=1)
+            val_labels_non_categorical = np.argmax(y_val, axis=1)
+        else:
+            # CNN como extratora de características
+            print(f"\nCenário - Classificador: {classical_classifier}, CNN: {model_name}, Fine-Tune: {fine_tune}, {f"Camada: {fine_tune_at}, " if fine_tune_at != 0 else ""}Pré-Processamento Gráfico: {use_graphic_preprocessing}, Pré-Processamento de Dados: {use_data_preprocessing}")
+
+            train_features = extract_features_with_cnn(paths=train_paths, model_name=model_name, use_graphic_preprocessing=use_graphic_preprocessing,
+                                                       fine_tune=fine_tune, fine_tune_at=fine_tune_at, save_path=save_path, train_paths=train_paths,
+                                                       val_paths=val_paths, train_labels=train_labels, val_labels=val_labels)
+
+            val_features = extract_features_with_cnn(paths=val_paths, model_name=model_name, use_graphic_preprocessing=use_graphic_preprocessing,
+                                                     fine_tune=fine_tune, fine_tune_at=fine_tune_at, save_path=save_path, train_paths=train_paths,
+                                                     val_paths=val_paths, train_labels=train_labels, val_labels=val_labels)
+
+            if use_data_preprocessing:
+                train_features, val_features = pre_process_data(train_features=train_features, val_features=val_features)
+
+
+            clf_save_path = f"../models/CLASSIC/{classical_classifier}/{classical_classifier.lower()}_{model_name.lower()}_fine_tune_{fine_tune}{f"_fine_tune_at_{fine_tune_at}" if fine_tune_at != 0 else ""}_graphic_{use_graphic_preprocessing}.joblib"
+            clf = train_classical_classifier(train_features, train_labels, classical_classifier, True, clf_save_path)
+
+            val_predictions = clf.predict(val_features)
+            val_labels_non_categorical = val_labels
+
+        all_val_labels.extend(val_labels_non_categorical)
+        all_val_predictions.extend(val_predictions)
+
+        # Relatório e matriz de confusão para o fold atual
+        print(f"\nRelatório de Classificação para o Fold {fold}:")
+        print(classification_report(val_labels_non_categorical, val_predictions, digits=4))
+        print(f"\nMatriz de Confusão para o Fold {fold}:")
+        print(confusion_matrix(val_labels_non_categorical, val_predictions))
+        clear_session()
+        fold += 1
+
+    print("\nRelatório de Classificação Geral:")
+    print(classification_report(all_val_labels, all_val_predictions, digits=4))
+    print("\nMatriz de Confusão Geral:")
+    print(confusion_matrix(all_val_labels, all_val_predictions))
+
 
 
 train_paths, train_labels = load_paths_labels(train_files_path)
 val_paths, val_labels = load_paths_labels(val_files_path)
 
-
-# Executar experimentos
-#run_experiment(train_paths, train_labels, val_paths, val_labels, use_graphic_preprocessing=True, use_data_preprocessing=True, use_cnn_classifier=True)
-#run_experiment(train_paths, train_labels, val_paths, val_labels, use_graphic_preprocessing=False, use_data_preprocessing=False, use_cnn_classifier=False, classical_classifier="RandomForest")
+all_paths = np.concatenate((train_paths, val_paths))
+all_labels = np.concatenate((train_labels, val_labels))
