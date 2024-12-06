@@ -5,6 +5,7 @@ from tensorflow.keras.applications import VGG19, InceptionV3, ResNet50, Xception
 from tensorflow.keras.models import Sequential, Model, load_model
 from tensorflow.keras.layers import Dense, Dropout, GlobalAveragePooling2D
 from tensorflow.keras.backend import clear_session
+from tensorflow.keras import layers
 from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier, VotingClassifier
 from sklearn.model_selection import KFold
@@ -18,7 +19,7 @@ from src.utils import *
 num_classes = 7
 img_size = (224, 224)
 batch_size = 64
-n_epochs = 5  # Para experimentos iniciais, use menos épocas para acelerar.
+n_epochs = 2
 train_files_path = "../res/train_files.txt"
 val_files_path = "../res/val_files.txt"
 
@@ -28,7 +29,9 @@ def apply_pca(train_features, val_features, save_path, n_components=100):
     train_features_pca = pca.fit_transform(train_features)
     val_features_pca = pca.transform(val_features)
     from joblib import dump
-    dump(pca, f"{save_path}/pca.joblib")
+    if not os.path.exists(os.path.dirname(save_path)):
+        os.makedirs(os.path.dirname(save_path))
+    dump(pca, f"{save_path}pca.joblib")
     return train_features_pca, val_features_pca
 
 # Pré-processamento de dados com normalização
@@ -37,7 +40,7 @@ def apply_batch_normalization(train_features, val_features, save_path):
     train_features_scaled = scaler.fit_transform(train_features)
     val_features_scaled = scaler.transform(val_features)
     from joblib import dump
-    dump(scaler, f"{save_path}/scaler.joblib")
+    dump(scaler, f"{save_path}scaler.joblib")
     return train_features_scaled, val_features_scaled
 
 # Pré-processamento de dados
@@ -96,21 +99,11 @@ def load_or_train_cnn_model(model_name, use_cnn_classifier, input_shape=(224, 22
     else:
         base_model.trainable = False  # Congelar todas as camadas se não for fine-tuning
 
-    if use_cnn_classifier:
-        model = Sequential([
-            base_model,
-            GlobalAveragePooling2D(),
-            Dense(256, activation='relu'),
-            Dropout(0.5),
-            Dense(num_classes, activation='softmax')
-        ])
-    else:
-        model = Sequential([
-            base_model,
-            GlobalAveragePooling2D(),
-            Dense(256, activation='relu'),
-            Dropout(0.5)
-        ])
+    x = layers.GlobalAveragePooling2D(name='gap')(base_model.output)
+    x = layers.Dense(256, activation='relu', name='dense_features')(x)
+    x = layers.Dropout(0.5, name='dropout_features')(x)
+    predictions = layers.Dense(num_classes, activation='softmax', name='final_predictions')(x)
+    model = Model(inputs=base_model.input, outputs=predictions)
 
     if x_train is not None and y_train is not None:
         print("Treinando modelo...")
@@ -128,7 +121,7 @@ def load_or_train_cnn_model(model_name, use_cnn_classifier, input_shape=(224, 22
 
 def extract_features_with_cnn(paths, model_name="VGG19", use_graphic_preprocessing=False,
                               fine_tune=False, fine_tune_at=0, save_path="", train_paths="",
-                              train_labels="", val_paths="", val_labels=""):
+                              train_labels="", val_paths="", val_labels="", image_cache=None):
     """
     Extrai características de imagens usando um modelo CNN pré-treinado.
 
@@ -148,8 +141,8 @@ def extract_features_with_cnn(paths, model_name="VGG19", use_graphic_preprocessi
     x_train, y_train = None, None  # Somente necessário para fine-tuning
     x_val, y_val = None, None  # Somente necessário para fine-tuning
     if fine_tune:
-        x_train, y_train = load_and_preprocess_images(train_paths, model_name, train_labels, use_graphic_preprocessing)
-        x_val, y_val = load_and_preprocess_images(val_paths, model_name, val_labels, use_graphic_preprocessing)
+        x_train, y_train = load_and_preprocess_images(train_paths, model_name, train_labels, use_graphic_preprocessing, cache=image_cache)
+        x_val, y_val = load_and_preprocess_images(val_paths, model_name, val_labels, use_graphic_preprocessing, cache=image_cache)
 
     model, loaded = load_or_train_cnn_model(
         model_name=model_name,
@@ -163,14 +156,13 @@ def extract_features_with_cnn(paths, model_name="VGG19", use_graphic_preprocessi
         x_val=x_val,
         y_val=y_val
     )
-    if not fine_tune:
-        images = [preprocess_image(path, model_name, use_graphic_preprocessing) for path in paths]
-        images = np.array(images)
-    else:
-        images = x_train
+    feature_extractor = Model(inputs=model.input, outputs=model.get_layer('dense_features').output)
+
+    images = load_and_preprocess_images(paths, model_name, use_graphic_preprocessing=use_graphic_preprocessing, cache=image_cache)
+    print(f"fine tuned! shape:{images.shape} type: {images.dtype }")
 
     # Extrair características
-    features = model.predict(images)
+    features = feature_extractor.predict(images)
     return features
 
 
@@ -216,6 +208,7 @@ def run_experiment(all_paths, all_labels,
     fold = 1
     all_val_labels = []
     all_val_predictions = []
+    image_cache = {}
 
     for train_index, val_index in kf.split(all_paths):
         print(f"\nFold {fold}/{k_folds}")
@@ -228,8 +221,8 @@ def run_experiment(all_paths, all_labels,
         if use_cnn_classifier:
             # CNN como classificador
             print(f"\nCenário - Modelo: {model_name}, Fine-Tune: {fine_tune}, {f"Camada: {fine_tune_at}, " if fine_tune_at != 0 else ""}Pré-Processamento Gráfico: {use_graphic_preprocessing}")
-            x_train, y_train = load_and_preprocess_images(train_paths, model_name, train_labels, use_graphic_preprocessing)
-            x_val, y_val = load_and_preprocess_images(val_paths, model_name, val_labels, use_graphic_preprocessing)
+            x_train, y_train = load_and_preprocess_images(paths=train_paths, model_name=model_name, labels=train_labels, use_graphic_preprocessing=use_graphic_preprocessing, cache=image_cache)
+            x_val, y_val = load_and_preprocess_images(paths=val_paths, model_name=model_name, labels=val_labels, use_graphic_preprocessing=use_graphic_preprocessing, cache=image_cache)
 
             # Construir modelo CNN
             model, loaded = load_or_train_cnn_model(
@@ -250,17 +243,18 @@ def run_experiment(all_paths, all_labels,
             print(f"\nCenário - Classificador: {classical_classifier}, CNN: {model_name}, Fine-Tune: {fine_tune}, {f"Camada: {fine_tune_at}, " if fine_tune_at != 0 else ""}Pré-Processamento Gráfico: {use_graphic_preprocessing}, Pré-Processamento de Dados: {use_data_preprocessing}")
 
             clf_save_path = f"../models/CLASSIC/{classical_classifier}/{classical_classifier.lower()}_{model_name.lower()}_fine_tune_{fine_tune}{f"_fine_tune_at_{fine_tune_at}" if fine_tune_at != 0 else ""}_graphic_{use_graphic_preprocessing}/{model_type}.joblib"
-            pre_save_path = f"../models/CLASSIC/{classical_classifier}/{classical_classifier.lower()}_{model_name.lower()}_fine_tune_{fine_tune}{f"_fine_tune_at_{fine_tune_at}" if fine_tune_at != 0 else ""}_graphic_{use_graphic_preprocessing}"
+            pre_save_path = f"../models/CLASSIC/{classical_classifier}/{classical_classifier.lower()}_{model_name.lower()}_fine_tune_{fine_tune}{f"_fine_tune_at_{fine_tune_at}" if fine_tune_at != 0 else ""}_graphic_{use_graphic_preprocessing}/"
 
             train_features = extract_features_with_cnn(paths=train_paths, model_name=model_name, use_graphic_preprocessing=use_graphic_preprocessing,
                                                        fine_tune=fine_tune, fine_tune_at=fine_tune_at, save_path=save_path, train_paths=train_paths,
-                                                       val_paths=val_paths, train_labels=train_labels, val_labels=val_labels)
+                                                       val_paths=val_paths, train_labels=train_labels, val_labels=val_labels, image_cache=image_cache)
 
             val_features = extract_features_with_cnn(paths=val_paths, model_name=model_name, use_graphic_preprocessing=use_graphic_preprocessing,
                                                      fine_tune=fine_tune, fine_tune_at=fine_tune_at, save_path=save_path, train_paths=train_paths,
-                                                     val_paths=val_paths, train_labels=train_labels, val_labels=val_labels)
+                                                     val_paths=val_paths, train_labels=train_labels, val_labels=val_labels, image_cache=image_cache)
 
             if use_data_preprocessing:
+                os.makedirs(pre_save_path, exist_ok=True)
                 train_features, val_features = pre_process_data(train_features=train_features, val_features=val_features, save_path=pre_save_path)
 
 
@@ -293,4 +287,13 @@ val_paths, val_labels = load_paths_labels(val_files_path)
 all_paths = np.concatenate((train_paths, val_paths))
 all_labels = np.concatenate((train_labels, val_labels))
 
-run_experiment( all_paths, all_labels, "VGG19", True, True, False, "KNN", True, 0, 3 )
+run_experiment( all_paths=all_paths,
+                all_labels=all_labels,
+                model_name="VGG19",
+                use_graphic_preprocessing=False,
+                use_data_preprocessing=True,
+                use_cnn_classifier=False,
+                classical_classifier="KNN",
+                fine_tune=True,
+                fine_tune_at=0,
+                k_folds=3 )

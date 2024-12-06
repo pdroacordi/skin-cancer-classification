@@ -123,17 +123,14 @@ def extract_roi(image, visualize=False):
 
 # Pré-processamento gráfico (ROI, ruído, HSV, resize)
 def preprocess_image(path, model_name, use_graphic_preprocessing=False, use_hair_removal=True, visualize=False):
-    if use_hair_removal:
-        image = remove_hairs(path, visualize=visualize)
-    else:
-        image = cv2.imread(path)
-
-    #gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
     if use_graphic_preprocessing:
+        if use_hair_removal:
+            image = remove_hairs(path, visualize=visualize)
+        else:
+            image = cv2.imread(path)
         roi = extract_roi(image, visualize=visualize)
     else:
-        roi = image
+        roi = cv2.imread(path)
 
     # Redimensionar para o tamanho esperado pela CNN
     roi_resized = cv2.resize(roi, img_size)
@@ -153,6 +150,19 @@ def preprocess_image(path, model_name, use_graphic_preprocessing=False, use_hair
     return roi_resized
 
 # Carregar e pré-processar imagens
-def load_and_preprocess_images(paths, model_name, labels, use_graphic_preprocessing=False):
-    images = [preprocess_image(path, model_name, use_graphic_preprocessing) for path in paths]
-    return np.array(images), to_categorical(labels, num_classes)
+def load_and_preprocess_images(paths, model_name, labels=None, use_graphic_preprocessing=False, cache=None):
+    images = []
+    for path in paths:
+        if cache is not None and path in cache:
+            image = cache[path]
+        else:
+            image = preprocess_image(path, model_name, use_graphic_preprocessing)
+            if cache is not None:
+                cache[path] = image
+        images.append(image)
+    images = np.array(images)
+    if labels is not None:
+        labels = to_categorical(labels, num_classes)
+        return images, labels
+    else:
+        return images
