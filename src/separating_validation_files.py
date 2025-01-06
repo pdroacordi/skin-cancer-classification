@@ -4,9 +4,9 @@ import os
 import numpy as np
 
 # Paths to the data
-metadata_path = 'E:\\FAG\\PIBIC\\python\\skincancer\\data\\HAM10000_metadata.csv'
-image_dir_1 = 'E:\\FAG\\PIBIC\\python\\skincancer\\data\\HAM10000_images_part_1'
-image_dir_2 = 'E:\\FAG\\PIBIC\\python\\skincancer\\data\\HAM10000_images_part_2'
+metadata_path = 'D:\\PIBIC\\python\\skincancer\\data\\HAM10000_metadata.csv'
+image_dir_1 = 'D:\\PIBIC\\python\\skincancer\\data\\HAM10000_images_part_1'
+image_dir_2 = 'D:\\PIBIC\\python\\skincancer\\data\\HAM10000_images_part_2'
 
 # Load the metadata file
 metadata = pd.read_csv(metadata_path)

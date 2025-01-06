@@ -1,9 +1,8 @@
 import os
 
-import numpy as np
+import tensorflow as tf
 from tensorflow.keras.applications import VGG19, InceptionV3, ResNet50, Xception
-from tensorflow.keras.models import Sequential, Model, load_model
-from tensorflow.keras.layers import Dense, Dropout, GlobalAveragePooling2D
+from tensorflow.keras.models import Model, load_model
 from tensorflow.keras.backend import clear_session
 from tensorflow.keras import layers
 from sklearn.decomposition import PCA
@@ -13,7 +12,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import classification_report, confusion_matrix
-from src.utils import *
+from utils import *
 
 # Parâmetros
 num_classes = 7
@@ -50,14 +49,13 @@ def pre_process_data(train_features, val_features, save_path, n_components=100):
     return train_features_pca, val_features_pca
 
 
-def load_or_train_cnn_model(model_name, use_cnn_classifier, input_shape=(224, 224, 3), fine_tune=False, fine_tune_at=0,
+def load_or_train_cnn_model(model_name, input_shape=(224, 224, 3), fine_tune=False, fine_tune_at=0,
                    save_path="", x_train=None, y_train=None, x_val=None, y_val=None):
     """
     Carrega ou treina uma CNN pré-treinada e a salva conforme o uso (classificador ou extrator de características).
 
     Args:
         model_name (str): Nome do modelo ('VGG19', 'Inception', 'ResNet', 'Xception').
-        use_cnn_classifier (bool): Define se o modelo terá a camada densamente conectada (True) ou não (False).
         input_shape (tuple): Tamanho de entrada das imagens.
         fine_tune (bool): Se True, realiza fine-tuning.
         fine_tune_at (int): Camada a partir da qual será realizado o fine-tuning.
@@ -126,6 +124,7 @@ def extract_features_with_cnn(paths, model_name="VGG19", use_graphic_preprocessi
     Extrai características de imagens usando um modelo CNN pré-treinado.
 
     Args:
+        paths
         model_name (str): Nome do modelo ('VGG19', 'Inception', 'ResNet', 'Xception').
         use_graphic_preprocessing (bool): Se True, aplica pré-processamento gráfico.
         fine_tune (bool): Se True, realiza fine-tuning.
@@ -146,7 +145,6 @@ def extract_features_with_cnn(paths, model_name="VGG19", use_graphic_preprocessi
 
     model, loaded = load_or_train_cnn_model(
         model_name=model_name,
-        use_cnn_classifier=False,
         input_shape=(224, 224, 3),
         fine_tune=fine_tune,
         fine_tune_at=fine_tune_at,
@@ -220,7 +218,7 @@ def run_experiment(all_paths, all_labels,
 
         if use_cnn_classifier:
             # CNN como classificador
-            print(f"\nCenário - Modelo: {model_name}, Fine-Tune: {fine_tune}, {f"Camada: {fine_tune_at}, " if fine_tune_at != 0 else ""}Pré-Processamento Gráfico: {use_graphic_preprocessing}")
+            print(f"\nCenário - Modelo: {model_name}, Fine-Tune: {fine_tune}, {f'Camada: {fine_tune_at}, ' if fine_tune_at != 0 else ''}Pré-Processamento Gráfico: {use_graphic_preprocessing}")
             x_train, y_train = load_and_preprocess_images(paths=train_paths, model_name=model_name, labels=train_labels, use_graphic_preprocessing=use_graphic_preprocessing, cache=image_cache)
             x_val, y_val = load_and_preprocess_images(paths=val_paths, model_name=model_name, labels=val_labels, use_graphic_preprocessing=use_graphic_preprocessing, cache=image_cache)
 
@@ -240,10 +238,10 @@ def run_experiment(all_paths, all_labels,
             val_labels_non_categorical = np.argmax(y_val, axis=1)
         else:
             # CNN como extratora de características
-            print(f"\nCenário - Classificador: {classical_classifier}, CNN: {model_name}, Fine-Tune: {fine_tune}, {f"Camada: {fine_tune_at}, " if fine_tune_at != 0 else ""}Pré-Processamento Gráfico: {use_graphic_preprocessing}, Pré-Processamento de Dados: {use_data_preprocessing}")
+            print(f"\nCenário - Classificador: {classical_classifier}, CNN: {model_name}, Fine-Tune: {fine_tune}, {f'Camada: {fine_tune_at}, ' if fine_tune_at != 0 else ''}Pré-Processamento Gráfico: {use_graphic_preprocessing}, Pré-Processamento de Dados: {use_data_preprocessing}")
 
-            clf_save_path = f"../models/CLASSIC/{classical_classifier}/{classical_classifier.lower()}_{model_name.lower()}_fine_tune_{fine_tune}{f"_fine_tune_at_{fine_tune_at}" if fine_tune_at != 0 else ""}_graphic_{use_graphic_preprocessing}/{model_type}.joblib"
-            pre_save_path = f"../models/CLASSIC/{classical_classifier}/{classical_classifier.lower()}_{model_name.lower()}_fine_tune_{fine_tune}{f"_fine_tune_at_{fine_tune_at}" if fine_tune_at != 0 else ""}_graphic_{use_graphic_preprocessing}/"
+            clf_save_path = f"../models/CLASSIC/{classical_classifier}/{classical_classifier.lower()}_{model_name.lower()}_fine_tune_{fine_tune}{f'_fine_tune_at_{fine_tune_at}' if fine_tune_at != 0 else ''}_graphic_{use_graphic_preprocessing}/{model_type}.joblib"
+            pre_save_path = f"../models/CLASSIC/{classical_classifier}/{classical_classifier.lower()}_{model_name.lower()}_fine_tune_{fine_tune}{f'_fine_tune_at_{fine_tune_at}' if fine_tune_at != 0 else ''}_graphic_{use_graphic_preprocessing}/"
 
             train_features = extract_features_with_cnn(paths=train_paths, model_name=model_name, use_graphic_preprocessing=use_graphic_preprocessing,
                                                        fine_tune=fine_tune, fine_tune_at=fine_tune_at, save_path=save_path, train_paths=train_paths,
@@ -280,20 +278,24 @@ def run_experiment(all_paths, all_labels,
     print(confusion_matrix(all_val_labels, all_val_predictions))
 
 
+with tf.device('/GPU:0'):
+    train_paths, train_labels = load_paths_labels(train_files_path)
+    val_paths, val_labels = load_paths_labels(val_files_path)
 
-train_paths, train_labels = load_paths_labels(train_files_path)
-val_paths, val_labels = load_paths_labels(val_files_path)
+    all_paths = np.concatenate((train_paths, val_paths))
+    all_labels = np.concatenate((train_labels, val_labels))
 
-all_paths = np.concatenate((train_paths, val_paths))
-all_labels = np.concatenate((train_labels, val_labels))
+    run_experiment( all_paths=all_paths,
+                    all_labels=all_labels,
+                    model_name="VGG19",
+                    use_graphic_preprocessing=False,
+                    use_data_preprocessing=True,
+                    use_cnn_classifier=False,
+                    classical_classifier="KNN",
+                    fine_tune=True,
+                    fine_tune_at=0,
+                    k_folds=3 )
 
-run_experiment( all_paths=all_paths,
-                all_labels=all_labels,
-                model_name="VGG19",
-                use_graphic_preprocessing=False,
-                use_data_preprocessing=True,
-                use_cnn_classifier=False,
-                classical_classifier="KNN",
-                fine_tune=True,
-                fine_tune_at=0,
-                k_folds=3 )
+
+
+
