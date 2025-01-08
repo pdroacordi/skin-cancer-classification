@@ -7,13 +7,8 @@ from tensorflow.keras.utils import to_categorical
 import cv2
 import matplotlib.pyplot as plt
 
-# Parâmetros
-num_classes = 7
-img_size = (224, 224)
-batch_size = 64
-n_epochs = 10  # Para experimentos iniciais, use menos épocas para acelerar.
-train_files_path = "../res/train_files.txt"
-val_files_path = "../res/val_files.txt"
+from skincancer.src.config import img_size, num_classes
+
 
 # Função para carregar caminhos e rótulos
 def load_paths_labels(file_path):
@@ -120,6 +115,106 @@ def extract_roi(image, visualize=False):
         plt.show()
 
     return roi  # Retorna a ROI em RGB
+
+
+def custom_data_generator(
+        paths, labels,
+        batch_size=32,
+        model_name="VGG19",
+        use_graphic_preprocessing=False,
+        use_hair_removal=True,
+        shuffle=True,
+        augment=False
+):
+    """
+    Gera batches de (X, y) usando pré-processamento manual + data augmentation.
+    - `paths`: array de caminhos (strings) para as imagens.
+    - `labels`: array de rótulos (int) do mesmo tamanho de `paths`.
+    - `batch_size`: tamanho do batch.
+    - `model_name`: para decidir qual preprocess_input usar (VGG19, Inception, etc.).
+    - `use_graphic_preprocessing`: se True, faz remove_hairs e extract_roi.
+    - `augment`: se True, aplica data augmentation com albumentations.
+
+    Retorna um generator infinito (yield) que pode ser usado em model.fit().
+    """
+    n = len(paths)
+    idxs = np.arange(n)  # índice das imagens
+
+    while True:
+        if shuffle:
+            np.random.shuffle(idxs)  # embaralha a cada época
+
+        # Percorre o dataset em steps de batch
+        for start in range(0, n, batch_size):
+            end = min(start + batch_size, n)
+            batch_idxs = idxs[start:end]
+
+            batch_images = []
+            batch_labels = labels[batch_idxs]
+
+            for i in batch_idxs:
+                image_path = paths[i]
+
+                # 1) Ler a imagem
+                image = cv2.imread(image_path)  # BGR
+                if image is None:
+                    # se der erro de leitura
+                    continue
+
+                # 2) Se use_hair_removal, chamar remove_hairs
+                if use_graphic_preprocessing and use_hair_removal:
+                    image = remove_hairs(image_path, visualize=False)
+                else:
+                    pass
+
+                # 3) Se use_graphic_preprocessing, extrair ROI
+                if use_graphic_preprocessing:
+                    image = extract_roi(image, visualize=False)
+
+                # 4) Data augmentation (caso augment=True)
+                if augment:
+                    import albumentations as A
+                    augmentor = A.Compose([
+                        A.RandomRotate90(p=0.5),
+                        A.HorizontalFlip(p=0.5),
+                        A.VerticalFlip(p=0.1),
+                        A.RandomBrightnessContrast(p=0.2)
+                    ])
+
+                    # albumentations trabalha em RGB
+                    # mas o cv2.imread é BGR. Converta antes:
+                    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+                    # Aplique as transformações
+                    augmented = augmentor(image=image)
+                    image = augmented["image"]
+                else:
+                    # Se não for augment, só converter BGR->RGB
+                    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+                # 5) Resize
+                image = cv2.resize(image, img_size)
+
+                # 6) Chamar a preprocess_input correspondente
+                if model_name == "VGG19":
+                    image = preprocess_input_vgg19(image)
+                elif model_name == "Inception":
+                    image = preprocess_input_inception(image)
+                elif model_name == "ResNet":
+                    image = preprocess_input_resnet(image)
+                elif model_name == "Xception":
+                    image = preprocess_input_xception(image)
+                else:
+                    raise ValueError("Modelo não suportado.")
+
+                batch_images.append(image)
+
+            batch_images = np.array(batch_images, dtype=np.float32)
+
+            # 7) Converter labels para one-hot
+            batch_labels = to_categorical(batch_labels, num_classes)
+
+            yield batch_images, batch_labels
 
 # Pré-processamento gráfico (ROI, ruído, HSV, resize)
 def preprocess_image(path, model_name, use_graphic_preprocessing=False, use_hair_removal=True, visualize=False):
