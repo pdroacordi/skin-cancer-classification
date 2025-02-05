@@ -14,12 +14,19 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
 from tensorflow.python.keras.backend import clear_session
+from tensorflow.keras.callbacks import EarlyStopping
 
 import skincancer.src.config
 from utils import (
     load_paths_labels,
     load_and_preprocess_images,
     custom_data_generator
+)
+
+early_stopping = EarlyStopping(
+    monitor='val_loss',  # Métrica a ser monitorada (pode ser 'val_accuracy', se preferir)
+    patience=10,  # Número de epochs a esperar sem melhora antes de interromper o treinamento
+    restore_best_weights=True  # Restaura os pesos do modelo que obtiveram a melhor performance na validação
 )
 
 ###############################################################################
@@ -98,11 +105,11 @@ def load_or_build_cnn_model(model_name="VGG19",
 
     if fine_tune:
         for layer in base_model.layers[:fine_tune_at]:
-            layer.trainable = False  # Congelar camadas iniciais
+            layer.trainable = False
         for layer in base_model.layers[fine_tune_at:]:
-            layer.trainable = True  # Descongelar camadas superiores
+            layer.trainable = True
     else:
-        base_model.trainable = False  # Congelar todas as camadas se não for fine-tuning
+        base_model.trainable = False
 
     x = layers.GlobalAveragePooling2D(name='gap')(base_model.output)
     x = layers.Dense(256, activation='relu', name='dense_features')(x)
@@ -114,9 +121,6 @@ def load_or_build_cnn_model(model_name="VGG19",
 
     if not os.path.exists(os.path.dirname(save_path)):
         os.makedirs(os.path.dirname(save_path))
-
-    print(f"[CNN] Salvando modelo (recém construído) em {save_path}")
-    model.save(save_path)
 
     return model, False
 
@@ -173,8 +177,8 @@ def run_kfold_cnn(
             shuffle=False
         )
 
-        steps_per_epoch = len(train_paths_fold) // batch_size
-        validation_steps = len(val_paths_fold) // batch_size
+        steps_per_epoch = math.ceil(len(train_paths_fold) / batch_size)
+        validation_steps = math.ceil(len(val_paths_fold) / batch_size)
 
         model_save_path = save_path.replace(".h5", f"_fold_{fold}.h5")
         model, loaded = load_or_build_cnn_model(
@@ -183,14 +187,15 @@ def run_kfold_cnn(
             fine_tune=fine_tune,
             fine_tune_at=fine_tune_at
         )
-        if not loaded and fine_tune:
+        if not loaded:
             print(f"[CNN] Treinando (Fold {fold})...")
             model.fit(
                 train_gen,
                 steps_per_epoch=steps_per_epoch,
                 epochs=epochs,
                 validation_data=val_gen,
-                validation_steps=validation_steps
+                validation_steps=validation_steps,
+                callbacks=[early_stopping]
             )
             print(f"[CNN] Salvando modelo treinado em {model_save_path}")
             model.save(model_save_path)
@@ -394,7 +399,6 @@ def run_experiment(
     save_path = f"../models/CNN/{model_name}/{model_name.lower()}_graphic_{use_graphic_preprocessing}_fine_tune_{fine_tune}{f'_fine_tune_at_{fine_tune_at}' if fine_tune_at != 0 else ''}_{model_type}.h5"
 
     # 2) CENÁRIO A: CNN como Classificador
-    #    Se `use_cnn_classifier`
 
     if use_cnn_classifier:
         # CNN como classificador
@@ -419,8 +423,7 @@ def run_experiment(
         else:
             # (A2) Apenas um split fixo
             print("[CNN Single-Split] Treinando rede apenas uma vez.")
-            # Exemplo: 80% train, 20% val
-            split_point = int(0.20 * len(all_paths))
+            split_point = int(0.80 * len(all_paths))
             cnn_train_paths = all_paths[:split_point]
             cnn_val_paths = all_paths[split_point:]
             cnn_train_labels = all_labels[:split_point]
@@ -446,8 +449,8 @@ def run_experiment(
                 shuffle=False,
                 augment=False
             )
-            steps_per_epoch = len(cnn_train_paths) // batch_size
-            validation_steps = len(cnn_val_paths) // batch_size
+            steps_per_epoch = math.ceil(len(cnn_train_paths) / batch_size)
+            validation_steps = math.ceil(len(cnn_val_paths) / batch_size)
 
             # Treina ou carrega
             model, loaded = load_or_build_cnn_model(
@@ -457,14 +460,15 @@ def run_experiment(
                 fine_tune_at=fine_tune_at,
                 num_classes=num_classes
             )
-            if not loaded and fine_tune:
+            if not loaded:
                 print("[CNN Single-Split] Treinando...")
                 model.fit(
                     train_gen,
                     steps_per_epoch=steps_per_epoch,
                     epochs=epochs,
                     validation_data=val_gen,
-                    validation_steps=validation_steps
+                    validation_steps=validation_steps,
+                    callbacks=[early_stopping]
                 )
                 print(f"[CNN Single-Split] Salvando modelo treinado em {save_path}")
                 model.save(save_path)
@@ -501,7 +505,7 @@ def run_experiment(
         clf_save_path = f"../models/CLASSIC/{classical_classifier}/{classical_classifier.lower()}_{model_name.lower()}_fine_tune_{fine_tune}{f'_fine_tune_at_{fine_tune_at}' if fine_tune_at != 0 else ''}_graphic_{use_graphic_preprocessing}/{model_type}.joblib"
         features_save_path = f"../models/CNN/{model_name}/{model_name.lower()}_graphic_{use_graphic_preprocessing}_fine_tune_{fine_tune}{f'_fine_tune_at_{fine_tune_at}' if fine_tune_at != 0 else ''}_extractor_features.npy"
 
-        split_point = int(0.20 * len(all_paths))
+        split_point = int(0.80 * len(all_paths))
         cnn_train_paths = all_paths[:split_point]
         cnn_val_paths = all_paths[split_point:]
         cnn_train_labels = all_labels[:split_point]
@@ -526,13 +530,15 @@ def run_experiment(
             num_classes=num_classes
         )
 
-        if fine_tune and not loaded:
+        if not loaded:
             print("[CNN Extractor] Treinando CNN p/ extrair features...")
+
             model.fit(
                 x_cnn_train, y_cnn_train,
                 validation_data=(x_cnn_val, y_cnn_val),
                 epochs=epochs,
-                batch_size=batch_size
+                batch_size=batch_size,
+                callbacks=[early_stopping]
             )
             print(f"[CNN Extractor] Salvando modelo treinado em {save_path}")
             model.save(save_path)
@@ -565,7 +571,7 @@ def main():
             classical_classifier="RandomForest",
             fine_tune=True,
             fine_tune_at=0,
-            k_folds=5,
+            k_folds=3,
             pca_n_components=100,
             epochs=skincancer.src.config.num_epochs,
             batch_size=skincancer.src.config.batch_size,

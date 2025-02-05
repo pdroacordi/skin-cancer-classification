@@ -23,30 +23,28 @@ def load_paths_labels(file_path):
                 print(f"Line {idx+1} is malformed: {line}")
     return np.array(paths), np.array(labels)
 
-def remove_hairs(image_path, visualize=False):
+def remove_hairs(image_or_path, visualize=False):
     """
     Remove pelos de uma imagem dermatológica.
+    Aceita tanto um caminho para a imagem (str) quanto uma imagem já carregada (numpy.ndarray).
 
     Args:
-        image_path (str): Caminho para a imagem.
+        image_or_path: Caminho para a imagem (str) ou a própria imagem (numpy.ndarray).
         visualize (bool): Se True, exibe a imagem antes e depois do processamento.
 
     Returns:
         cleaned_image (numpy.ndarray): Imagem com os pelos removidos.
     """
-    # Ler a imagem
-    print("Removendo pelos...")
-    image = cv2.imread(image_path)
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    if isinstance(image_or_path, str):
+        image = cv2.imread(image_or_path)
+    else:
+        image = image_or_path
 
-    #Aplicar filtro morfológico para destacar os pelos
+    print("Removendo pelos...")
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (17, 17))  # Kernel para top-hat
     blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, kernel)
-
-    #Criar uma máscara binária para os pelos
     _, mask = cv2.threshold(blackhat, 10, 255, cv2.THRESH_BINARY)
-
-    #Preencher as regiões dos pelos com inpainting
     cleaned_image = cv2.inpaint(image, mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
 
     #Visualizar resultados
@@ -63,7 +61,6 @@ def remove_hairs(image_path, visualize=False):
         plt.subplot(1, 3, 3)
         plt.title("Imagem com Pelos Removidos")
         plt.imshow(cv2.cvtColor(cleaned_image, cv2.COLOR_BGR2RGB))
-
         plt.show()
 
     return cleaned_image
@@ -79,26 +76,16 @@ def extract_roi(image, visualize=False):
         roi (numpy.ndarray): Imagem da região de interesse extraída e pré-processada (em RGB).
     """
     print("Extraindo ROI...")
-    # Converter para escala de cinza apenas para processamento
     gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-    # Remoção de ruído com filtro Gaussiano
     blurred = cv2.GaussianBlur(gray_image, (5, 5), 0)
-
-    # Limiarização para binarizar a imagem
     _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-
-    # Encontrar contornos e extrair a ROI
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
-        # Se nenhum contorno for encontrado, retornar a imagem original redimensionada
         roi = cv2.resize(image, img_size)
         return roi
 
     largest_contour = max(contours, key=cv2.contourArea)
     x, y, w, h = cv2.boundingRect(largest_contour)
-
-    # Recortar a ROI da imagem original (em colorido)
     roi = image[y:y + h, x:x + w]
 
     # Visualizar resultados
@@ -107,14 +94,12 @@ def extract_roi(image, visualize=False):
         plt.subplot(1, 2, 1)
         plt.title("Imagem Original")
         plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-
         plt.subplot(1, 2, 2)
         plt.title("ROI Extraída (RGB)")
         plt.imshow(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
-
         plt.show()
 
-    return roi  # Retorna a ROI em RGB
+    return roi
 
 
 def custom_data_generator(
@@ -138,13 +123,12 @@ def custom_data_generator(
     Retorna um generator infinito (yield) que pode ser usado em model.fit().
     """
     n = len(paths)
-    idxs = np.arange(n)  # índice das imagens
+    idxs = np.arange(n)
 
     while True:
         if shuffle:
             np.random.shuffle(idxs)  # embaralha a cada época
 
-        # Percorre o dataset em steps de batch
         for start in range(0, n, batch_size):
             end = min(start + batch_size, n)
             batch_idxs = idxs[start:end]
@@ -154,24 +138,17 @@ def custom_data_generator(
 
             for i in batch_idxs:
                 image_path = paths[i]
-
-                # 1) Ler a imagem
-                image = cv2.imread(image_path)  # BGR
+                image = cv2.imread(image_path)  # Lê a imagem (BGR)
                 if image is None:
-                    # se der erro de leitura
                     continue
 
-                # 2) Se use_hair_removal, chamar remove_hairs
+                # Se usar pré-processamento gráfico com remoção de pelos, passe a imagem já lida
                 if use_graphic_preprocessing and use_hair_removal:
-                    image = remove_hairs(image_path, visualize=False)
-                else:
-                    pass
+                    image = remove_hairs(image, visualize=False)
 
-                # 3) Se use_graphic_preprocessing, extrair ROI
                 if use_graphic_preprocessing:
                     image = extract_roi(image, visualize=False)
 
-                # 4) Data augmentation (caso augment=True)
                 if augment:
                     import albumentations as A
                     augmentor = A.Compose([
@@ -180,22 +157,14 @@ def custom_data_generator(
                         A.VerticalFlip(p=0.1),
                         A.RandomBrightnessContrast(p=0.2)
                     ])
-
-                    # albumentations trabalha em RGB
-                    # mas o cv2.imread é BGR. Converta antes:
                     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-                    # Aplique as transformações
                     augmented = augmentor(image=image)
                     image = augmented["image"]
                 else:
-                    # Se não for augment, só converter BGR->RGB
                     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-                # 5) Resize
                 image = cv2.resize(image, img_size)
 
-                # 6) Chamar a preprocess_input correspondente
                 if model_name == "VGG19":
                     image = preprocess_input_vgg19(image)
                 elif model_name == "Inception":
@@ -210,8 +179,6 @@ def custom_data_generator(
                 batch_images.append(image)
 
             batch_images = np.array(batch_images, dtype=np.float32)
-
-            # 7) Converter labels para one-hot
             batch_labels = to_categorical(batch_labels, num_classes)
 
             yield batch_images, batch_labels
@@ -227,9 +194,9 @@ def preprocess_image(path, model_name, use_graphic_preprocessing=False, use_hair
     else:
         roi = cv2.imread(path)
 
-    # Redimensionar para o tamanho esperado pela CNN
+        # Converter de BGR para RGB e redimensionar
+    roi = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
     roi_resized = cv2.resize(roi, img_size)
-    # Normalizar para o formato esperado pela CNN
     if model_name == "VGG19":
         roi_resized = preprocess_input_vgg19(roi_resized)
     elif model_name == "Inception":
@@ -241,7 +208,6 @@ def preprocess_image(path, model_name, use_graphic_preprocessing=False, use_hair
     else:
         raise ValueError(
             f"Modelo {model_name} não suportado. Escolha entre 'VGG19', 'Inception', 'ResNet' ou 'Xception'.")
-
     return roi_resized
 
 # Carregar e pré-processar imagens
