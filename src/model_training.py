@@ -389,12 +389,8 @@ def run_experiment(
     # 1) Carrega paths e labels
     train_paths, train_labels = load_paths_labels("../res/train_files.txt")
     val_paths, val_labels = load_paths_labels("../res/val_files.txt")
+    test_paths, test_labels = load_paths_labels("../res/test_files.txt")
 
-    # Concatenar se quiser um único dataset
-    all_paths = np.concatenate([train_paths, val_paths])
-    all_labels = np.concatenate([train_labels, val_labels])
-
-    image_cache = {}
     model_type = "classifier" if use_cnn_classifier else "extractor"
     save_path = f"../models/CNN/{model_name}/{model_name.lower()}_graphic_{use_graphic_preprocessing}_fine_tune_{fine_tune}{f'_fine_tune_at_{fine_tune_at}' if fine_tune_at != 0 else ''}_{model_type}.h5"
 
@@ -409,8 +405,8 @@ def run_experiment(
         if k_folds > 1:
             # (A1) Rodar K-Fold na CNN
             run_kfold_cnn(
-                all_paths=all_paths,
-                all_labels=all_labels,
+                all_paths=train_paths,
+                all_labels=train_labels,
                 model_name=model_name,
                 fine_tune=fine_tune,
                 fine_tune_at=fine_tune_at,
@@ -423,25 +419,20 @@ def run_experiment(
         else:
             # (A2) Apenas um split fixo
             print("[CNN Single-Split] Treinando rede apenas uma vez.")
-            split_point = int(0.80 * len(all_paths))
-            cnn_train_paths = all_paths[:split_point]
-            cnn_val_paths = all_paths[split_point:]
-            cnn_train_labels = all_labels[:split_point]
-            cnn_val_labels = all_labels[split_point:]
 
             train_gen = custom_data_generator(
-                paths=cnn_train_paths,
-                labels=cnn_train_labels,
+                paths=train_paths,
+                labels=train_labels,
                 batch_size=batch_size,
                 model_name=model_name,
                 use_graphic_preprocessing=use_graphic_preprocessing,
-                use_hair_removal=True,  # se quiser
+                use_hair_removal=True,
                 shuffle=True,
-                augment=True  # se quiser data augmentation
+                augment=use_data_preprocessing
             )
             val_gen = custom_data_generator(
-                paths=cnn_val_paths,
-                labels=cnn_val_labels,
+                paths=val_paths,
+                labels=val_labels,
                 batch_size=batch_size,
                 model_name=model_name,
                 use_graphic_preprocessing=use_graphic_preprocessing,
@@ -449,8 +440,8 @@ def run_experiment(
                 shuffle=False,
                 augment=False
             )
-            steps_per_epoch = math.ceil(len(cnn_train_paths) / batch_size)
-            validation_steps = math.ceil(len(cnn_val_paths) / batch_size)
+            steps_per_epoch = math.ceil(len(train_paths) / batch_size)
+            validation_steps = math.ceil(len(val_paths) / batch_size)
 
             # Treina ou carrega
             model, loaded = load_or_build_cnn_model(
@@ -473,30 +464,30 @@ def run_experiment(
                 print(f"[CNN Single-Split] Salvando modelo treinado em {save_path}")
                 model.save(save_path)
 
-            print("[CNN Single-Split] Avaliando no conjunto de validação (gerador)...")
-            val_gen_eval = custom_data_generator(
-                paths=cnn_val_paths,
-                labels=cnn_val_labels,
+            # Avaliação final no conjunto de teste (virgem)
+            test_gen = custom_data_generator(
+                paths=test_paths,
+                labels=test_labels,
                 batch_size=batch_size,
                 model_name=model_name,
                 use_graphic_preprocessing=use_graphic_preprocessing,
                 shuffle=False,
                 augment=False
             )
-            steps_val = math.ceil(len(cnn_val_paths) / batch_size)
-            y_true_all = []
-            y_pred_all = []
-            for _ in range(steps_val):
-                Xb, Yb = next(val_gen_eval)
+            test_steps = math.ceil(len(test_paths) / batch_size)
+            y_true_test = []
+            y_pred_test = []
+            for _ in range(test_steps):
+                Xb, Yb = next(test_gen)
                 preds_b = model.predict(Xb)
                 preds_b = np.argmax(preds_b, axis=1)
                 true_b = np.argmax(Yb, axis=1)
-                y_true_all.extend(true_b)
-                y_pred_all.extend(preds_b)
+                y_true_test.extend(true_b)
+                y_pred_test.extend(preds_b)
 
-            print("[CNN Single-Split] Classification Report:")
-            print(classification_report(y_true_all, y_pred_all, digits=4))
-            print(confusion_matrix(y_true_all, y_pred_all))
+            print("[CNN Single-Split] Relatório Final no conjunto de TESTE:")
+            print(classification_report(y_true_test, y_pred_test, digits=4))
+            print(confusion_matrix(y_true_test, y_pred_test))
     else:
         # CNN como extratora de características
         print("\n===== [Modo] CNN como Extratora + Classificador Clássico =====")
@@ -505,21 +496,17 @@ def run_experiment(
         clf_save_path = f"../models/CLASSIC/{classical_classifier}/{classical_classifier.lower()}_{model_name.lower()}_fine_tune_{fine_tune}{f'_fine_tune_at_{fine_tune_at}' if fine_tune_at != 0 else ''}_graphic_{use_graphic_preprocessing}/{model_type}.joblib"
         features_save_path = f"../models/CNN/{model_name}/{model_name.lower()}_graphic_{use_graphic_preprocessing}_fine_tune_{fine_tune}{f'_fine_tune_at_{fine_tune_at}' if fine_tune_at != 0 else ''}_extractor_features.npy"
 
-        split_point = int(0.80 * len(all_paths))
-        cnn_train_paths = all_paths[:split_point]
-        cnn_val_paths = all_paths[split_point:]
-        cnn_train_labels = all_labels[:split_point]
-        cnn_val_labels = all_labels[split_point:]
-
-        x_cnn_train, y_cnn_train = load_and_preprocess_images(
-            cnn_train_paths, model_name, labels=cnn_train_labels,
+        x_train, y_train = load_and_preprocess_images(
+            train_paths, model_name, labels=train_labels,
             use_graphic_preprocessing=use_graphic_preprocessing,
-            cache=image_cache
         )
-        x_cnn_val, y_cnn_val = load_and_preprocess_images(
-            cnn_val_paths, model_name, labels=cnn_val_labels,
+        x_val, y_val = load_and_preprocess_images(
+            train_paths, model_name, labels=train_labels,
             use_graphic_preprocessing=use_graphic_preprocessing,
-            cache=image_cache
+        )
+        x_test, y_test = load_and_preprocess_images(
+            test_paths, model_name, labels=test_labels,
+            use_graphic_preprocessing=use_graphic_preprocessing
         )
 
         model, loaded = load_or_build_cnn_model(
@@ -534,8 +521,8 @@ def run_experiment(
             print("[CNN Extractor] Treinando CNN p/ extrair features...")
 
             model.fit(
-                x_cnn_train, y_cnn_train,
-                validation_data=(x_cnn_val, y_cnn_val),
+                x_train, y_train,
+                validation_data=(x_val, y_val),
                 epochs=epochs,
                 batch_size=batch_size,
                 callbacks=[early_stopping]
@@ -544,8 +531,8 @@ def run_experiment(
             model.save(save_path)
 
         all_features = extract_features_with_cnn(
+            paths=np.concatenate([train_paths, val_paths]),
             model=model,
-            paths=all_paths,
             model_name=model_name,
             use_graphic_preprocessing=use_graphic_preprocessing,
             features_save_path=features_save_path
@@ -553,13 +540,28 @@ def run_experiment(
 
         run_kfold_classical(
             all_features=all_features,
-            all_labels=all_labels,
-            k_folds=k_folds,
+            all_labels=np.concatenate([train_labels, val_labels]),
+            k_folds=3,
             classifier_type=classical_classifier,
             use_data_preprocessing=use_data_preprocessing,
             pca_n_components=pca_n_components,
             save_path=clf_save_path
         )
+
+        # Avaliação final no conjunto de teste para o classificador clássico
+        test_features = extract_features_with_cnn(
+            paths=test_paths,
+            model=model,
+            model_name=model_name,
+            use_graphic_preprocessing=use_graphic_preprocessing,
+            features_save_path=f"../models/CNN/{model_name}/{model_name.lower()}_graphic_{use_graphic_preprocessing}_fine_tune_{fine_tune}{f'_fine_tune_at_{fine_tune_at}' if fine_tune_at != 0 else ''}_extractor_features_test.npy"
+        )
+        from joblib import load
+        clf = load(clf_save_path)
+        test_preds = clf.predict(test_features)
+        print("\n[Classic] Relatório Final no conjunto de TESTE:")
+        print(classification_report(test_labels, test_preds, digits=4))
+        print(confusion_matrix(test_labels, test_preds))
 
 def main():
     with tensorflow.device('/GPU:0'):
