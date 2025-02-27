@@ -40,7 +40,6 @@ def remove_hairs(image_or_path, visualize=False):
     else:
         image = image_or_path
 
-    print("Removendo pelos...")
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (17, 17))  # Kernel para top-hat
     blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, kernel)
@@ -75,7 +74,6 @@ def extract_roi(image, visualize=False):
     Returns:
         roi (numpy.ndarray): Imagem da região de interesse extraída e pré-processada (em RGB).
     """
-    print("Extraindo ROI...")
     gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray_image, (5, 5), 0)
     _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
@@ -134,12 +132,13 @@ def custom_data_generator(
             batch_idxs = idxs[start:end]
 
             batch_images = []
-            batch_labels = labels[batch_idxs]
+            batch_labels = []
 
             for i in batch_idxs:
                 image_path = paths[i]
                 image = cv2.imread(image_path)  # Lê a imagem (BGR)
                 if image is None:
+                    print(f"Falha ao ler a imagem: {image_path}")
                     continue
 
                 # Se usar pré-processamento gráfico com remoção de pelos, passe a imagem já lida
@@ -163,7 +162,7 @@ def custom_data_generator(
                 else:
                     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-                image = cv2.resize(image, img_size)
+                image = cv2.resize(image, img_size[:2])
 
                 if model_name == "VGG19":
                     image = preprocess_input_vgg19(image)
@@ -177,6 +176,10 @@ def custom_data_generator(
                     raise ValueError("Modelo não suportado.")
 
                 batch_images.append(image)
+                batch_labels.append(labels[i])
+
+            if len(batch_images) == 0:
+                continue
 
             batch_images = np.array(batch_images, dtype=np.float32)
             batch_labels = to_categorical(batch_labels, num_classes)
@@ -196,7 +199,7 @@ def preprocess_image(path, model_name, use_graphic_preprocessing=False, use_hair
 
         # Converter de BGR para RGB e redimensionar
     roi = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
-    roi_resized = cv2.resize(roi, img_size)
+    roi_resized = cv2.resize(roi, img_size[:2])
     if model_name == "VGG19":
         roi_resized = preprocess_input_vgg19(roi_resized)
     elif model_name == "Inception":

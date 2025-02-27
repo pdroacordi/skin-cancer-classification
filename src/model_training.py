@@ -61,23 +61,14 @@ def pre_process_data(train_features, val_features, save_path, n_components=100):
 ###############################################################################
 # Construção / Carregamento do Modelo CNN (sem treinar dentro da função)
 ###############################################################################
-def load_or_build_cnn_model(model_name="VGG19",
-                            input_shape=(224, 224, 3),
-                            fine_tune=False,
-                            fine_tune_at=0,
-                            save_path="",
-                            num_classes=7):
+def load_or_build_cnn_model(fine_tune_at=0, save_path=""):
     """
     Cria ou carrega um modelo CNN e o salva em 'save_path'.
     Se já existir 'save_path', o modelo é carregado.
 
     Args:
-        model_name (str): Nome do modelo ('VGG19', 'Inception', 'ResNet', 'Xception').
-        input_shape (tuple): Tamanho de entrada das imagens.
-        fine_tune (bool): Se True, realiza fine-tuning.
-        fine_tune_at (int): Camada a partir da qual será realizado o fine-tuning.
+        fine_tune_at (int): Camada para descongelar.
         save_path (str): Caminho em que deve ser salvo o modelo.
-        num_classes (int): Número de classes de treino.
 
     Returns:
         model (keras.Model): Modelo configurado e salvo.
@@ -87,23 +78,23 @@ def load_or_build_cnn_model(model_name="VGG19",
         print(f"Carregando modelo existente: {save_path}")
         return load_model(save_path), True
 
-    if model_name == "VGG19":
-        base_model = VGG19(weights='imagenet', include_top=False, input_shape=input_shape)
-        fine_tune_at = fine_tune_at or 15
-    elif model_name == "Inception":
-        base_model = InceptionV3(weights='imagenet', include_top=False, input_shape=input_shape)
-        fine_tune_at = fine_tune_at or 40
-    elif model_name == "ResNet":
-        base_model = ResNet50(weights='imagenet', include_top=False, input_shape=input_shape)
-        fine_tune_at = fine_tune_at or 25
-    elif model_name == "Xception":
-        base_model = Xception(weights='imagenet', include_top=False, input_shape=input_shape)
-        fine_tune_at = fine_tune_at or 30
+    if skincancer.src.config.cnn_model == "VGG19":
+        base_model = VGG19(weights='imagenet', include_top=False, input_shape=skincancer.src.config.img_size)
+        fine_tune_at = fine_tune_at if fine_tune_at != 0 else 15
+    elif skincancer.src.config.cnn_model == "Inception":
+        base_model = InceptionV3(weights='imagenet', include_top=False, input_shape=skincancer.src.config.img_size)
+        fine_tune_at = fine_tune_at if fine_tune_at != 0 else 40
+    elif skincancer.src.config.cnn_model == "ResNet":
+        base_model = ResNet50(weights='imagenet', include_top=False, input_shape=skincancer.src.config.img_size)
+        fine_tune_at = fine_tune_at if fine_tune_at != 0 else 25
+    elif skincancer.src.config.cnn_model == "Xception":
+        base_model = Xception(weights='imagenet', include_top=False, input_shape=skincancer.src.config.img_size)
+        fine_tune_at = fine_tune_at if fine_tune_at != 0 else 30
     else:
         raise ValueError(
-            f"Modelo {model_name} não suportado. Escolha entre 'VGG19', 'Inception', 'ResNet' ou 'Xception'.")
+            f"Modelo {skincancer.src.config.cnn_model} não suportado. Escolha entre 'VGG19', 'Inception', 'ResNet' ou 'Xception'.")
 
-    if fine_tune:
+    if skincancer.src.config.use_fine_tuning:
         for layer in base_model.layers[:fine_tune_at]:
             layer.trainable = False
         for layer in base_model.layers[fine_tune_at:]:
@@ -114,12 +105,12 @@ def load_or_build_cnn_model(model_name="VGG19",
     x = layers.GlobalAveragePooling2D(name='gap')(base_model.output)
     x = layers.Dense(256, activation='relu', name='dense_features')(x)
     x = layers.Dropout(0.5, name='dropout_features')(x)
-    predictions = layers.Dense(num_classes, activation='softmax', name='final_predictions')(x)
+    predictions = layers.Dense(skincancer.src.config.num_classes, activation='softmax', name='final_predictions')(x)
     model = Model(inputs=base_model.input, outputs=predictions)
 
     model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
 
-    if not os.path.exists(os.path.dirname(save_path)):
+    if save_path and not os.path.exists(os.path.dirname(save_path)):
         os.makedirs(os.path.dirname(save_path))
 
     return model, False
@@ -130,13 +121,6 @@ def load_or_build_cnn_model(model_name="VGG19",
 def run_kfold_cnn(
         all_paths,
         all_labels,
-        model_name="VGG19",
-        fine_tune=False,
-        fine_tune_at=0,
-        k_folds=5,
-        epochs=10,
-        batch_size=32,
-        use_graphic_preprocessing=False,
         save_path=""
 ):
     """
@@ -145,14 +129,14 @@ def run_kfold_cnn(
     CUIDADO: Alto custo computacional se k_folds > 1, pois treinará
              a CNN repetidas vezes.
     """
-    kf = KFold(n_splits=k_folds, shuffle=True, random_state=42)
+    kf = KFold(n_splits=skincancer.src.config.num_kfolds, shuffle=True, random_state=42)
     fold = 1
 
     all_preds = []
     all_trues = []
 
     for train_idx, val_idx in kf.split(all_paths):
-        print(f"\n[CNN K-Fold] Fold {fold}/{k_folds}")
+        print(f"\n[CNN K-Fold] Fold {fold}/{skincancer.src.config.num_kfolds}")
         train_paths_fold  = all_paths[train_idx]
         val_paths_fold    = all_paths[val_idx]
         train_labels_fold = all_labels[train_idx]
@@ -162,40 +146,46 @@ def run_kfold_cnn(
         train_gen = custom_data_generator(
             train_paths_fold,
             train_labels_fold,
-            batch_size=batch_size,
-            model_name=model_name,
-            use_graphic_preprocessing=use_graphic_preprocessing,
-            augment=True,
+            batch_size=skincancer.src.config.batch_size,
+            model_name=skincancer.src.config.cnn_model,
+            use_graphic_preprocessing=skincancer.src.config.use_graphic_preprocessing,
+            augment=skincancer.src.config.use_data_augmentation,
         )
         val_gen = custom_data_generator(
             val_paths_fold,
             val_labels_fold,
-            batch_size=batch_size,
-            model_name=model_name,
-            use_graphic_preprocessing=use_graphic_preprocessing,
+            batch_size=skincancer.src.config.batch_size,
+            model_name=skincancer.src.config.cnn_model,
+            use_graphic_preprocessing=skincancer.src.config.use_graphic_preprocessing,
             augment=False,
             shuffle=False
         )
 
-        steps_per_epoch = math.ceil(len(train_paths_fold) / batch_size)
-        validation_steps = math.ceil(len(val_paths_fold) / batch_size)
+        steps_per_epoch = math.ceil(len(train_paths_fold) / skincancer.src.config.batch_size)
+        validation_steps = math.ceil(len(val_paths_fold) / skincancer.src.config.batch_size)
 
         model_save_path = save_path.replace(".h5", f"_fold_{fold}.h5")
-        model, loaded = load_or_build_cnn_model(
-            model_name=model_name,
-            save_path=model_save_path,
-            fine_tune=fine_tune,
-            fine_tune_at=fine_tune_at
-        )
+        model, loaded = load_or_build_cnn_model(fine_tune_at=skincancer.src.config.use_fine_tuning_at_layer, save_path=model_save_path)
         if not loaded:
             print(f"[CNN] Treinando (Fold {fold})...")
+
+            from sklearn.utils import class_weight
+            import numpy as np
+            class_weights_array = class_weight.compute_class_weight(
+                class_weight='balanced',
+                classes=np.unique(train_labels_fold),
+                y=train_labels_fold
+            )
+            class_weights = dict(enumerate(class_weights_array))
+
             model.fit(
                 train_gen,
                 steps_per_epoch=steps_per_epoch,
-                epochs=epochs,
+                epochs=skincancer.src.config.num_epochs,
                 validation_data=val_gen,
                 validation_steps=validation_steps,
-                callbacks=[early_stopping]
+                callbacks=[early_stopping],
+                class_weight=class_weights if skincancer.src.config.use_class_weight else None
             )
             print(f"[CNN] Salvando modelo treinado em {model_save_path}")
             model.save(model_save_path)
@@ -230,11 +220,7 @@ def run_kfold_cnn(
 def extract_features_with_cnn(
         paths,
         model,
-        model_name="VGG19",
-        use_graphic_preprocessing=False,
-        image_cache=None,
-        features_save_path="features.npy",
-        batch_size=32
+        features_save_path="features.npy"
 ):
     """
     Extrai características de imagens usando um modelo CNN pré-treinado.
@@ -242,11 +228,7 @@ def extract_features_with_cnn(
     Args:
         paths
         model (keras.Model): Modelo configurado e salvo.
-        model_name (str): Nome do modelo ('VGG19', 'Inception', 'ResNet', 'Xception').
-        use_graphic_preprocessing (bool): Se True, aplica pré-processamento gráfico.
-        image_cache (dict): Dicionário de imagens (cache)
         features_save_path (str): Onde salvar as features extraídas.
-        batch_size (int): Batch size.
     Returns:
         features (numpy.ndarray): Vetores de características extraídos.
     """
@@ -259,17 +241,17 @@ def extract_features_with_cnn(
     print("[Features] Pré-processando imagens...")
     all_images = load_and_preprocess_images(
         paths,
-        model_name,
-        use_graphic_preprocessing=use_graphic_preprocessing,
-        cache=image_cache
+        skincancer.src.config.cnn_model,
+        use_graphic_preprocessing=skincancer.src.config.use_graphic_preprocessing
     )
 
     # Extrair características
     print("[Features] Extraindo embeddings...")
-    features = feature_extractor.predict(all_images, batch_size=batch_size)
+    features = feature_extractor.predict(all_images, batch_size=skincancer.src.config.batch_size)
 
-    np.save(features_save_path, features)
-    print(f"[Features] Salvas em {features_save_path}")
+    if features_save_path.endswith(".npy"):
+        np.save(features_save_path, features)
+        print(f"[Features] Salvas em {features_save_path}")
 
     return features
 
@@ -280,29 +262,28 @@ def extract_features_with_cnn(
 def train_classical_classifier(
         features,
         labels,
-        classifier_type="RandomForest",
         save_path=""
 ):
     if os.path.exists(save_path):
         from joblib import load
         print(f"Carregando modelo clássico existente: {save_path}")
         return load(save_path)
-    if classifier_type == "RandomForest":
-        model = RandomForestClassifier(random_state=42)
-    elif classifier_type == "SVM":
-        model = SVC(probability=True, random_state=42)
-    elif classifier_type == "KNN":
+    if skincancer.src.config.classical_classifier_model == "RandomForest":
+        model = RandomForestClassifier(random_state=42, class_weight="balanced" if skincancer.src.config.use_class_weight else None)
+    elif skincancer.src.config.classical_classifier_model == "SVM":
+        model = SVC(probability=True, random_state=42, class_weight="balanced" if skincancer.src.config.use_class_weight else None)
+    elif skincancer.src.config.classical_classifier_model == "KNN":
         model = KNeighborsClassifier(n_neighbors=5)
-    elif classifier_type == "KNN+SVM":
+    elif skincancer.src.config.classical_classifier_model == "KNN+SVM":
         knn = KNeighborsClassifier(n_neighbors=5)
-        svm = SVC(probability=True, random_state=42)
+        svm = SVC(probability=True, random_state=42, class_weight="balanced" if skincancer.src.config.use_class_weight else None)
         model = VotingClassifier(estimators=[
             ('knn', knn),
             ('svm', svm)
         ], voting='soft')
     else:
         raise ValueError(
-            f"Modelo {classifier_type} não suportado. Escolha entre 'RandomForest', 'SVM', 'KNN' ou 'KNN+SVM'.")
+            f"Modelo {skincancer.src.config.classical_classifier_model} não suportado. Escolha entre 'RandomForest', 'SVM', 'KNN' ou 'KNN+SVM'.")
 
 
     model.fit(features, labels)
@@ -317,35 +298,31 @@ def train_classical_classifier(
 def run_kfold_classical(
         all_features,
         all_labels,
-        k_folds=5,
-        classifier_type="KNN",
-        use_data_preprocessing=False,
-        pca_n_components=100,
         save_path = ""
 ):
-    kf = KFold(n_splits=k_folds, shuffle=True, random_state=42)
+    kf = KFold(n_splits=skincancer.src.config.num_kfolds, shuffle=True, random_state=42)
 
     fold = 1
     all_preds = []
     all_trues = []
 
     for train_idx, val_idx in kf.split(all_features):
-        print(f"\n[Classic] Fold {fold}/{k_folds}")
+        print(f"\n[Classic] Fold {fold}/{skincancer.src.config.num_kfolds}")
         X_train, X_val = all_features[train_idx], all_features[val_idx]
         y_train, y_val = all_labels[train_idx], all_labels[val_idx]
 
         # Pré-process (Scaler + PCA), se desejado
-        if use_data_preprocessing:
+        if skincancer.src.config.use_data_preprocessing:
             pre_save_path = save_path.replace("{model_type}.joblib", "")
             X_train, X_val = pre_process_data(
                 train_features=X_train,
                 val_features=X_val,
                 save_path=pre_save_path,
-                n_components=pca_n_components
+                n_components=skincancer.src.config.num_pca_components
             )
 
         # Treina classificador
-        clf = train_classical_classifier(X_train, y_train, classifier_type, save_path=save_path)
+        clf = train_classical_classifier(X_train, y_train, save_path=save_path)
         preds = clf.predict(X_val)
 
         print(classification_report(y_val, preds, digits=4))
@@ -364,57 +341,30 @@ def run_kfold_classical(
 ###############################################################################
 # Função Principal
 ###############################################################################
-def run_experiment(
-        model_name="VGG19",
-        use_graphic_preprocessing=False,
-        use_data_preprocessing=False,
-        use_cnn_classifier=True,
-        classical_classifier="RandomForest",
-        fine_tune=False,
-        fine_tune_at=0,
-        k_folds=5,
-        pca_n_components=100,
-        epochs=10,
-        batch_size=64,
-        num_classes=7
-):
-    """
-    Função principal dinâmica:
-      - Se `use_cnn_classifier=True`, roda a CNN como classificador.
-        *opcionalmente* com K-Fold (end-to-end).
-      - Se `use_classical_classifier=True`, usa a CNN como extratora de
-        features e roda K-Fold nos modelos clássicos.
-      - Você pode ajustar hiperparâmetros via estes argumentos.
-    """
+def run_experiment():
     # 1) Carrega paths e labels
     train_paths, train_labels = load_paths_labels("../res/train_files.txt")
     val_paths, val_labels = load_paths_labels("../res/val_files.txt")
     test_paths, test_labels = load_paths_labels("../res/test_files.txt")
 
-    model_type = "classifier" if use_cnn_classifier else "extractor"
-    save_path = f"../models/CNN/{model_name}/{model_name.lower()}_graphic_{use_graphic_preprocessing}_fine_tune_{fine_tune}{f'_fine_tune_at_{fine_tune_at}' if fine_tune_at != 0 else ''}_{model_type}.h5"
+    model_type = "classifier" if skincancer.src.config.use_cnn_as_classifier else "extractor"
+
+    cnn_save_path      = f"../models/{model_type}/use_graphic_preprocessing_{skincancer.src.config.use_graphic_preprocessing}/use_data_augmentation_{skincancer.src.config.use_data_augmentation}/use_fine_tuning_{skincancer.src.config.use_fine_tuning}/use_class_weights_{skincancer.src.config.use_class_weight}/{skincancer.src.config.cnn_model.lower()}/{model_type}.h5"
+    clf_save_path      = f"../models/{model_type}/use_graphic_preprocessing_{skincancer.src.config.use_graphic_preprocessing}/use_data_augmentation_{skincancer.src.config.use_data_augmentation}/use_fine_tuning_{skincancer.src.config.use_fine_tuning}/use_class_weights_{skincancer.src.config.use_class_weight}/{skincancer.src.config.classical_classifier_model.lower()}_{skincancer.src.config.cnn_model.lower()}/{model_type}.joblib"
+    features_save_path = f"../models/{model_type}/use_graphic_preprocessing_{skincancer.src.config.use_graphic_preprocessing}/use_data_augmentation_{skincancer.src.config.use_data_augmentation}/use_fine_tuning_{skincancer.src.config.use_fine_tuning}/use_class_weights_{skincancer.src.config.use_class_weight}/{skincancer.src.config.cnn_model.lower()}/extractor_features.npy"
 
     # 2) CENÁRIO A: CNN como Classificador
 
-    if use_cnn_classifier:
+    if skincancer.src.config.use_cnn_as_classifier:
         # CNN como classificador
         print("\n===== [Modo] CNN como Classificador End-to-End =====")
-        print(f"\nCenário - Modelo: {model_name}, Fine-Tune: {fine_tune}, {f'Camada: {fine_tune_at}, ' if fine_tune_at != 0 else ''}Pré-Processamento Gráfico: {use_graphic_preprocessing}")
 
-
-        if k_folds > 1:
+        if skincancer.src.config.num_kfolds > 1:
             # (A1) Rodar K-Fold na CNN
             run_kfold_cnn(
                 all_paths=train_paths,
                 all_labels=train_labels,
-                model_name=model_name,
-                fine_tune=fine_tune,
-                fine_tune_at=fine_tune_at,
-                k_folds=k_folds,
-                epochs=epochs,
-                batch_size=batch_size,
-                use_graphic_preprocessing=use_graphic_preprocessing,
-                save_path=save_path
+                save_path=cnn_save_path
             )
         else:
             # (A2) Apenas um split fixo
@@ -423,58 +373,60 @@ def run_experiment(
             train_gen = custom_data_generator(
                 paths=train_paths,
                 labels=train_labels,
-                batch_size=batch_size,
-                model_name=model_name,
-                use_graphic_preprocessing=use_graphic_preprocessing,
-                use_hair_removal=True,
-                shuffle=True,
-                augment=use_data_preprocessing
+                batch_size=skincancer.src.config.batch_size,
+                model_name=skincancer.src.config.cnn_model,
+                use_graphic_preprocessing=skincancer.src.config.use_graphic_preprocessing,
+                use_hair_removal=skincancer.src.config.use_graphic_preprocessing,
+                shuffle=skincancer.src.config.use_data_augmentation,
+                augment=skincancer.src.config.use_data_augmentation
             )
             val_gen = custom_data_generator(
                 paths=val_paths,
                 labels=val_labels,
-                batch_size=batch_size,
-                model_name=model_name,
-                use_graphic_preprocessing=use_graphic_preprocessing,
-                use_hair_removal=True,
+                batch_size=skincancer.src.config.batch_size,
+                model_name=skincancer.src.config.cnn_model,
+                use_graphic_preprocessing=skincancer.src.config.use_graphic_preprocessing,
+                use_hair_removal=skincancer.src.config.use_graphic_preprocessing,
                 shuffle=False,
                 augment=False
             )
-            steps_per_epoch = math.ceil(len(train_paths) / batch_size)
-            validation_steps = math.ceil(len(val_paths) / batch_size)
+            steps_per_epoch = math.ceil(len(train_paths) / skincancer.src.config.batch_size)
+            validation_steps = math.ceil(len(val_paths) / skincancer.src.config.batch_size)
 
             # Treina ou carrega
-            model, loaded = load_or_build_cnn_model(
-                model_name=model_name,
-                save_path=save_path,
-                fine_tune=fine_tune,
-                fine_tune_at=fine_tune_at,
-                num_classes=num_classes
-            )
+            model, loaded = load_or_build_cnn_model(fine_tune_at=skincancer.src.config.use_fine_tuning_at_layer, save_path=cnn_save_path)
             if not loaded:
                 print("[CNN Single-Split] Treinando...")
+                from sklearn.utils import class_weight
+                class_weights_array = class_weight.compute_class_weight(
+                    class_weight='balanced',
+                    classes=np.unique(train_labels),
+                    y=train_labels
+                )
+                class_weights = dict(enumerate(class_weights_array))
                 model.fit(
                     train_gen,
                     steps_per_epoch=steps_per_epoch,
-                    epochs=epochs,
+                    epochs=skincancer.src.config.num_epochs,
                     validation_data=val_gen,
                     validation_steps=validation_steps,
-                    callbacks=[early_stopping]
+                    callbacks=[early_stopping],
+                    class_weight=class_weights if skincancer.src.config.use_class_weight else None
                 )
-                print(f"[CNN Single-Split] Salvando modelo treinado em {save_path}")
-                model.save(save_path)
+                print(f"[CNN Single-Split] Salvando modelo treinado em {cnn_save_path}")
+                model.save(cnn_save_path)
 
             # Avaliação final no conjunto de teste (virgem)
             test_gen = custom_data_generator(
                 paths=test_paths,
                 labels=test_labels,
-                batch_size=batch_size,
-                model_name=model_name,
-                use_graphic_preprocessing=use_graphic_preprocessing,
+                batch_size=skincancer.src.config.batch_size,
+                model_name=skincancer.src.config.cnn_model,
+                use_graphic_preprocessing=skincancer.src.config.use_graphic_preprocessing,
                 shuffle=False,
                 augment=False
             )
-            test_steps = math.ceil(len(test_paths) / batch_size)
+            test_steps = math.ceil(len(test_paths) / skincancer.src.config.batch_size)
             y_true_test = []
             y_pred_test = []
             for _ in range(test_steps):
@@ -491,31 +443,21 @@ def run_experiment(
     else:
         # CNN como extratora de características
         print("\n===== [Modo] CNN como Extratora + Classificador Clássico =====")
-        print(f"\nCenário - Classificador: {classical_classifier}, CNN: {model_name}, Fine-Tune: {fine_tune}, {f'Camada: {fine_tune_at}, ' if fine_tune_at != 0 else ''}Pré-Processamento Gráfico: {use_graphic_preprocessing}, Pré-Processamento de Dados: {use_data_preprocessing}")
-
-        clf_save_path = f"../models/CLASSIC/{classical_classifier}/{classical_classifier.lower()}_{model_name.lower()}_fine_tune_{fine_tune}{f'_fine_tune_at_{fine_tune_at}' if fine_tune_at != 0 else ''}_graphic_{use_graphic_preprocessing}/{model_type}.joblib"
-        features_save_path = f"../models/CNN/{model_name}/{model_name.lower()}_graphic_{use_graphic_preprocessing}_fine_tune_{fine_tune}{f'_fine_tune_at_{fine_tune_at}' if fine_tune_at != 0 else ''}_extractor_features.npy"
 
         x_train, y_train = load_and_preprocess_images(
-            train_paths, model_name, labels=train_labels,
-            use_graphic_preprocessing=use_graphic_preprocessing,
+            train_paths, skincancer.src.config.cnn_model, labels=train_labels,
+            use_graphic_preprocessing=skincancer.src.config.use_graphic_preprocessing,
         )
         x_val, y_val = load_and_preprocess_images(
-            train_paths, model_name, labels=train_labels,
-            use_graphic_preprocessing=use_graphic_preprocessing,
+            train_paths, skincancer.src.config.cnn_model, labels=train_labels,
+            use_graphic_preprocessing=skincancer.src.config.use_graphic_preprocessing,
         )
         x_test, y_test = load_and_preprocess_images(
-            test_paths, model_name, labels=test_labels,
-            use_graphic_preprocessing=use_graphic_preprocessing
+            test_paths, skincancer.src.config.cnn_model, labels=test_labels,
+            use_graphic_preprocessing=skincancer.src.config.use_graphic_preprocessing
         )
 
-        model, loaded = load_or_build_cnn_model(
-            model_name=model_name,
-            save_path=save_path,
-            fine_tune=fine_tune,
-            fine_tune_at=fine_tune_at,
-            num_classes=num_classes
-        )
+        model, loaded = load_or_build_cnn_model(fine_tune_at=skincancer.src.config.use_fine_tuning_at_layer, save_path=cnn_save_path)
 
         if not loaded:
             print("[CNN Extractor] Treinando CNN p/ extrair features...")
@@ -523,28 +465,22 @@ def run_experiment(
             model.fit(
                 x_train, y_train,
                 validation_data=(x_val, y_val),
-                epochs=epochs,
-                batch_size=batch_size,
+                epochs=skincancer.src.config.num_epochs,
+                batch_size=skincancer.src.config.batch_size,
                 callbacks=[early_stopping]
             )
-            print(f"[CNN Extractor] Salvando modelo treinado em {save_path}")
-            model.save(save_path)
+            print(f"[CNN Extractor] Salvando modelo treinado em {cnn_save_path}")
+            model.save(cnn_save_path)
 
         all_features = extract_features_with_cnn(
             paths=np.concatenate([train_paths, val_paths]),
             model=model,
-            model_name=model_name,
-            use_graphic_preprocessing=use_graphic_preprocessing,
             features_save_path=features_save_path
         )
 
         run_kfold_classical(
             all_features=all_features,
             all_labels=np.concatenate([train_labels, val_labels]),
-            k_folds=3,
-            classifier_type=classical_classifier,
-            use_data_preprocessing=use_data_preprocessing,
-            pca_n_components=pca_n_components,
             save_path=clf_save_path
         )
 
@@ -552,9 +488,7 @@ def run_experiment(
         test_features = extract_features_with_cnn(
             paths=test_paths,
             model=model,
-            model_name=model_name,
-            use_graphic_preprocessing=use_graphic_preprocessing,
-            features_save_path=f"../models/CNN/{model_name}/{model_name.lower()}_graphic_{use_graphic_preprocessing}_fine_tune_{fine_tune}{f'_fine_tune_at_{fine_tune_at}' if fine_tune_at != 0 else ''}_extractor_features_test.npy"
+            features_save_path=""
         )
         from joblib import load
         clf = load(clf_save_path)
@@ -565,20 +499,7 @@ def run_experiment(
 
 def main():
     with tensorflow.device('/GPU:0'):
-        run_experiment(
-            model_name="VGG19",
-            use_cnn_classifier=True,
-            use_graphic_preprocessing=True,
-            use_data_preprocessing=True,
-            classical_classifier="RandomForest",
-            fine_tune=True,
-            fine_tune_at=0,
-            k_folds=3,
-            pca_n_components=100,
-            epochs=skincancer.src.config.num_epochs,
-            batch_size=skincancer.src.config.batch_size,
-            num_classes=skincancer.src.config.num_classes
-        )
+        run_experiment()
 
 if __name__ == '__main__':
     main()
