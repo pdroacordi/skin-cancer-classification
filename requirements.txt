@@ -5,3 +5,5 @@ opencv-python
 matplotlib
 numpy<2.0
 albumentations
+xgboost
+imbalanced-learn
