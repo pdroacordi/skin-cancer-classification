@@ -26,7 +26,8 @@ from config import (
     VISUALIZE,
     NUM_KFOLDS,
     CNN_MODEL,
-    RESULTS_DIR
+    RESULTS_DIR,
+    USE_DATA_PREPROCESSING
 )
 
 from utils.data_loaders import load_paths_labels, MemoryEfficientDataGenerator
@@ -50,8 +51,11 @@ def setup_gpu_memory():
 
 def create_result_directories(base_dir=RESULTS_DIR):
     """Create directories for saving results."""
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
-    result_dir = os.path.join(base_dir, f"cnn_classifier_{timestamp}")
+    timestamp      = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+    str_graphic    = "use_graphic_preprocessing_" if USE_GRAPHIC_PREPROCESSING else ""
+    str_augment    = "use_augmentation_" if USE_DATA_AUGMENTATION else ""
+    str_preprocess = "use_data_preprocess_" if USE_DATA_PREPROCESSING else ""
+    result_dir     = os.path.join(base_dir, f"cnn_classifier_{str_graphic}{str_augment}{str_preprocess}{timestamp}")
 
     # Create subdirectories
     os.makedirs(result_dir, exist_ok=True)
