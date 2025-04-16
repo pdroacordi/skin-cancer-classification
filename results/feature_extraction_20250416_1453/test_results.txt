@@ -1,0 +1,30 @@
+Feature Extractor: Inception
+Classifier: RandomForest
+Use Fine-tuning: True
+Use Preprocessing: False
+Use PCA: False
+PCA Components: None
+
+Test Set Classification Report:
+              precision    recall  f1-score   support
+
+           0       0.60      0.12      0.20        49
+           1       0.62      0.36      0.46        77
+           2       0.46      0.36      0.40       165
+           3       0.00      0.00      0.00        17
+           4       0.38      0.08      0.14       167
+           5       0.77      0.98      0.86      1006
+           6       1.00      0.09      0.17        22
+
+    accuracy                           0.73      1503
+   macro avg       0.55      0.29      0.32      1503
+weighted avg       0.68      0.73      0.67      1503
+
+Confusion Matrix:
+[[  6   9  16   0   3  15   0]
+ [  0  28  16   0   4  29   0]
+ [  3   3  59   0   9  91   0]
+ [  0   2   4   0   0  11   0]
+ [  1   1  23   0  14 128   0]
+ [  0   2   8   0   7 989   0]
+ [  0   0   2   0   0  18   2]]
