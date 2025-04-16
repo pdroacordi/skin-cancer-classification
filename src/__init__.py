@@ -1,0 +1,3 @@
+"""
+Skin cancer classification project.
+"""

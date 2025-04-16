@@ -1,0 +1,3 @@
+"""
+Model definitions for the skin cancer classification project.
+"""

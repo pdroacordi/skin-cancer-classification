@@ -7,3 +7,4 @@ numpy<2.0
 albumentations
 xgboost
 imbalanced-learn
+seaborn
