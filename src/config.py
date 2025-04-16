@@ -8,7 +8,7 @@ GPU_MEMORY_LIMIT = 0.9  # Fraction of GPU memory to use
 
 # Pipeline configuration
 USE_GRAPHIC_PREPROCESSING = False    # Apply hair removal, contrast enhancement, etc.
-USE_DATA_AUGMENTATION     = False    # Apply data augmentation during training
+USE_DATA_AUGMENTATION     = True    # Apply data augmentation during training
 USE_DATA_PREPROCESSING    = False    # Apply data pre-processing, such as PCA, SMOTE, etc.
 USE_FINE_TUNING           = True     # Fine-tune pretrained CNN
 
@@ -32,11 +32,7 @@ CNN_MODEL = 'Inception'          # Options: 'VGG19', 'Inception', 'ResNet', 'Xce
 CLASSICAL_CLASSIFIER_MODEL = 'RandomForest'  # Options: 'RandomForest', 'XGBoost', 'AdaBoost', 'ExtraTrees', 'SVM'
 
 # Paths
-DATA_DIR    = './data'
-MODELS_DIR  = './models'
-RESULTS_DIR = './results'
-
-# Dataset splits
+RESULTS_DIR      = './results'
 TRAIN_FILES_PATH = "./res/train_files.txt"
 VAL_FILES_PATH   = "./res/val_files.txt"
 TEST_FILES_PATH  = "./res/test_files.txt"

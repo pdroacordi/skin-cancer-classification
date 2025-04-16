@@ -161,9 +161,9 @@ def get_default_param_grid(classifier_name):
     if classifier_name == "RandomForest":
         return {
             'classifier__n_estimators': [50, 100, 200],
-            'classifier__max_depth': [None, 10, 20, 30],
-            'classifier__min_samples_split': [2, 5, 10],
-            'classifier__min_samples_leaf': [1, 2, 4]
+            'classifier__max_depth': [None, 15, 30],
+            'classifier__min_samples_split': [2, 10],
+            'classifier__min_samples_leaf': [1, 4]
         }
     elif classifier_name == "XGBoost":
         return {
@@ -187,7 +187,7 @@ def get_default_param_grid(classifier_name):
         }
     elif classifier_name == "SVM":
         return {
-            'classifier__C': [0.1, 1, 10, 100],
+            'classifier__C': [0.1, 10, 100],
             'classifier__gamma': ['scale', 'auto', 0.01, 0.1, 1],
             'classifier__kernel': ['rbf', 'linear', 'poly']
         }

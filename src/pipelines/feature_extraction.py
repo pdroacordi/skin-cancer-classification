@@ -62,8 +62,11 @@ def create_result_directories(base_dir=RESULTS_DIR):
     Returns:
         str: Path to the created result directory.
     """
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
-    result_dir = os.path.join(base_dir, f"feature_extraction_{timestamp}")
+    timestamp      = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+    str_graphic    = "use_graphic_preprocessing_" if USE_GRAPHIC_PREPROCESSING else ""
+    str_augment    = "use_augmentation_" if USE_DATA_AUGMENTATION else ""
+    str_preprocess = "use_data_preprocess_" if USE_DATA_PREPROCESSING else ""
+    result_dir     = os.path.join(base_dir, f"feature_extraction_{str_graphic}{str_augment}{str_preprocess}{timestamp}")
 
     # Create subdirectories
     os.makedirs(result_dir, exist_ok=True)
