@@ -114,7 +114,7 @@ def create_ml_pipeline(classifier_name, use_pca=True, n_components=None, random_
     return Pipeline(steps)
 
 
-def tune_hyperparameters(pipeline, X, y, param_grid, cv=5, n_jobs=-1, verbose=1):
+def tune_hyperparameters(pipeline, X, y, param_grid, cv=5, n_jobs=-1, subset_fraction=0.5, verbose=1):
     """
     Tune hyperparameters using grid search cross-validation.
 
@@ -125,11 +125,22 @@ def tune_hyperparameters(pipeline, X, y, param_grid, cv=5, n_jobs=-1, verbose=1)
         param_grid (dict): Parameter grid for grid search.
         cv (int): Number of cross-validation folds.
         n_jobs (int): Number of parallel jobs.
+        subset_fraction (float): Fraction of training data to be used as subset.
         verbose (int): Verbosity level.
 
     Returns:
         sklearn.model_selection.GridSearchCV: Fitted grid search object.
     """
+    from sklearn.model_selection import StratifiedShuffleSplit
+
+    # Create stratified sample
+    sss = StratifiedShuffleSplit(n_splits=1, test_size=subset_fraction, random_state=42)
+    for _, subset_idx in sss.split(X, y):
+        X_subset = X[subset_idx]
+        y_subset = y[subset_idx]
+
+    print(f"Using {len(X_subset)} samples ({subset_fraction * 100:.0f}%) for hyperparameter tuning")
+
     grid_search = GridSearchCV(
         pipeline,
         param_grid,
@@ -140,7 +151,7 @@ def tune_hyperparameters(pipeline, X, y, param_grid, cv=5, n_jobs=-1, verbose=1)
         return_train_score=True
     )
 
-    grid_search.fit(X, y)
+    grid_search.fit(X_subset, y_subset)
 
     print(f"Best parameters: {grid_search.best_params_}")
     print(f"Best cross-validation score: {grid_search.best_score_:.4f}")

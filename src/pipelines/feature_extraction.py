@@ -185,6 +185,7 @@ def extract_features(feature_extractor, images, batch_size=32):
 
     # Concatenate all features
     features = np.concatenate(features_list, axis=0)
+    features = features.astype(np.float32)
 
     return features
 
@@ -302,6 +303,7 @@ def extract_features_from_paths(feature_extractor, paths, labels=None,
 
     # Concatenate results
     features = np.concatenate(all_features, axis=0) if all_features else np.array([])
+    features = features.astype(np.float32)
 
     if labels is not None and all_labels:
         labels_out = np.concatenate(all_labels, axis=0)
@@ -333,13 +335,13 @@ def load_or_extract_features(feature_extractor, paths, labels=None,
 
         if isinstance(features_data, np.ndarray) and len(features_data.shape) == 2:
             # Only features were saved
-            features = features_data
+            features = features_data.astype(np.float32)
             if labels is not None:
                 return features, labels
             return features
         elif isinstance(features_data, dict) and 'features' in features_data and 'labels' in features_data:
             # Both features and labels were saved
-            features = features_data['features']
+            features = features_data['features'].astype(np.float32)
             labels_loaded = features_data['labels']
 
             if labels is not None:
@@ -377,6 +379,8 @@ def load_or_extract_features(feature_extractor, paths, labels=None,
 
         # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(features_save_path), exist_ok=True)
+
+        features = features.astype(np.float32)
 
         if labels_out is not None:
             # Save both features and labels
@@ -453,6 +457,8 @@ def augment_features_with_balanced_sampling(features, labels, target_count=None)
     balanced_features = np.concatenate(balanced_features, axis=0)
     balanced_labels = np.concatenate(balanced_labels, axis=0)
 
+    balanced_features = balanced_features.astype(np.float32)
+
     # Shuffle the balanced dataset
     shuffle_indices = np.random.permutation(len(balanced_features))
     balanced_features = balanced_features[shuffle_indices]
@@ -486,6 +492,9 @@ def train_and_evaluate_classical_model(train_features, train_labels,
         tuple: (model, evaluation_results)
     """
     print(f"Training {classifier_name} classifier...")
+
+    train_features = train_features.astype(np.float32)
+    val_features = val_features.astype(np.float32)
 
     # Create ML pipeline
     pipeline = create_ml_pipeline(
@@ -599,6 +608,9 @@ def run_kfold_cross_validation(all_features, all_labels,
         # Split data
         train_features, val_features = all_features[train_idx], all_features[val_idx]
         train_labels, val_labels = all_labels[train_idx], all_labels[val_idx]
+
+        train_features = train_features.astype(np.float32)
+        val_features = val_features.astype(np.float32)
 
         # Create model save path
         if result_dir:
@@ -866,7 +878,8 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
             y_val=y_val,
             epochs=NUM_EPOCHS,
             batch_size=BATCH_SIZE,
-            save_path=extractor_save_path
+            save_path=extractor_save_path,
+            use_augmentation=USE_DATA_AUGMENTATION
         )
 
     # Extract features
@@ -956,6 +969,8 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
             model_name=CNN_MODEL,
             features_save_path=test_features_save_path
         )
+
+        test_features = test_features.astype(np.float32)
 
         # Evaluate on test set
         test_pred = model.predict(test_features)
