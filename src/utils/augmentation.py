@@ -7,6 +7,7 @@ import sys
 
 import albumentations as A
 import numpy as np
+from keras.utils import Sequence
 from sklearn.utils import resample
 
 sys.path.append('..')
@@ -73,7 +74,7 @@ class AugmentationFactory:
                 shear=(-5, 5),
                 p=0.3
             ),
-            A.CoarseDropout(max_holes=8, max_height=8, max_width=8, p=0.2),
+            A.CoarseDropout(p=0.2),
         ])
 
     @staticmethod
@@ -108,6 +109,73 @@ class AugmentationFactory:
         ]
 
         return pipelines
+
+    class AugmentedDataGenerator(Sequence):
+        def __init__(self, x_set, y_set, batch_size, augmentation):
+            self.x = x_set
+            self.y = y_set
+            self.batch_size = batch_size
+            self.augmentation = augmentation
+            self.indices = np.arange(len(self.x))
+            np.random.shuffle(self.indices)
+
+        def __len__(self):
+            return int(np.ceil(len(self.x) / self.batch_size))
+
+        def __getitem__(self, idx):
+            # Get batch indices
+            batch_indices = self.indices[idx * self.batch_size:(idx + 1) * self.batch_size]
+            batch_x = self.x[batch_indices]
+            batch_y = self.y[batch_indices]
+
+            # Apply augmentation
+            augmented_batch = []
+            for image in batch_x:
+                # Ensure image has the correct shape and type for augmentation
+                if image.shape == (299, 299, 3):  # Check expected dimensions
+                    try:
+                        # Convert to uint8 if needed (albumentations expects uint8)
+                        if image.dtype != np.uint8:
+                            # Normalize to 0-255 range for uint8 conversion
+                            if image.min() < 0 or image.max() > 1:
+                                # Already in another range, rescale appropriately
+                                image_uint8 = ((image - image.min()) / (image.max() - image.min()) * 255).astype(
+                                    np.uint8)
+                            else:
+                                # Assumed to be in 0-1 range
+                                image_uint8 = (image * 255).astype(np.uint8)
+                        else:
+                            image_uint8 = image
+
+                        # Apply augmentation
+                        augmented = self.augmentation(image=image_uint8)
+                        aug_image = augmented['image']
+
+                        # Convert back to the original dtype and range if needed
+                        if image.dtype != np.uint8:
+                            if image.min() < 0 or image.max() > 1:
+                                # Rescale back to original range
+                                aug_image = (aug_image / 255.0) * (image.max() - image.min()) + image.min()
+                                aug_image = aug_image.astype(image.dtype)
+                            else:
+                                # Back to 0-1 range
+                                aug_image = (aug_image / 255.0).astype(image.dtype)
+
+                        augmented_batch.append(aug_image)
+                    except Exception as e:
+                        # If augmentation fails, use original image
+                        print(f"Augmentation error: {e}. Using original image.")
+                        augmented_batch.append(image)
+                else:
+                    # Skip augmentation for images with unexpected dimensions
+                    print(f"Skipping augmentation for image with shape {image.shape}")
+                    augmented_batch.append(image)
+
+            return np.array(augmented_batch), batch_y
+
+        def on_epoch_end(self):
+            # Shuffle indices at the end of each epoch
+            np.random.shuffle(self.indices)
 
 def apply_augmentation(image, augmentation):
     """
