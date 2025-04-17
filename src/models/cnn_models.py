@@ -273,7 +273,7 @@ def fine_tune_feature_extractor(feature_extractor, X_train, y_train, X_val, y_va
     fine_tuning_model = Model(inputs=feature_extractor.input, outputs=predictions)
 
     # Compile the model
-    optimizer = Adam(learning_rate=0.0001)
+    optimizer = Adam(learning_rate=0.00001)
     fine_tuning_model.compile(
         optimizer=optimizer,
         loss='categorical_crossentropy',
@@ -286,21 +286,18 @@ def fine_tune_feature_extractor(feature_extractor, X_train, y_train, X_val, y_va
     # Train the model
     # Apply augmentation during training if requested
     if use_augmentation:
-        from tensorflow.keras.preprocessing.image import ImageDataGenerator
-        datagen = ImageDataGenerator(
-            rotation_range=20,
-            width_shift_range=0.1,
-            height_shift_range=0.1,
-            horizontal_flip=True,
-            vertical_flip=False,
-            zoom_range=0.1,
-            fill_mode='nearest'
+        from utils.augmentation import AugmentationFactory
+
+        medium_augmentation = AugmentationFactory.get_medium_augmentation()
+
+        train_gen = AugmentationFactory.AugmentedDataGenerator(
+            X_train, y_train,
+            batch_size=batch_size,
+            augmentation=medium_augmentation
         )
 
-        # Train with augmentation
         fine_tuning_model.fit(
-            datagen.flow(X_train, y_train, batch_size=batch_size),
-            steps_per_epoch=len(X_train) // batch_size,
+            train_gen,
             validation_data=(X_val, y_val),
             epochs=epochs,
             callbacks=callbacks,

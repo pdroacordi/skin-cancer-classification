@@ -210,7 +210,7 @@ def extract_features_from_paths(feature_extractor, paths, labels=None,
     print(f"Loading and preprocessing {len(paths)} images...")
 
     # Create a preprocessing function for each image
-    def process_image(path, augment=False):
+    def process_image(path, augment=False, aug_index=None):
         import cv2
         from skincancer.src.utils.data_loaders import apply_model_preprocessing
 
@@ -230,10 +230,10 @@ def extract_features_from_paths(feature_extractor, paths, labels=None,
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
         # Apply augmentation if requested
-        if augment:
-            from utils.augmentation import AugmentationFactory
-            augmentation = AugmentationFactory.get_light_augmentation()
-            image = augmentation(image=image)['image']
+        if augment and augmentation_pipelines and aug_index is not None:
+            # Use specific augmentation pipeline from the list
+            pipeline = augmentation_pipelines[aug_index]
+            image = pipeline(image=image)['image']
 
         # Apply model-specific preprocessing
         image = apply_model_preprocessing(image, model_name)
@@ -247,7 +247,13 @@ def extract_features_from_paths(feature_extractor, paths, labels=None,
     all_features = []
     all_labels = []
 
-    num_augmentations = 5 if apply_augmentation else 1
+    augmentation_pipelines = None
+    if apply_augmentation:
+        from utils.augmentation import AugmentationFactory
+        augmentation_pipelines = AugmentationFactory.get_feature_extraction_augmentation()
+        num_augmentations = len(augmentation_pipelines)
+    else:
+        num_augmentations = 1
 
     for i in range(num_batches):
         start_idx = i * batch_size
@@ -266,9 +272,10 @@ def extract_features_from_paths(feature_extractor, paths, labels=None,
                 batch_indices.append(start_idx + j)
 
                 # Add augmented versions if requested
-                if apply_augmentation:
-                    for k in range(num_augmentations - 1):  # -1 because we already added the original
-                        aug_image = process_image(path, augment=True)
+                if apply_augmentation and augmentation_pipelines:
+                    # Skip index 0 as it's the identity transformation (no augmentation)
+                    for aug_index in range(1, num_augmentations):
+                        aug_image = process_image(path, augment=True, aug_index=aug_index)
                         if aug_image is not None:
                             batch_images.append(aug_image)
                             batch_indices.append(start_idx + j)
