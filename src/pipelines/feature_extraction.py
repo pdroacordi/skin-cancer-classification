@@ -30,7 +30,8 @@ from config import (
     CLASSICAL_CLASSIFIER_MODEL,
     NUM_PCA_COMPONENTS,
     RESULTS_DIR,
-    USE_DATA_AUGMENTATION
+    USE_DATA_AUGMENTATION,
+    VISUALIZE
 )
 
 from utils.data_loaders import load_paths_labels, load_and_preprocess_dataset, resize_image
@@ -791,10 +792,10 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
     if USE_GRAPHIC_PREPROCESSING:
         preprocess_fn = lambda img: apply_graphic_preprocessing(
             img,
-            use_hair_removal=True,
-            use_contrast_enhancement=True,
+            use_hair_removal=False,
+            use_contrast_enhancement=False,
             use_segmentation=False,
-            visualize=False
+            visualize=VISUALIZE
         )
 
     # Paths for saving models and features
