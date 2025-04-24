@@ -13,8 +13,8 @@ import numpy as np
 import seaborn as sns
 import tensorflow as tf
 from sklearn.metrics import classification_report, confusion_matrix, roc_curve, auc, roc_auc_score
-from sklearn.preprocessing import label_binarize
 from sklearn.model_selection import KFold
+from sklearn.preprocessing import label_binarize
 from tensorflow.keras.backend import clear_session
 
 sys.path.append('..')
@@ -38,7 +38,7 @@ from config import (
 from utils.data_loaders import load_paths_labels, load_and_preprocess_dataset, resize_image
 from utils.graphic_preprocessing import apply_graphic_preprocessing
 from models.cnn_models import get_feature_extractor_model, fine_tune_feature_extractor
-from models.classical_models import create_ml_pipeline, tune_hyperparameters, get_default_param_grid, save_model, load_model
+from models.classical_models import create_ml_pipeline, tune_hyperparameters, get_default_param_grid, save_model
 from utils.data_preprocessing import apply_data_preprocessing
 
 
@@ -803,7 +803,7 @@ def run_kfold_cross_validation(all_features, all_labels,
 
                 # Use best model
                 fold_model = grid_search.best_estimator_
-                else:
+            else:
                 # Regular training with or without class weights
                 if class_weights is not None:
                     # Get the classifier from the pipeline
