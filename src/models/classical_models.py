@@ -6,9 +6,9 @@ import os
 import sys
 
 import joblib
+import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, ExtraTreesClassifier
-from sklearn.model_selection import GridSearchCV
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
@@ -114,7 +114,7 @@ def create_ml_pipeline(classifier_name, use_pca=True, n_components=None, random_
     return Pipeline(steps)
 
 
-def tune_hyperparameters(pipeline, X, y, param_grid, cv=5, n_jobs=-1, subset_fraction=0.5, verbose=1):
+def tune_hyperparameters(pipeline, X, y, param_grid, cv=5, n_jobs=-1, subset_fraction=0.5, verbose=1, class_weights=None):
     """
     Tune hyperparameters using grid search cross-validation.
 
@@ -127,11 +127,12 @@ def tune_hyperparameters(pipeline, X, y, param_grid, cv=5, n_jobs=-1, subset_fra
         n_jobs (int): Number of parallel jobs.
         subset_fraction (float): Fraction of training data to be used as subset.
         verbose (int): Verbosity level.
+        class_weights (dict, optional): Dictionary mapping class indices to weights.
 
     Returns:
         sklearn.model_selection.GridSearchCV: Fitted grid search object.
     """
-    from sklearn.model_selection import StratifiedShuffleSplit
+    from sklearn.model_selection import StratifiedShuffleSplit, GridSearchCV
 
     # Create stratified sample
     sss = StratifiedShuffleSplit(n_splits=1, test_size=subset_fraction, random_state=42)
@@ -141,17 +142,29 @@ def tune_hyperparameters(pipeline, X, y, param_grid, cv=5, n_jobs=-1, subset_fra
 
     print(f"Using {len(X_subset)} samples ({subset_fraction * 100:.0f}%) for hyperparameter tuning")
 
+    # Configure fit parameters if class weights are provided
+    fit_params = {}
+    if class_weights is not None:
+        sample_weights = np.array([class_weights[label] for label in y_subset])
+        fit_params = {'classifier__sample_weight': sample_weights}
+        print("Using class weights during hyperparameter tuning")
+
+    # Create the grid search
     grid_search = GridSearchCV(
         pipeline,
         param_grid,
         cv=cv,
         n_jobs=n_jobs,
         verbose=verbose,
-        scoring='accuracy',
+        scoring='balanced_accuracy',  # Use balanced accuracy for imbalanced data
         return_train_score=True
     )
 
-    grid_search.fit(X_subset, y_subset)
+    # Fit with or without fit_params
+    if fit_params:
+        grid_search.fit(X_subset, y_subset, **fit_params)
+    else:
+        grid_search.fit(X_subset, y_subset)
 
     print(f"Best parameters: {grid_search.best_params_}")
     print(f"Best cross-validation score: {grid_search.best_score_:.4f}")

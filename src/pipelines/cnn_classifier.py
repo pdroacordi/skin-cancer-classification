@@ -31,7 +31,7 @@ from config import (
 )
 
 from utils.data_loaders import load_paths_labels, MemoryEfficientDataGenerator
-from utils.preprocessing import apply_graphic_preprocessing
+from utils.graphic_preprocessing import apply_graphic_preprocessing
 from utils.augmentation import AugmentationFactory
 from models.cnn_models import load_or_create_cnn, get_callbacks, create_model_name
 
