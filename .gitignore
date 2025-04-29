@@ -1,3 +1,12 @@
 /results/**/models/
 /results/**/features/
 
+# Ignorar arquivos compilados do Python
+__pycache__/
+*.pyc
+
+# Ignorar configurações do PyCharm
+.idea/
+
+# Ignorar ambiente virtual
+venv/
