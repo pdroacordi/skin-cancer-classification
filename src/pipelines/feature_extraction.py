@@ -13,7 +13,6 @@ import numpy as np
 import seaborn as sns
 import tensorflow as tf
 from sklearn.metrics import classification_report, confusion_matrix, roc_curve, auc, roc_auc_score
-from sklearn.model_selection import KFold
 from sklearn.preprocessing import label_binarize
 from tensorflow.keras.backend import clear_session
 
@@ -700,7 +699,10 @@ def run_kfold_cross_validation(all_features, all_labels,
         list: List of evaluation results for each fold.
     """
     # Initialize KFold
-    kf = KFold(n_splits=NUM_KFOLDS, shuffle=True, random_state=42)
+    from sklearn.model_selection import StratifiedKFold
+
+    # Initialize StratifiedKFold
+    skf = StratifiedKFold(n_splits=NUM_KFOLDS, shuffle=True, random_state=42)
 
     # List to store evaluation results
     fold_results = []
@@ -710,7 +712,7 @@ def run_kfold_cross_validation(all_features, all_labels,
     all_y_pred = []
 
     # Run each fold
-    for fold, (train_idx, val_idx) in enumerate(kf.split(all_features)):
+    for fold, (train_idx, val_idx) in enumerate(skf.split(all_features, all_labels)):
         print(f"\n{'=' * 50}")
         print(f"Fold {fold + 1}/{NUM_KFOLDS}")
         print(f"{'=' * 50}")
