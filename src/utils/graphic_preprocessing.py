@@ -233,12 +233,14 @@ class GraphicPreprocessing:
         # Input layer
         inputs = Input((self.img_size[0], self.img_size[1], 3))
 
-        # Contracting path (encoder)
+        # Encoder path
         # Block 1
         conv1 = Conv2D(64, 3, activation='relu', padding='same')(inputs)
         conv1 = BatchNormalization()(conv1)
         conv1 = Conv2D(64, 3, activation='relu', padding='same')(conv1)
         conv1 = BatchNormalization()(conv1)
+        # Save the shape for later use in skip connections
+        shape1 = tf.shape(conv1)
         pool1 = MaxPooling2D(pool_size=(2, 2))(conv1)
         drop1 = Dropout(0.1)(pool1)
 
@@ -247,6 +249,8 @@ class GraphicPreprocessing:
         conv2 = BatchNormalization()(conv2)
         conv2 = Conv2D(128, 3, activation='relu', padding='same')(conv2)
         conv2 = BatchNormalization()(conv2)
+        # Save the shape for later use in skip connections
+        shape2 = tf.shape(conv2)
         pool2 = MaxPooling2D(pool_size=(2, 2))(conv2)
         drop2 = Dropout(0.2)(pool2)
 
@@ -255,6 +259,8 @@ class GraphicPreprocessing:
         conv3 = BatchNormalization()(conv3)
         conv3 = Conv2D(256, 3, activation='relu', padding='same')(conv3)
         conv3 = BatchNormalization()(conv3)
+        # Save the shape for later use in skip connections
+        shape3 = tf.shape(conv3)
         pool3 = MaxPooling2D(pool_size=(2, 2))(conv3)
         drop3 = Dropout(0.3)(pool3)
 
@@ -263,6 +269,8 @@ class GraphicPreprocessing:
         conv4 = BatchNormalization()(conv4)
         conv4 = Conv2D(512, 3, activation='relu', padding='same')(conv4)
         conv4 = BatchNormalization()(conv4)
+        # Save the shape for later use in skip connections
+        shape4 = tf.shape(conv4)
         pool4 = MaxPooling2D(pool_size=(2, 2))(conv4)
         drop4 = Dropout(0.4)(pool4)
 
@@ -273,11 +281,13 @@ class GraphicPreprocessing:
         conv5 = BatchNormalization()(conv5)
         drop5 = Dropout(0.5)(conv5)
 
-        # Expansive path (decoder)
+        # Decoder path with dynamic resizing
         # Block 6
         up6 = Conv2D(512, 2, activation='relu', padding='same')(
             UpSampling2D(size=(2, 2))(drop5))
-        merge6 = concatenate([conv4, up6], axis=3)
+        # Resize up6 to match conv4 shape
+        up6_resized = tf.image.resize(up6, [shape4[1], shape4[2]])
+        merge6 = concatenate([conv4, up6_resized], axis=3)
         conv6 = Conv2D(512, 3, activation='relu', padding='same')(merge6)
         conv6 = BatchNormalization()(conv6)
         conv6 = Conv2D(512, 3, activation='relu', padding='same')(conv6)
@@ -286,7 +296,9 @@ class GraphicPreprocessing:
         # Block 7
         up7 = Conv2D(256, 2, activation='relu', padding='same')(
             UpSampling2D(size=(2, 2))(conv6))
-        merge7 = concatenate([conv3, up7], axis=3)
+        # Resize up7 to match conv3 shape
+        up7_resized = tf.image.resize(up7, [shape3[1], shape3[2]])
+        merge7 = concatenate([conv3, up7_resized], axis=3)
         conv7 = Conv2D(256, 3, activation='relu', padding='same')(merge7)
         conv7 = BatchNormalization()(conv7)
         conv7 = Conv2D(256, 3, activation='relu', padding='same')(conv7)
@@ -295,7 +307,9 @@ class GraphicPreprocessing:
         # Block 8
         up8 = Conv2D(128, 2, activation='relu', padding='same')(
             UpSampling2D(size=(2, 2))(conv7))
-        merge8 = concatenate([conv2, up8], axis=3)
+        # Resize up8 to match conv2 shape
+        up8_resized = tf.image.resize(up8, [shape2[1], shape2[2]])
+        merge8 = concatenate([conv2, up8_resized], axis=3)
         conv8 = Conv2D(128, 3, activation='relu', padding='same')(merge8)
         conv8 = BatchNormalization()(conv8)
         conv8 = Conv2D(128, 3, activation='relu', padding='same')(conv8)
@@ -304,7 +318,9 @@ class GraphicPreprocessing:
         # Block 9
         up9 = Conv2D(64, 2, activation='relu', padding='same')(
             UpSampling2D(size=(2, 2))(conv8))
-        merge9 = concatenate([conv1, up9], axis=3)
+        # Resize up9 to match conv1 shape
+        up9_resized = tf.image.resize(up9, [shape1[1], shape1[2]])
+        merge9 = concatenate([conv1, up9_resized], axis=3)
         conv9 = Conv2D(64, 3, activation='relu', padding='same')(merge9)
         conv9 = BatchNormalization()(conv9)
         conv9 = Conv2D(64, 3, activation='relu', padding='same')(conv9)
