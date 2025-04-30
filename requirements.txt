@@ -8,3 +8,4 @@ albumentations
 xgboost
 imbalanced-learn
 seaborn
+scikit-image
