@@ -1,366 +1,460 @@
 """
-Image preprocessing techniques for skin cancer images.
-Includes hair removal, contrast enhancement, and segmentation.
+Enhanced graphic preprocessing module with improved segmentation techniques.
+This module integrates with the existing pipeline structure.
 """
 
-import cv2
+import os
 import numpy as np
+import cv2
+from tensorflow.keras.models import Model, load_model
+from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Dropout, UpSampling2D, concatenate, BatchNormalization
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
+from tensorflow.keras.metrics import MeanIoU
+import tensorflow as tf
 
 
-def remove_hair(image, ksize=17, threshold=10):
+class GraphicPreprocessing:
     """
-    Remove hair artifacts from skin lesion images.
-
-    Args:
-        image (numpy.array): BGR image.
-        ksize (int): Kernel size for morphological operations.
-        threshold (int): Threshold value for hair detection.
-
-    Returns:
-        numpy.array: Image with hair removed.
+    Enhanced graphic preprocessing techniques for skin lesion images.
     """
-    # Convert to grayscale
-    grayscale = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    # Create kernel for morphological filtering
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (ksize, ksize))
-
-    # Apply blackhat filter to identify dark regions (potentially hair)
-    blackhat = cv2.morphologyEx(grayscale, cv2.MORPH_BLACKHAT, kernel)
-
-    # Threshold to create binary mask of hair
-    _, mask = cv2.threshold(blackhat, threshold, 255, cv2.THRESH_BINARY)
-
-    # Inpaint using the mask to replace hair with nearby skin pixels
-    result = cv2.inpaint(image, mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
-
-    return result
-
-
-def enhance_contrast(image):
-    """
-    Enhance contrast in skin lesion images using CLAHE.
-
-    Args:
-        image (numpy.array): BGR image.
-
-    Returns:
-        numpy.array: Contrast-enhanced image.
-    """
-    # Convert to LAB color space
-    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
-
-    # Apply CLAHE to the L channel
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    l_enhanced = clahe.apply(l)
-
-    # Merge channels and convert back to BGR
-    lab_enhanced = cv2.merge([l_enhanced, a, b])
-    enhanced = cv2.cvtColor(lab_enhanced, cv2.COLOR_LAB2BGR)
-
-    return enhanced
-
-
-def generate_adaptive_circular_contour(image, num_points=100, margin=1.1):
-    """
-    Generate a circular contour adapted to the lesion based on Otsu + bounding box.
-
-    Args:
-        image (numpy.array): BGR image.
-        num_points (int): Number of points in the contour.
-        margin (float): Margin factor for the contour.
-
-    Returns:
-        numpy.array: Circular contour as (num_points, 2) array.
-    """
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    thresh = cv2.bitwise_not(thresh)
-
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if len(contours) == 0:
-        # Fallback to central circle
-        h, w = image.shape[:2]
-        center = (w / 2, h / 2)
-        radius = min(h, w) * 0.2
-
-        angles = np.linspace(0, 2 * np.pi, num_points, endpoint=False)
-        xs = center[0] + radius * np.cos(angles)
-        ys = center[1] + radius * np.sin(angles)
-
-        contour = np.stack([xs, ys], axis=1).astype(np.float32)
-        return contour
-
-    largest = max(contours, key=cv2.contourArea)
-    x, y, w, h = cv2.boundingRect(largest)
-
-    center = (x + w / 2, y + h / 2)
-    a = (w / 2) * margin  # semi-axis x
-    b = (h / 2) * margin  # semi-axis y
-
-    angles = np.linspace(0, 2 * np.pi, num_points, endpoint=False)
-    xs = center[0] + a * np.cos(angles)
-    ys = center[1] + b * np.sin(angles)
-
-    contour = np.stack([xs, ys], axis=1).astype(np.float32)
-    return contour
-
-
-def compute_gvf(image, mu=0.2, iterations=80, delta_t=1):
-    """
-    Compute the gradient vector flow (GVF) for an image.
-
-    Args:
-        image (numpy.array): Input image (RGB or grayscale).
-        mu (float): Regularization parameter controlling smoothing vs. edge fidelity.
-        iterations (int): Number of iterations for field evolution.
-        delta_t (float): Time step for each iteration.
-
-    Returns:
-        tuple: (u, v) components of the GVF field.
-    """
-    # Convert to grayscale if necessary
-    if len(image.shape) == 3:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = image.copy()
-    gray = gray.astype(np.float32) / 255.0
-
-    # Apply CLAHE for better edge detection
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    gray = clahe.apply((gray * 255).astype(np.uint8)).astype(np.float32) / 255.0
-
-    # Calculate gradients using Sobel
-    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=5)
-    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=5)
-    grad_mag = np.sqrt(gx ** 2 + gy ** 2)
-
-    # Non-linear edge function
-    f = cv2.GaussianBlur(grad_mag, (5, 5), 0)
-
-    # Edge map gradients
-    f_grad_x = cv2.Sobel(f, cv2.CV_32F, 1, 0, ksize=5)
-    f_grad_y = cv2.Sobel(f, cv2.CV_32F, 0, 1, ksize=5)
-
-    # Initialize GVF with edge map gradients
-    u = f_grad_x.copy()
-    v = f_grad_y.copy()
-
-    # Calculate and normalize penalty term
-    squared_mag = f_grad_x ** 2 + f_grad_y ** 2
-    squared_mag = squared_mag / (np.max(squared_mag) + 1e-8)
-
-    # Iterative GVF computation
-    for _ in range(iterations):
-        u_lap = cv2.Laplacian(u, cv2.CV_32F)
-        v_lap = cv2.Laplacian(v, cv2.CV_32F)
-
-        u += delta_t * (mu * u_lap - (u - f_grad_x) * squared_mag)
-        v += delta_t * (mu * v_lap - (v - f_grad_y) * squared_mag)
-
-    # Handle invalid values
-    u = np.nan_to_num(u, nan=0.0, posinf=1.0, neginf=-1.0)
-    v = np.nan_to_num(v, nan=0.0, posinf=1.0, neginf=-1.0)
-
-    return u, v
-
-
-def interp_gvf_vectorized(contour, u, v):
-    """
-    Perform vectorized bilinear interpolation of the GVF field for a set of points.
-
-    Args:
-        contour (numpy.array): Array of points with shape (N, 2).
-        u (numpy.array): x-component of the GVF field.
-        v (numpy.array): y-component of the GVF field.
-
-    Returns:
-        numpy.array: Interpolated GVF vectors at contour points.
-    """
-    h, w = u.shape
-
-    # Clip coordinates within bounds for interpolation
-    x = np.clip(contour[:, 0], 0, w - 2)
-    y = np.clip(contour[:, 1], 0, h - 2)
-
-    x0 = np.floor(x).astype(np.int32)
-    y0 = np.floor(y).astype(np.int32)
-    x1 = np.minimum(x0 + 1, w - 1)
-    y1 = np.minimum(y0 + 1, h - 1)
-
-    dx = x - x0
-    dy = y - y0
-
-    # Vectorized bilinear interpolation
-    u_interp = (u[y0, x0] * (1 - dx) * (1 - dy) +
-                u[y0, x1] * dx * (1 - dy) +
-                u[y1, x0] * (1 - dx) * dy +
-                u[y1, x1] * dx * dy)
-
-    v_interp = (v[y0, x0] * (1 - dx) * (1 - dy) +
-                v[y0, x1] * dx * (1 - dy) +
-                v[y1, x0] * (1 - dx) * dy +
-                v[y1, x1] * dx * dy)
-
-    return np.column_stack([u_interp, v_interp])
-
-
-def gvf_based_segmentation(image, init_contour=None, mu=0.2, iterations=80, delta_t=1,
-                           alpha=0.1, beta=0.1, gamma=1, kappa=0.5, iterations_snake=100):
-    """
-    Perform GVF-based active contour (snake) segmentation.
-
-    Args:
-        image (numpy.array): Input image (BGR or grayscale).
-        init_contour (numpy.array, optional): Initial contour points. If None, creates one.
-        mu (float): Regularization parameter for GVF.
-        iterations (int): Number of iterations for GVF computation.
-        delta_t (float): Time step for GVF computation.
-        alpha (float): Tension weight (contour energy).
-        beta (float): Rigidity weight (bending energy).
-        gamma (float): Step size for internal force.
-        kappa (float): Weight of external force from GVF.
-        iterations_snake (int): Number of iterations for snake evolution.
-
-    Returns:
-        numpy.array: Final contour after evolution.
-    """
-    # Generate initial contour if not provided
-    if init_contour is None:
-        init_contour = generate_adaptive_circular_contour(image)
-
-    # Compute GVF
-    u, v = compute_gvf(image, mu=mu, iterations=iterations, delta_t=delta_t)
-
-    # Initialize contour
-    contour = init_contour.copy()
-    h, w = u.shape
-
-    # Snake evolution
-    for _ in range(iterations_snake):
-        # Get neighbors using np.roll (closed contour)
-        prev = np.roll(contour, 1, axis=0)
-        next = np.roll(contour, -1, axis=0)
-
-        # Compute internal forces
-        tension = alpha * (next - 2 * contour + prev)
-        rigidity = beta * ((next - contour) - (contour - prev))
-        internal_force = tension + rigidity
-
-        # Compute external force from GVF
-        external_force = interp_gvf_vectorized(contour, u, v)
-
-        # Update contour
-        contour += gamma * internal_force + kappa * external_force
-
-        # Keep points within image bounds
-        contour[:, 0] = np.clip(contour[:, 0], 0, w - 1)
-        contour[:, 1] = np.clip(contour[:, 1], 0, h - 1)
-
-    return contour
-
-
-def apply_segmentation(image):
-    """
-    Apply GVF-based segmentation to an image and visualize the contour.
-
-    Args:
-        image (numpy.array): BGR image.
-
-    Returns:
-        numpy.array: Image with segmentation contour drawn.
-    """
-    # Generate initial contour
-    init_contour = generate_adaptive_circular_contour(image, num_points=100)
-
-    # Perform segmentation
-    final_contour = gvf_based_segmentation(
-        image,
-        init_contour,
-        mu=0.05,
-        iterations=200,  # Reduced for faster processing
-        delta_t=0.1,
-        alpha=0.05,
-        beta=0.01,
-        gamma=1,
-        kappa=10,
-        iterations_snake=250  # Reduced for faster processing
-    )
-
-    # Convert to integer points for drawing
-    final_contour_int = final_contour.reshape((-1, 1, 2)).astype(np.int32)
-
-    # Draw contour on image
-    segmented_image = image.copy()
-    cv2.drawContours(segmented_image, [final_contour_int], contourIdx=-1,
-                     color=(0, 0, 255), thickness=2)
-
-    return segmented_image
-
-
-def create_lesion_mask(image):
-    """
-    Create a binary mask of the skin lesion using Otsu thresholding.
-
-    Args:
-        image (numpy.array): BGR image.
-
-    Returns:
-        numpy.array: Binary mask where lesion pixels are 255.
-    """
-    # Convert to grayscale
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-    # Apply Gaussian blur to reduce noise
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-
-    # Apply Otsu's thresholding
-    _, mask = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-    # Find the largest contour (assumed to be the lesion)
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    if not contours:
-        return np.zeros_like(gray)
-
-    # Create a new mask with only the largest contour
-    lesion_mask = np.zeros_like(gray)
-    cv2.drawContours(lesion_mask, [max(contours, key=cv2.contourArea)], 0, 255, -1)
-
-    return lesion_mask
-
-
-def apply_graphic_preprocessing(image, use_hair_removal=True, use_contrast_enhancement=True,
-                                use_segmentation=False, visualize=False):
-    """
-    Apply multiple preprocessing techniques to enhance skin lesion images.
-
-    Args:
-        image (numpy.array): BGR image.
-        use_hair_removal (bool): Whether to apply hair removal.
-        use_contrast_enhancement (bool): Whether to enhance contrast.
-        use_segmentation (bool): Whether to apply and visualize segmentation.
-        visualize (bool): Whether to visualize processing steps.
-
-    Returns:
-        numpy.array: Processed image.
-    """
-    original = image.copy()
-    processed = image.copy()
-
-    # Apply preprocessing steps in sequence
-    if use_hair_removal:
-        processed = remove_hair(processed)
-
-    if use_contrast_enhancement:
-        processed = enhance_contrast(processed)
-
-    if use_segmentation:
-        processed = apply_segmentation(processed)
-
-    if visualize:
+    def __init__(self, img_size=(299, 299)):
+        self.img_size = img_size
+
+    def apply_preprocessing(self, image, use_hair_removal=True,
+                          use_contrast_enhancement=True,
+                          use_segmentation=False,
+                          visualize=False):
+        """
+        Apply enhanced preprocessing to a skin lesion image.
+
+        Args:
+            image: BGR image input
+            use_hair_removal: Whether to apply enhanced hair removal
+            use_contrast_enhancement: Whether to enhance contrast
+            use_segmentation: Whether to segment the lesion
+            visualize: Whether to visualize the intermediate steps
+
+        Returns:
+            Preprocessed image
+        """
+        # Make a copy of the input image
+        processed = image.copy()
+
+        # Resize the image to the target size
+        if processed.shape[0] != self.img_size[0] or processed.shape[1] != self.img_size[1]:
+            processed = cv2.resize(processed, self.img_size)
+
+        # Apply hair removal if requested
+        if use_hair_removal:
+            processed = self.remove_hair_enhanced(processed)
+
+        # Apply contrast enhancement if requested
+        if use_contrast_enhancement:
+            processed = self.enhance_contrast_adaptive(processed)
+
+        # Apply segmentation if requested
+        if use_segmentation:
+            processed = self.apply_segmentation(processed)
+
+        # Visualize the preprocessing steps if requested
+        if visualize:
+            self._visualize_preprocessing(image, processed)
+
+        return processed
+
+    def remove_hair_enhanced(self, image):
+        """
+        Enhanced hair removal using a combination of morphological operations,
+        thresholding, and inpainting.
+
+        Args:
+            image: BGR input image
+
+        Returns:
+            Image with hair removed
+        """
+        # Convert to grayscale
+        grayscale = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+        # Create kernels for line detection at different orientations
+        kernel_size = 17  # Adjust based on hair thickness
+
+        # Create a bank of line kernels at different orientations
+        kernels = []
+        for theta in range(0, 180, 15):  # 12 orientations
+            theta_rad = np.deg2rad(theta)
+            kernel = self._create_line_kernel(kernel_size, theta_rad)
+            kernels.append(kernel)
+
+        # Apply blackhat operation with each kernel and combine results
+        hair_mask = np.zeros_like(grayscale)
+        for kernel in kernels:
+            blackhat = cv2.morphologyEx(grayscale, cv2.MORPH_BLACKHAT, kernel)
+            hair_mask = np.maximum(hair_mask, blackhat)
+
+        # Apply thresholding to identify hair pixels
+        _, thresh = cv2.threshold(hair_mask, 10, 255, cv2.THRESH_BINARY)
+
+        # Dilate to ensure complete hair coverage
+        dilated_mask = cv2.dilate(thresh, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=1)
+
+        # Inpaint using the mask
+        result = cv2.inpaint(image, dilated_mask.astype(np.uint8), inpaintRadius=5, flags=cv2.INPAINT_TELEA)
+
+        return result
+
+    def _create_line_kernel(self, size, theta):
+        """
+        Create a line-shaped kernel for a specific orientation.
+
+        Args:
+            size: Size of the kernel
+            theta: Orientation angle in radians
+
+        Returns:
+            Line kernel
+        """
+        # Create a line kernel with the specified orientation
+        kernel = np.zeros((size, size), dtype=np.uint8)
+        center = size // 2
+
+        # Calculate line endpoints
+        x1 = center + int(np.round((size / 2) * np.cos(theta)))
+        y1 = center + int(np.round((size / 2) * np.sin(theta)))
+        x2 = center - int(np.round((size / 2) * np.cos(theta)))
+        y2 = center - int(np.round((size / 2) * np.sin(theta)))
+
+        # Draw the line
+        cv2.line(kernel, (x1, y1), (x2, y2), 1, 1)
+
+        return kernel
+
+    def enhance_contrast_adaptive(self, image):
+        """
+        Enhance contrast using adaptive histogram equalization and gamma correction.
+
+        Args:
+            image: BGR input image
+
+        Returns:
+            Contrast-enhanced image
+        """
+        # Convert to LAB color space
+        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+
+        # Apply CLAHE to the L channel
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        l_enhanced = clahe.apply(l)
+
+        # Apply gamma correction to further enhance contrast
+        # Calculate an adaptive gamma value based on image brightness
+        mean_brightness = np.mean(l_enhanced) / 255.0
+        # If image is dark, use gamma < 1 to brighten; if bright, use gamma > 1 to darken
+        gamma = 0.9 if mean_brightness < 0.5 else 1.1
+        l_gamma = np.power(l_enhanced / 255.0, gamma) * 255.0
+        l_gamma = l_gamma.astype(np.uint8)
+
+        # Merge channels and convert back to BGR
+        lab_enhanced = cv2.merge([l_gamma, a, b])
+        enhanced = cv2.cvtColor(lab_enhanced, cv2.COLOR_LAB2BGR)
+
+        return enhanced
+
+    def apply_segmentation(self, image):
+        """
+        Apply improved segmentation using pretrained U-Net.
+
+        Args:
+            image: BGR input image
+
+        Returns:
+            Segmented image with highlighted lesion boundary
+        """
+        # Get the segmentation model
+        model = self._get_segmentation_model()
+
+        # Normalize the image
+        input_image = image.astype(np.float32) / 255.0
+        input_image = np.expand_dims(input_image, axis=0)
+
+        # Predict mask
+        predicted_mask = model.predict(input_image)[0, :, :, 0]
+        binary_mask = (predicted_mask > 0.5).astype(np.uint8)
+
+        # Post-process the mask
+        refined_mask = self._post_process_mask(binary_mask)
+
+        # Highlight the lesion boundary on the original image
+        result = image.copy()
+        contours, _ = cv2.findContours(refined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        cv2.drawContours(result, contours, -1, (0, 0, 255), 2)
+
+        return result
+
+    def _get_segmentation_model(self):
+        """
+        Get the segmentation model (U-Net).
+        Load from file if available, otherwise create a new one.
+
+        Returns:
+            U-Net model
+        """
+        model_path = os.path.join("models", "unet_skin_lesion.h5")
+
+        if os.path.exists(model_path):
+            # Load the model
+            custom_objects = {
+                'dice_loss': self._dice_loss,
+                'dice_coef': self._dice_coef
+            }
+            model = load_model(model_path, custom_objects=custom_objects)
+        else:
+            # Create a new model (will require training)
+            model = self._build_unet()
+
+            # Create the models directory if it doesn't exist
+            os.makedirs("models", exist_ok=True)
+
+            # Save the model
+            model.save(model_path)
+
+        return model
+
+    def _build_unet(self):
+        """
+        Build the U-Net model for skin lesion segmentation.
+
+        Returns:
+            U-Net model
+        """
+        # Input layer
+        inputs = Input((self.img_size[0], self.img_size[1], 3))
+
+        # Contracting path (encoder)
+        # Block 1
+        conv1 = Conv2D(64, 3, activation='relu', padding='same')(inputs)
+        conv1 = BatchNormalization()(conv1)
+        conv1 = Conv2D(64, 3, activation='relu', padding='same')(conv1)
+        conv1 = BatchNormalization()(conv1)
+        pool1 = MaxPooling2D(pool_size=(2, 2))(conv1)
+        drop1 = Dropout(0.1)(pool1)
+
+        # Block 2
+        conv2 = Conv2D(128, 3, activation='relu', padding='same')(drop1)
+        conv2 = BatchNormalization()(conv2)
+        conv2 = Conv2D(128, 3, activation='relu', padding='same')(conv2)
+        conv2 = BatchNormalization()(conv2)
+        pool2 = MaxPooling2D(pool_size=(2, 2))(conv2)
+        drop2 = Dropout(0.2)(pool2)
+
+        # Block 3
+        conv3 = Conv2D(256, 3, activation='relu', padding='same')(drop2)
+        conv3 = BatchNormalization()(conv3)
+        conv3 = Conv2D(256, 3, activation='relu', padding='same')(conv3)
+        conv3 = BatchNormalization()(conv3)
+        pool3 = MaxPooling2D(pool_size=(2, 2))(conv3)
+        drop3 = Dropout(0.3)(pool3)
+
+        # Block 4
+        conv4 = Conv2D(512, 3, activation='relu', padding='same')(drop3)
+        conv4 = BatchNormalization()(conv4)
+        conv4 = Conv2D(512, 3, activation='relu', padding='same')(conv4)
+        conv4 = BatchNormalization()(conv4)
+        pool4 = MaxPooling2D(pool_size=(2, 2))(conv4)
+        drop4 = Dropout(0.4)(pool4)
+
+        # Bridge
+        conv5 = Conv2D(1024, 3, activation='relu', padding='same')(drop4)
+        conv5 = BatchNormalization()(conv5)
+        conv5 = Conv2D(1024, 3, activation='relu', padding='same')(conv5)
+        conv5 = BatchNormalization()(conv5)
+        drop5 = Dropout(0.5)(conv5)
+
+        # Expansive path (decoder)
+        # Block 6
+        up6 = Conv2D(512, 2, activation='relu', padding='same')(
+            UpSampling2D(size=(2, 2))(drop5))
+        merge6 = concatenate([conv4, up6], axis=3)
+        conv6 = Conv2D(512, 3, activation='relu', padding='same')(merge6)
+        conv6 = BatchNormalization()(conv6)
+        conv6 = Conv2D(512, 3, activation='relu', padding='same')(conv6)
+        conv6 = BatchNormalization()(conv6)
+
+        # Block 7
+        up7 = Conv2D(256, 2, activation='relu', padding='same')(
+            UpSampling2D(size=(2, 2))(conv6))
+        merge7 = concatenate([conv3, up7], axis=3)
+        conv7 = Conv2D(256, 3, activation='relu', padding='same')(merge7)
+        conv7 = BatchNormalization()(conv7)
+        conv7 = Conv2D(256, 3, activation='relu', padding='same')(conv7)
+        conv7 = BatchNormalization()(conv7)
+
+        # Block 8
+        up8 = Conv2D(128, 2, activation='relu', padding='same')(
+            UpSampling2D(size=(2, 2))(conv7))
+        merge8 = concatenate([conv2, up8], axis=3)
+        conv8 = Conv2D(128, 3, activation='relu', padding='same')(merge8)
+        conv8 = BatchNormalization()(conv8)
+        conv8 = Conv2D(128, 3, activation='relu', padding='same')(conv8)
+        conv8 = BatchNormalization()(conv8)
+
+        # Block 9
+        up9 = Conv2D(64, 2, activation='relu', padding='same')(
+            UpSampling2D(size=(2, 2))(conv8))
+        merge9 = concatenate([conv1, up9], axis=3)
+        conv9 = Conv2D(64, 3, activation='relu', padding='same')(merge9)
+        conv9 = BatchNormalization()(conv9)
+        conv9 = Conv2D(64, 3, activation='relu', padding='same')(conv9)
+        conv9 = BatchNormalization()(conv9)
+
+        # Output layer
+        outputs = Conv2D(1, 1, activation='sigmoid')(conv9)
+
+        model = Model(inputs=inputs, outputs=outputs)
+
+        # Compile model with dice coefficient loss
+        model.compile(optimizer=Adam(learning_rate=1e-4),
+                      loss=self._dice_loss,
+                      metrics=[self._dice_coef, 'binary_accuracy', MeanIoU(num_classes=2)])
+
+        return model
+
+    def _dice_coef(self, y_true, y_pred, smooth=1):
+        """
+        Calculate Dice coefficient.
+
+        Args:
+            y_true: Ground truth
+            y_pred: Predictions
+            smooth: Smoothing factor
+
+        Returns:
+            Dice coefficient
+        """
+        y_true_f = tf.keras.backend.flatten(y_true)
+        y_pred_f = tf.keras.backend.flatten(y_pred)
+        intersection = tf.keras.backend.sum(y_true_f * y_pred_f)
+        return (2. * intersection + smooth) / (
+            tf.keras.backend.sum(y_true_f) + tf.keras.backend.sum(y_pred_f) + smooth)
+
+    def _dice_loss(self, y_true, y_pred):
+        """
+        Calculate Dice loss.
+
+        Args:
+            y_true: Ground truth
+            y_pred: Predictions
+
+        Returns:
+            Dice loss
+        """
+        return 1 - self._dice_coef(y_true, y_pred)
+
+    def _post_process_mask(self, binary_mask):
+        """
+        Post-process the segmentation mask.
+
+        Args:
+            binary_mask: Binary mask
+
+        Returns:
+            Refined binary mask
+        """
+        # Fill holes
+        filled = self._fill_holes(binary_mask)
+
+        # Remove small objects
+        cleaned = self._remove_small_objects(filled)
+
+        # Smooth boundaries
+        smoothed = self._smooth_boundaries(cleaned)
+
+        return smoothed
+
+    def _fill_holes(self, binary_mask):
+        """
+        Fill holes in the binary mask.
+
+        Args:
+            binary_mask: Binary mask
+
+        Returns:
+            Mask with holes filled
+        """
+        # Ensure the mask is binary
+        binary = binary_mask.copy()
+        if binary.max() > 1:
+            binary = (binary > 127).astype(np.uint8)
+
+        # Find contours
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Create a filled mask
+        filled_mask = np.zeros_like(binary)
+
+        # Fill each contour
+        for contour in contours:
+            cv2.drawContours(filled_mask, [contour], 0, 1, -1)
+
+        return filled_mask
+
+    def _remove_small_objects(self, binary_mask, min_size_ratio=0.01):
+        """
+        Remove small objects from the binary mask.
+
+        Args:
+            binary_mask: Binary mask
+            min_size_ratio: Minimum size ratio
+
+        Returns:
+            Mask with small objects removed
+        """
+        # Label connected components
+        num_labels, labels = cv2.connectedComponents(binary_mask)
+
+        if num_labels == 1:  # Only background
+            return binary_mask
+
+        # Calculate minimum size threshold as a ratio of the image size
+        min_size = int(min_size_ratio * binary_mask.size)
+
+        # Get component sizes
+        for label in range(1, num_labels):
+            component_size = np.sum(labels == label)
+            if component_size < min_size:
+                # Remove small component
+                binary_mask[labels == label] = 0
+
+        return binary_mask
+
+    def _smooth_boundaries(self, binary_mask):
+        """
+        Smooth the boundaries of the binary mask.
+
+        Args:
+            binary_mask: Binary mask
+
+        Returns:
+            Mask with smoothed boundaries
+        """
+        # Apply morphological operations to smooth boundaries
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        smoothed = cv2.morphologyEx(binary_mask, cv2.MORPH_OPEN, kernel)
+        smoothed = cv2.morphologyEx(smoothed, cv2.MORPH_CLOSE, kernel)
+
+        return smoothed
+
+    def _visualize_preprocessing(self, original, processed):
+        """
+        Visualize the preprocessing steps.
+
+        Args:
+            original: Original image
+            processed: Processed image
+        """
         import matplotlib.pyplot as plt
 
         plt.figure(figsize=(12, 6))
@@ -378,4 +472,196 @@ def apply_graphic_preprocessing(image, use_hair_removal=True, use_contrast_enhan
         plt.tight_layout()
         plt.show()
 
-    return processed
+
+def apply_graphic_preprocessing(image, use_hair_removal=True,
+                                use_contrast_enhancement=True,
+                                use_segmentation=False,
+                                visualize=False):
+    """
+    Wrapper function for the enhanced preprocessing pipeline.
+    Matches the signature of the original apply_graphic_preprocessing function.
+
+    Args:
+        image: BGR input image
+        use_hair_removal: Whether to apply hair removal
+        use_contrast_enhancement: Whether to enhance contrast
+        use_segmentation: Whether to segment the lesion
+        visualize: Whether to visualize the intermediate steps
+
+    Returns:
+        Preprocessed image
+    """
+    preprocessor = GraphicPreprocessing()
+    return preprocessor.apply_preprocessing(
+        image,
+        use_hair_removal=use_hair_removal,
+        use_contrast_enhancement=use_contrast_enhancement,
+        use_segmentation=use_segmentation,
+        visualize=visualize
+    )
+
+
+# Training function for the segmentation model
+def train_segmentation_model(train_data_path, val_data_path=None, epochs=50, batch_size=8):
+    """
+    Train the segmentation model.
+
+    Args:
+        train_data_path: Path to training data directory containing 'images' and 'masks' subdirectories
+        val_data_path: Path to validation data directory containing 'images' and 'masks' subdirectories
+        epochs: Number of epochs
+        batch_size: Batch size
+
+    Returns:
+        Training history
+    """
+    from tensorflow.keras.preprocessing.image import ImageDataGenerator
+    import matplotlib.pyplot as plt
+
+    # Initialize the preprocessor to get the model
+    preprocessor = GraphicPreprocessing()
+    model = preprocessor._get_segmentation_model()
+
+    # Define data generators
+    data_gen_args = dict(
+        rescale=1./255,
+        rotation_range=15,
+        width_shift_range=0.1,
+        height_shift_range=0.1,
+        zoom_range=0.1,
+        horizontal_flip=True,
+        fill_mode='nearest'
+    )
+
+    mask_gen_args = dict(
+        rescale=1./255,
+        rotation_range=15,
+        width_shift_range=0.1,
+        height_shift_range=0.1,
+        zoom_range=0.1,
+        horizontal_flip=True,
+        fill_mode='nearest'
+    )
+
+    image_datagen = ImageDataGenerator(**data_gen_args)
+    mask_datagen = ImageDataGenerator(**mask_gen_args)
+
+    # Create generators
+    seed = 42
+    image_generator = image_datagen.flow_from_directory(
+        train_data_path,
+        classes=['images'],
+        class_mode=None,
+        color_mode='rgb',
+        target_size=preprocessor.img_size,
+        batch_size=batch_size,
+        seed=seed
+    )
+
+    mask_generator = mask_datagen.flow_from_directory(
+        train_data_path,
+        classes=['masks'],
+        class_mode=None,
+        color_mode='grayscale',
+        target_size=preprocessor.img_size,
+        batch_size=batch_size,
+        seed=seed
+    )
+
+    # Combine generators
+    train_generator = zip(image_generator, mask_generator)
+
+    # Create validation generator if validation data path is provided
+    if val_data_path:
+        val_image_generator = image_datagen.flow_from_directory(
+            val_data_path,
+            classes=['images'],
+            class_mode=None,
+            color_mode='rgb',
+            target_size=preprocessor.img_size,
+            batch_size=batch_size,
+            seed=seed
+        )
+
+        val_mask_generator = mask_datagen.flow_from_directory(
+            val_data_path,
+            classes=['masks'],
+            class_mode=None,
+            color_mode='grayscale',
+            target_size=preprocessor.img_size,
+            batch_size=batch_size,
+            seed=seed
+        )
+
+        val_generator = zip(val_image_generator, val_mask_generator)
+        validation_steps = val_image_generator.samples // batch_size
+    else:
+        val_generator = None
+        validation_steps = None
+
+    # Create callbacks
+    callbacks = [
+        ModelCheckpoint(
+            os.path.join("models", "unet_skin_lesion.h5"),
+            monitor='val_dice_coef' if val_data_path else 'dice_coef',
+            save_best_only=True,
+            mode='max',
+            verbose=1
+        ),
+        EarlyStopping(
+            monitor='val_dice_coef' if val_data_path else 'dice_coef',
+            patience=10,
+            mode='max',
+            verbose=1
+        ),
+        ReduceLROnPlateau(
+            monitor='val_dice_coef' if val_data_path else 'dice_coef',
+            factor=0.5,
+            patience=5,
+            min_lr=1e-7,
+            mode='max',
+            verbose=1
+        )
+    ]
+
+    # Train the model
+    steps_per_epoch = image_generator.samples // batch_size
+
+    history = model.fit(
+        train_generator,
+        steps_per_epoch=steps_per_epoch,
+        epochs=epochs,
+        validation_data=val_generator,
+        validation_steps=validation_steps,
+        callbacks=callbacks,
+        verbose=1
+    )
+
+    # Plot training history
+    plt.figure(figsize=(12, 4))
+
+    # Plot Dice coefficient
+    plt.subplot(1, 2, 1)
+    plt.plot(history.history['dice_coef'], label='Train')
+    if val_data_path:
+        plt.plot(history.history['val_dice_coef'], label='Validation')
+    plt.title('Dice Coefficient')
+    plt.xlabel('Epoch')
+    plt.ylabel('Dice Coefficient')
+    plt.legend()
+
+    # Plot loss
+    plt.subplot(1, 2, 2)
+    plt.plot(history.history['loss'], label='Train')
+    if val_data_path:
+        plt.plot(history.history['val_loss'], label='Validation')
+    plt.title('Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+
+    plt.tight_layout()
+    plt.savefig(os.path.join("results", "training_history.png"))
+    plt.close()
+
+    return history
