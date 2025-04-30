@@ -13,7 +13,6 @@ import numpy as np
 import seaborn as sns
 import tensorflow as tf
 from sklearn.metrics import classification_report, confusion_matrix
-from sklearn.model_selection import KFold
 from tensorflow.keras.backend import clear_session
 
 sys.path.append('..')
@@ -352,8 +351,10 @@ def run_kfold_cross_validation(all_paths, all_labels, result_dir, class_names=No
     Returns:
         list: List of evaluation results for each fold.
     """
-    # Initialize KFold
-    kf = KFold(n_splits=NUM_KFOLDS, shuffle=True, random_state=42)
+    from sklearn.model_selection import StratifiedKFold
+
+    # Initialize StratifiedKFold
+    skf = StratifiedKFold(n_splits=NUM_KFOLDS, shuffle=True, random_state=42)
 
     # List to store evaluation results
     fold_results = []
@@ -363,7 +364,15 @@ def run_kfold_cross_validation(all_paths, all_labels, result_dir, class_names=No
     all_y_pred = []
 
     # Run each fold
-    for fold, (train_idx, val_idx) in enumerate(kf.split(all_paths)):
+    # Note: We need to use integer labels with StratifiedKFold, not one-hot encoded
+    # Get integer labels if they're one-hot encoded
+    if len(all_labels.shape) > 1 and all_labels.shape[1] > 1:
+        stratify_labels = np.argmax(all_labels, axis=1)
+    else:
+        stratify_labels = all_labels
+
+    # Run each fold
+    for fold, (train_idx, val_idx) in enumerate(skf.split(all_paths, stratify_labels)):
         print(f"\n{'=' * 50}")
         print(f"Fold {fold + 1}/{NUM_KFOLDS}")
         print(f"{'=' * 50}")
