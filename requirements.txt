@@ -9,3 +9,4 @@ xgboost
 imbalanced-learn
 seaborn
 scikit-image
+tqdm
