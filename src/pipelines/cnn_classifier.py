@@ -26,7 +26,10 @@ from config import (
     NUM_KFOLDS,
     CNN_MODEL,
     RESULTS_DIR,
-    USE_DATA_PREPROCESSING
+    USE_DATA_PREPROCESSING,
+    USE_HAIR_REMOVAL,
+    USE_IMAGE_SEGMENTATION,
+    USE_ENHANCED_CONTRAST
 )
 
 from utils.data_loaders import load_paths_labels, MemoryEfficientDataGenerator
@@ -51,7 +54,10 @@ def setup_gpu_memory():
 def create_result_directories(base_dir=RESULTS_DIR):
     """Create directories for saving results."""
     timestamp      = datetime.datetime.now().strftime("%Y%m%d_%H%M")
-    str_graphic    = "use_graphic_preprocessing_" if USE_GRAPHIC_PREPROCESSING else ""
+    str_hair       = "hair_removal_" if USE_HAIR_REMOVAL else ""
+    str_contrast   = "contrast_" if USE_ENHANCED_CONTRAST else ""
+    str_segmented  = "segmentation_" if USE_IMAGE_SEGMENTATION else ""
+    str_graphic    = f"{str_segmented}{str_contrast}{str_hair}" if USE_GRAPHIC_PREPROCESSING else ""
     str_augment    = "use_augmentation_" if USE_DATA_AUGMENTATION else ""
     str_preprocess = "use_data_preprocess_" if USE_DATA_PREPROCESSING else ""
     result_dir     = os.path.join(base_dir, f"cnn_classifier_{str_graphic}{str_augment}{str_preprocess}{timestamp}")
@@ -167,9 +173,9 @@ def run_single_fold_training(train_paths, train_labels, val_paths, val_labels,
     if USE_GRAPHIC_PREPROCESSING:
         preprocess_fn = lambda img: apply_graphic_preprocessing(
             img,
-            use_hair_removal=True,
-            use_contrast_enhancement=True,
-            use_segmentation=False,
+            use_hair_removal=USE_HAIR_REMOVAL,
+            use_contrast_enhancement=USE_ENHANCED_CONTRAST,
+            use_segmentation=USE_IMAGE_SEGMENTATION,
             visualize=VISUALIZE
         )
 
@@ -256,9 +262,9 @@ def evaluate_model(model, test_paths, test_labels, result_dir, class_names=None)
     if USE_GRAPHIC_PREPROCESSING:
         preprocess_fn = lambda img: apply_graphic_preprocessing(
             img,
-            use_hair_removal=True,
-            use_contrast_enhancement=True,
-            use_segmentation=False,
+            use_hair_removal=USE_HAIR_REMOVAL,
+            use_contrast_enhancement=USE_ENHANCED_CONTRAST,
+            use_segmentation=USE_IMAGE_SEGMENTATION,
             visualize=False
         )
 
@@ -419,9 +425,9 @@ def run_kfold_cross_validation(all_paths, all_labels, result_dir, class_names=No
             if USE_GRAPHIC_PREPROCESSING:
                 preprocess_fn = lambda img: apply_graphic_preprocessing(
                     img,
-                    use_hair_removal=True,
-                    use_contrast_enhancement=True,
-                    use_segmentation=False,
+                    use_hair_removal=USE_HAIR_REMOVAL,
+                    use_contrast_enhancement=USE_ENHANCED_CONTRAST,
+                    use_segmentation=USE_IMAGE_SEGMENTATION,
                     visualize=False
                 )
 

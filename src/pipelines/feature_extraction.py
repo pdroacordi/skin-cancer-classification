@@ -31,7 +31,10 @@ from config import (
     USE_DATA_AUGMENTATION,
     VISUALIZE,
     IMG_SIZE,
-    CLASSIFIER_APPROACH
+    CLASSIFIER_APPROACH,
+    USE_HAIR_REMOVAL,
+    USE_IMAGE_SEGMENTATION,
+    USE_ENHANCED_CONTRAST
 )
 
 from utils.data_loaders import load_paths_labels, load_and_preprocess_dataset, resize_image
@@ -65,7 +68,10 @@ def create_result_directories(base_dir=RESULTS_DIR):
         str: Path to the created result directory.
     """
     timestamp      = datetime.datetime.now().strftime("%Y%m%d_%H%M")
-    str_graphic    = "use_graphic_preprocessing_" if USE_GRAPHIC_PREPROCESSING else ""
+    str_hair       = "hair_removal_" if USE_HAIR_REMOVAL else ""
+    str_contrast   = "contrast_" if USE_ENHANCED_CONTRAST else ""
+    str_segmented  = "segmentation_" if USE_IMAGE_SEGMENTATION else ""
+    str_graphic    = f"{str_segmented}{str_contrast}{str_hair}" if USE_GRAPHIC_PREPROCESSING else ""
     str_augment    = "use_augmentation_" if USE_DATA_AUGMENTATION else ""
     str_preprocess = f"use_data_preprocess_{CLASSIFIER_APPROACH}" if USE_DATA_PREPROCESSING else ""
     result_dir     = os.path.join(base_dir, f"feature_extraction_{str_graphic}{str_augment}{str_preprocess}{timestamp}")
@@ -976,9 +982,9 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
     if USE_GRAPHIC_PREPROCESSING:
         preprocess_fn = lambda img: apply_graphic_preprocessing(
             img,
-            use_hair_removal=False,
-            use_contrast_enhancement=False,
-            use_segmentation=False,
+            use_hair_removal=USE_HAIR_REMOVAL,
+            use_contrast_enhancement=USE_ENHANCED_CONTRAST,
+            use_segmentation=USE_IMAGE_SEGMENTATION,
             visualize=VISUALIZE
         )
 
