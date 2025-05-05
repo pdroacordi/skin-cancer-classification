@@ -21,7 +21,7 @@ from config import (
     USE_FINE_TUNING,
     USE_GRAPHIC_PREPROCESSING,
     USE_DATA_AUGMENTATION,
-    NUM_KFOLDS
+    NUM_KFOLDS, BATCH_SIZE
 )
 from pipelines.cnn_classifier import run_cnn_classifier_pipeline
 from pipelines.feature_extraction import run_feature_extraction_pipeline
@@ -44,6 +44,170 @@ def setup_environment():
     # Set random seeds for reproducibility
     np.random.seed(42)
     tf.random.set_seed(42)
+
+
+def setup_segmentation_data(metadata_path, image_dir_1, image_dir_2, output_dir, val_split=0.2):
+    """
+    Setup segmentation training data.
+
+    Args:
+        metadata_path (str): Path to HAM10000 metadata CSV.
+        image_dir_1 (str): First directory containing images.
+        image_dir_2 (str): Second directory containing images.
+        output_dir (str): Output directory for segmentation data.
+        val_split (float): Validation split ratio.
+    """
+    import cv2
+    from sklearn.model_selection import train_test_split
+
+    print("Setting up segmentation training data...")
+
+    # Create directory structure
+    train_dir = os.path.join(output_dir, 'train')
+    val_dir = os.path.join(output_dir, 'val')
+
+    train_img_dir = os.path.join(train_dir, 'images')
+    train_mask_dir = os.path.join(train_dir, 'masks')
+    val_img_dir = os.path.join(val_dir, 'images')
+    val_mask_dir = os.path.join(val_dir, 'masks')
+
+    os.makedirs(train_img_dir, exist_ok=True)
+    os.makedirs(train_mask_dir, exist_ok=True)
+    os.makedirs(val_img_dir, exist_ok=True)
+    os.makedirs(val_mask_dir, exist_ok=True)
+
+    # Load metadata
+    metadata = pd.read_csv(metadata_path)
+
+    # Add file extension to image IDs
+    metadata['image_file'] = metadata['image_id'] + ".jpg"
+
+    # Map to full path
+    metadata['image_path'] = metadata['image_file'].apply(
+        lambda x: os.path.join(image_dir_1, x) if os.path.exists(os.path.join(image_dir_1, x))
+        else os.path.join(image_dir_2, x)
+    )
+
+    # Verify that all images exist
+    metadata = metadata[metadata['image_path'].apply(os.path.exists)]
+
+    # Split into train and validation sets
+    train_metadata, val_metadata = train_test_split(
+        metadata, test_size=val_split, random_state=42, stratify=metadata['dx']
+    )
+
+    print(f"Training set: {len(train_metadata)} images")
+    print(f"Validation set: {len(val_metadata)} images")
+
+    # Process training images
+    print("Processing training images...")
+    for idx, row in train_metadata.iterrows():
+        # Copy image
+        img_path = row['image_path']
+        img = cv2.imread(img_path)
+        if img is None:
+            continue
+
+        # Resize image
+        img = cv2.resize(img, (299, 299))
+
+        # Save image
+        filename = os.path.basename(img_path)
+        output_path = os.path.join(train_img_dir, filename)
+        cv2.imwrite(output_path, img)
+
+        # Create mask (synthetic circular mask)
+        mask = np.zeros((299, 299), dtype=np.uint8)
+        center = (149, 149)
+
+        # Use different radii based on diagnosis type
+        if row['dx'] in ['mel', 'bcc', 'bkl']:
+            radius = int(299 * 0.4)  # Larger lesions
+        elif row['dx'] in ['nv']:
+            radius = int(299 * 0.3)  # Medium lesions
+        else:
+            radius = int(299 * 0.25)  # Smaller lesions
+
+        # Draw a filled circle on the mask
+        cv2.circle(mask, center, radius, 255, -1)
+
+        # Add some irregularity to the mask
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        for contour in contours:
+            # Add random noise to contour points
+            noise_factor = 0.1
+            for i in range(len(contour)):
+                noise_x = int(np.random.normal(0, noise_factor * radius))
+                noise_y = int(np.random.normal(0, noise_factor * radius))
+                contour[i][0][0] += noise_x
+                contour[i][0][1] += noise_y
+
+        # Redraw the mask with the noisy contour
+        new_mask = np.zeros((299, 299), dtype=np.uint8)
+        cv2.drawContours(new_mask, contours, -1, 255, -1)
+
+        # Save mask
+        mask_path = os.path.join(train_mask_dir, filename)
+        cv2.imwrite(mask_path, new_mask)
+
+        # Print progress periodically
+        if idx % 100 == 0:
+            print(f"Processed {idx}/{len(train_metadata)} training images")
+
+    # Process validation images
+    print("Processing validation images...")
+    for idx, row in val_metadata.iterrows():
+        # Copy image
+        img_path = row['image_path']
+        img = cv2.imread(img_path)
+        if img is None:
+            continue
+
+        # Resize image
+        img = cv2.resize(img, (299, 299))
+
+        # Save image
+        filename = os.path.basename(img_path)
+        output_path = os.path.join(val_img_dir, filename)
+        cv2.imwrite(output_path, img)
+
+        # Create mask (same as training)
+        mask = np.zeros((299, 299), dtype=np.uint8)
+        center = (149, 149)
+
+        # Use different radii based on diagnosis type
+        if row['dx'] in ['mel', 'bcc', 'bkl']:
+            radius = int(299 * 0.4)
+        elif row['dx'] in ['nv']:
+            radius = int(299 * 0.3)
+        else:
+            radius = int(299 * 0.25)
+
+        cv2.circle(mask, center, radius, 255, -1)
+
+        # Add irregularity
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        for contour in contours:
+            noise_factor = 0.1
+            for i in range(len(contour)):
+                noise_x = int(np.random.normal(0, noise_factor * radius))
+                noise_y = int(np.random.normal(0, noise_factor * radius))
+                contour[i][0][0] += noise_x
+                contour[i][0][1] += noise_y
+
+        new_mask = np.zeros((299, 299), dtype=np.uint8)
+        cv2.drawContours(new_mask, contours, -1, 255, -1)
+
+        # Save mask
+        mask_path = os.path.join(val_mask_dir, filename)
+        cv2.imwrite(mask_path, new_mask)
+
+        # Print progress periodically
+        if idx % 100 == 0:
+            print(f"Processed {idx}/{len(val_metadata)} validation images")
+
+    print(f"Segmentation data setup complete. Data saved to {output_dir}")
+    return train_dir, val_dir
 
 
 def create_dataset_splits(metadata_path, image_dir_1, image_dir_2, output_dir='./res'):
@@ -202,6 +366,14 @@ def main():
     parser.add_argument("--test-files", type=str, default=TEST_FILES_PATH,
                         help="Path to test files list")
 
+    # Train UNet segmentator
+    parser.add_argument("--setup-segmentation", action="store_true",
+                        help="Setup data for segmentation model training")
+    parser.add_argument("--train-segmentation", action="store_true",
+                        help="Train the segmentation model for lesion segmentation")
+    parser.add_argument("--segmentation-dir", type=str, default="../data/segmentation_data",
+                        help="Directory for segmentation data")
+
     args = parser.parse_args()
 
     # Setup environment
@@ -217,6 +389,46 @@ def main():
             image_dir_1=args.images_dir1,
             image_dir_2=args.images_dir2
         )
+
+    # Setup segmentation data if requested
+    if args.setup_segmentation:
+        if not (args.metadata and args.images_dir1 and args.images_dir2):
+            parser.error("--setup-segmentation requires --metadata, --images-dir1, and --images-dir2")
+
+        train_dir, val_dir = setup_segmentation_data(
+            metadata_path=args.metadata,
+            image_dir_1=args.images_dir1,
+            image_dir_2=args.images_dir2,
+            output_dir=args.segmentation_dir
+        )
+    else:
+        # Default paths if setup not requested
+        train_dir = os.path.join(args.segmentation_dir, 'train')
+        val_dir = os.path.join(args.segmentation_dir, 'val')
+
+    # Train segmentation model if requested
+    if args.train_segmentation:
+        from utils.graphic_preprocessing import train_segmentation_model
+
+        print("\n" + "=" * 50)
+        print("Training Segmentation Model for Lesion Boundary Detection")
+        print("=" * 50)
+
+        # Create directories for results if they don't exist
+        unet_dir = "./results/unet_segmentation_model"
+        os.makedirs(os.path.join(unet_dir, "models"), exist_ok=True)
+        os.makedirs(os.path.join(unet_dir, "results"), exist_ok=True)
+
+        # Train the segmentation model
+        train_segmentation_model(
+            train_data_path=train_dir,
+            val_data_path=val_dir,
+            epochs=100,
+            batch_size=8,
+            save_path=unet_dir
+        )
+
+        print("\nSegmentation model training completed")
 
     # Get class names
     class_names_path = os.path.join(os.path.dirname(args.train_files), "class_names.txt")

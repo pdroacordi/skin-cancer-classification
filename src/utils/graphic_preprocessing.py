@@ -9,7 +9,6 @@ import cv2
 from tensorflow.keras.models import Model, load_model
 from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Dropout, UpSampling2D, concatenate, BatchNormalization
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
 from tensorflow.keras.metrics import MeanIoU
 import tensorflow as tf
 
@@ -202,26 +201,35 @@ class GraphicPreprocessing:
         Returns:
             U-Net model
         """
-        model_path = os.path.join("models", "unet_skin_lesion.h5")
+        model_path = os.path.join("results", "unet_segmentation_model", "models", "unet_skin_lesion.h5")
+
+        # Define the custom objects properly
+        def dice_coef(y_true, y_pred, smooth=1):
+            y_true_f = tf.keras.backend.flatten(y_true)
+            y_pred_f = tf.keras.backend.flatten(y_pred)
+            intersection = tf.keras.backend.sum(y_true_f * y_pred_f)
+            return (2. * intersection + smooth) / (
+                    tf.keras.backend.sum(y_true_f) + tf.keras.backend.sum(y_pred_f) + smooth)
+
+        def dice_loss(y_true, y_pred):
+            return 1 - dice_coef(y_true, y_pred)
+
+        custom_objects = {
+            'dice_loss': dice_loss,
+            'dice_coef': dice_coef
+        }
 
         if os.path.exists(model_path):
             # Load the model
-            custom_objects = {
-                'dice_loss': self._dice_loss,
-                'dice_coef': self._dice_coef
-            }
-            model = load_model(model_path, custom_objects=custom_objects)
+            try:
+                model = load_model(model_path, custom_objects=custom_objects)
+                print(f"Loaded existing model from: {model_path}")
+                return model
+            except Exception as e:
+                print(f"Error loading model: {e}")
+                raise Exception(f"Error loading model: {e}")
         else:
-            # Create a new model (will require training)
-            model = self._build_unet()
-
-            # Create the models directory if it doesn't exist
-            os.makedirs("models", exist_ok=True)
-
-            # Save the model
-            model.save(model_path)
-
-        return model
+            raise Exception(f"No existing model found at {model_path}.")
 
     def _build_unet(self):
         """
@@ -518,7 +526,7 @@ def apply_graphic_preprocessing(image, use_hair_removal=True,
 
 
 # Training function for the segmentation model
-def train_segmentation_model(train_data_path, val_data_path=None, epochs=50, batch_size=8):
+def train_segmentation_model(train_data_path, val_data_path=None, epochs=50, batch_size=8, save_path=""):
     """
     Train the segmentation model.
 
@@ -527,6 +535,7 @@ def train_segmentation_model(train_data_path, val_data_path=None, epochs=50, bat
         val_data_path: Path to validation data directory containing 'images' and 'masks' subdirectories
         epochs: Number of epochs
         batch_size: Batch size
+        save_path: Path to save the model
 
     Returns:
         Training history
@@ -534,13 +543,54 @@ def train_segmentation_model(train_data_path, val_data_path=None, epochs=50, bat
     from tensorflow.keras.preprocessing.image import ImageDataGenerator
     import matplotlib.pyplot as plt
 
+    # Define custom metrics and loss functions at the module level
+    def dice_coef(y_true, y_pred, smooth=1):
+        y_true_f = tf.keras.backend.flatten(y_true)
+        y_pred_f = tf.keras.backend.flatten(y_pred)
+        intersection = tf.keras.backend.sum(y_true_f * y_pred_f)
+        return (2. * intersection + smooth) / (
+                tf.keras.backend.sum(y_true_f) + tf.keras.backend.sum(y_pred_f) + smooth)
+
+    def dice_loss(y_true, y_pred):
+        return 1 - dice_coef(y_true, y_pred)
+
+    custom_objects = {
+        'dice_loss': dice_loss,
+        'dice_coef': dice_coef
+    }
+
     # Initialize the preprocessor to get the model
     preprocessor = GraphicPreprocessing()
-    model = preprocessor._get_segmentation_model()
+
+    # Explicitly pass the custom objects to the _get_segmentation_model method
+    model_path = os.path.join(save_path, "models", "unet_skin_lesion.h5")
+
+    if os.path.exists(model_path):
+        try:
+            model = load_model(model_path, custom_objects=custom_objects)
+            print(f"Loaded existing model from: {model_path}")
+        except Exception as e:
+            print(f"Error loading model: {e}")
+            print("Creating a new model instead.")
+            model = preprocessor._build_unet()
+
+            # Compile model with dice coefficient loss
+            model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
+                          loss=dice_loss,
+                          metrics=[dice_coef, 'binary_accuracy', tf.keras.metrics.MeanIoU(num_classes=2)])
+    else:
+        # Create a new model
+        print(f"No existing model found at {model_path}. Creating a new model...")
+        model = preprocessor._build_unet()
+
+        # Compile model with dice coefficient loss
+        model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
+                      loss=dice_loss,
+                      metrics=[dice_coef, 'binary_accuracy', tf.keras.metrics.MeanIoU(num_classes=2)])
 
     # Define data generators
     data_gen_args = dict(
-        rescale=1./255,
+        rescale=1. / 255,
         rotation_range=15,
         width_shift_range=0.1,
         height_shift_range=0.1,
@@ -550,7 +600,7 @@ def train_segmentation_model(train_data_path, val_data_path=None, epochs=50, bat
     )
 
     mask_gen_args = dict(
-        rescale=1./255,
+        rescale=1. / 255,
         rotation_range=15,
         width_shift_range=0.1,
         height_shift_range=0.1,
@@ -569,7 +619,7 @@ def train_segmentation_model(train_data_path, val_data_path=None, epochs=50, bat
         classes=['images'],
         class_mode=None,
         color_mode='rgb',
-        target_size=preprocessor.img_size,
+        target_size=(299, 299),
         batch_size=batch_size,
         seed=seed
     )
@@ -579,7 +629,7 @@ def train_segmentation_model(train_data_path, val_data_path=None, epochs=50, bat
         classes=['masks'],
         class_mode=None,
         color_mode='grayscale',
-        target_size=preprocessor.img_size,
+        target_size=(299, 299),
         batch_size=batch_size,
         seed=seed
     )
@@ -594,7 +644,7 @@ def train_segmentation_model(train_data_path, val_data_path=None, epochs=50, bat
             classes=['images'],
             class_mode=None,
             color_mode='rgb',
-            target_size=preprocessor.img_size,
+            target_size=(299, 299),
             batch_size=batch_size,
             seed=seed
         )
@@ -604,7 +654,7 @@ def train_segmentation_model(train_data_path, val_data_path=None, epochs=50, bat
             classes=['masks'],
             class_mode=None,
             color_mode='grayscale',
-            target_size=preprocessor.img_size,
+            target_size=(299, 299),
             batch_size=batch_size,
             seed=seed
         )
@@ -615,22 +665,25 @@ def train_segmentation_model(train_data_path, val_data_path=None, epochs=50, bat
         val_generator = None
         validation_steps = None
 
+    # Create model save directory if it doesn't exist
+    os.makedirs("models", exist_ok=True)
+
     # Create callbacks
     callbacks = [
-        ModelCheckpoint(
-            os.path.join("models", "unet_skin_lesion.h5"),
+        tf.keras.callbacks.ModelCheckpoint(
+            filepath=model_path,
             monitor='val_dice_coef' if val_data_path else 'dice_coef',
             save_best_only=True,
             mode='max',
             verbose=1
         ),
-        EarlyStopping(
+        tf.keras.callbacks.EarlyStopping(
             monitor='val_dice_coef' if val_data_path else 'dice_coef',
             patience=10,
             mode='max',
             verbose=1
         ),
-        ReduceLROnPlateau(
+        tf.keras.callbacks.ReduceLROnPlateau(
             monitor='val_dice_coef' if val_data_path else 'dice_coef',
             factor=0.5,
             patience=5,
@@ -643,6 +696,11 @@ def train_segmentation_model(train_data_path, val_data_path=None, epochs=50, bat
     # Train the model
     steps_per_epoch = image_generator.samples // batch_size
 
+    print(f"Starting training for {epochs} epochs...")
+    print(f"Training data: {image_generator.samples} images")
+    if val_data_path:
+        print(f"Validation data: {val_image_generator.samples} images")
+
     history = model.fit(
         train_generator,
         steps_per_epoch=steps_per_epoch,
@@ -652,6 +710,9 @@ def train_segmentation_model(train_data_path, val_data_path=None, epochs=50, bat
         callbacks=callbacks,
         verbose=1
     )
+
+    # Create results directory if it doesn't exist
+    os.makedirs(os.path.join(save_path, 'results'), exist_ok=True)
 
     # Plot training history
     plt.figure(figsize=(12, 4))
@@ -677,7 +738,10 @@ def train_segmentation_model(train_data_path, val_data_path=None, epochs=50, bat
     plt.legend()
 
     plt.tight_layout()
-    plt.savefig(os.path.join("results", "training_history.png"))
+    plt.savefig(os.path.join(save_path, "results", "segmentation_training_history.png"))
     plt.close()
+
+    print(f"Training completed. Model saved to {model_path}")
+    print(f"Training history plot saved to {os.path.join(save_path, 'results', 'segmentation_training_history.png')}")
 
     return history
