@@ -159,6 +159,8 @@ class MemoryEfficientDataGenerator:
             if image is None:
                 continue
 
+            image = resize_image(image, IMG_SIZE[:2])
+
             # Apply preprocessing if available
             if self.preprocess_fn:
                 image = self.preprocess_fn(image)

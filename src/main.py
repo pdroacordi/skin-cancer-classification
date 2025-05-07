@@ -46,21 +46,23 @@ def setup_environment():
     tf.random.set_seed(42)
 
 
-def setup_segmentation_data(metadata_path, image_dir_1, image_dir_2, output_dir, val_split=0.2):
+def setup_segmentation_data(training_input_dir, validation_input_dir,
+                            training_ground_truth_dir, output_dir):
     """
-    Setup segmentation training data.
+    Setup segmentation training data using ISIC-2018 Task 1 dataset structure.
 
     Args:
-        metadata_path (str): Path to HAM10000 metadata CSV.
-        image_dir_1 (str): First directory containing images.
-        image_dir_2 (str): Second directory containing images.
-        output_dir (str): Output directory for segmentation data.
-        val_split (float): Validation split ratio.
+        training_input_dir (str): Directory containing training images.
+        validation_input_dir (str): Directory containing validation images.
+        training_ground_truth_dir (str): Directory containing ground truth masks.
+        output_dir (str): Output directory for processed segmentation data.
     """
     import cv2
-    from sklearn.model_selection import train_test_split
+    import numpy as np
+    import os
+    import glob
 
-    print("Setting up segmentation training data...")
+    print("Setting up segmentation training data from ISIC-2018 Task 1 dataset...")
 
     # Create directory structure
     train_dir = os.path.join(output_dir, 'train')
@@ -76,139 +78,107 @@ def setup_segmentation_data(metadata_path, image_dir_1, image_dir_2, output_dir,
     os.makedirs(val_img_dir, exist_ok=True)
     os.makedirs(val_mask_dir, exist_ok=True)
 
-    # Load metadata
-    metadata = pd.read_csv(metadata_path)
+    # Find all training image files
+    training_images = sorted(glob.glob(os.path.join(training_input_dir, '*.jpg')))
+    if not training_images:
+        training_images = sorted(glob.glob(os.path.join(training_input_dir, '*.png')))
 
-    # Add file extension to image IDs
-    metadata['image_file'] = metadata['image_id'] + ".jpg"
+    # Extract image IDs from filenames
+    training_ids = [os.path.splitext(os.path.basename(f))[0] for f in training_images]
 
-    # Map to full path
-    metadata['image_path'] = metadata['image_file'].apply(
-        lambda x: os.path.join(image_dir_1, x) if os.path.exists(os.path.join(image_dir_1, x))
-        else os.path.join(image_dir_2, x)
-    )
+    # Find corresponding masks for training images
+    training_masks = {}
+    for img_id in training_ids:
+        # Check different possible mask naming patterns
+        mask_patterns = [
+            os.path.join(training_ground_truth_dir, f"{img_id}_segmentation.png"),
+            os.path.join(training_ground_truth_dir, f"{img_id}_mask.png"),
+            os.path.join(training_ground_truth_dir, f"{img_id}.png")
+        ]
 
-    # Verify that all images exist
-    metadata = metadata[metadata['image_path'].apply(os.path.exists)]
+        for pattern in mask_patterns:
+            if os.path.exists(pattern):
+                training_masks[img_id] = pattern
+                break
 
-    # Split into train and validation sets
-    train_metadata, val_metadata = train_test_split(
-        metadata, test_size=val_split, random_state=42, stratify=metadata['dx']
-    )
+    # Find all validation image files
+    validation_images = sorted(glob.glob(os.path.join(validation_input_dir, '*.jpg')))
+    if not validation_images:
+        validation_images = sorted(glob.glob(os.path.join(validation_input_dir, '*.png')))
 
-    print(f"Training set: {len(train_metadata)} images")
-    print(f"Validation set: {len(val_metadata)} images")
+    # Extract validation image IDs
+    validation_ids = [os.path.splitext(os.path.basename(f))[0] for f in validation_images]
+
+    # Check if we found images and masks
+    valid_training_ids = [img_id for img_id in training_ids if img_id in training_masks]
+
+    if not valid_training_ids:
+        raise ValueError(f"No matching mask files found in {training_ground_truth_dir}")
+
+    print(f"Found {len(valid_training_ids)} valid training image-mask pairs")
+    print(f"Found {len(validation_ids)} validation images")
 
     # Process training images
     print("Processing training images...")
-    for idx, row in train_metadata.iterrows():
-        # Copy image
-        img_path = row['image_path']
+    for idx, img_id in enumerate(valid_training_ids):
+        # Get image and mask paths
+        img_path = next(path for path in training_images if img_id in path)
+        mask_path = training_masks[img_id]
+
+        # Load and resize image
         img = cv2.imread(img_path)
         if img is None:
+            print(f"Error loading image: {img_path}")
             continue
 
-        # Resize image
         img = cv2.resize(img, (299, 299))
 
-        # Save image
-        filename = os.path.basename(img_path)
-        output_path = os.path.join(train_img_dir, filename)
-        cv2.imwrite(output_path, img)
+        # Load and resize mask
+        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+        if mask is None:
+            print(f"Error loading mask: {mask_path}")
+            continue
 
-        # Create mask (synthetic circular mask)
-        mask = np.zeros((299, 299), dtype=np.uint8)
-        center = (149, 149)
+        mask = cv2.resize(mask, (299, 299), interpolation=cv2.INTER_NEAREST)
 
-        # Use different radii based on diagnosis type
-        if row['dx'] in ['mel', 'bcc', 'bkl']:
-            radius = int(299 * 0.4)  # Larger lesions
-        elif row['dx'] in ['nv']:
-            radius = int(299 * 0.3)  # Medium lesions
-        else:
-            radius = int(299 * 0.25)  # Smaller lesions
+        # Ensure mask is binary (0 and 255)
+        _, binary_mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
 
-        # Draw a filled circle on the mask
-        cv2.circle(mask, center, radius, 255, -1)
+        # Save processed image and mask
+        output_img_path = os.path.join(train_img_dir, f"{img_id}.jpg")
+        output_mask_path = os.path.join(train_mask_dir, f"{img_id}.png")
 
-        # Add some irregularity to the mask
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-        for contour in contours:
-            # Add random noise to contour points
-            noise_factor = 0.1
-            for i in range(len(contour)):
-                noise_x = int(np.random.normal(0, noise_factor * radius))
-                noise_y = int(np.random.normal(0, noise_factor * radius))
-                contour[i][0][0] += noise_x
-                contour[i][0][1] += noise_y
-
-        # Redraw the mask with the noisy contour
-        new_mask = np.zeros((299, 299), dtype=np.uint8)
-        cv2.drawContours(new_mask, contours, -1, 255, -1)
-
-        # Save mask
-        mask_path = os.path.join(train_mask_dir, filename)
-        cv2.imwrite(mask_path, new_mask)
+        cv2.imwrite(output_img_path, img)
+        cv2.imwrite(output_mask_path, binary_mask)
 
         # Print progress periodically
-        if idx % 100 == 0:
-            print(f"Processed {idx}/{len(train_metadata)} training images")
+        if (idx + 1) % 100 == 0 or (idx + 1) == len(valid_training_ids):
+            print(f"Processed {idx + 1}/{len(valid_training_ids)} training images")
 
-    # Process validation images
+    # Process validation images (note: we don't need masks for validation as they'll be generated)
     print("Processing validation images...")
-    for idx, row in val_metadata.iterrows():
-        # Copy image
-        img_path = row['image_path']
+    for idx, img_id in enumerate(validation_ids):
+        # Get image path
+        img_path = next(path for path in validation_images if img_id in path)
+
+        # Load and resize image
         img = cv2.imread(img_path)
         if img is None:
+            print(f"Error loading image: {img_path}")
             continue
 
-        # Resize image
         img = cv2.resize(img, (299, 299))
 
-        # Save image
-        filename = os.path.basename(img_path)
-        output_path = os.path.join(val_img_dir, filename)
-        cv2.imwrite(output_path, img)
-
-        # Create mask (same as training)
-        mask = np.zeros((299, 299), dtype=np.uint8)
-        center = (149, 149)
-
-        # Use different radii based on diagnosis type
-        if row['dx'] in ['mel', 'bcc', 'bkl']:
-            radius = int(299 * 0.4)
-        elif row['dx'] in ['nv']:
-            radius = int(299 * 0.3)
-        else:
-            radius = int(299 * 0.25)
-
-        cv2.circle(mask, center, radius, 255, -1)
-
-        # Add irregularity
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-        for contour in contours:
-            noise_factor = 0.1
-            for i in range(len(contour)):
-                noise_x = int(np.random.normal(0, noise_factor * radius))
-                noise_y = int(np.random.normal(0, noise_factor * radius))
-                contour[i][0][0] += noise_x
-                contour[i][0][1] += noise_y
-
-        new_mask = np.zeros((299, 299), dtype=np.uint8)
-        cv2.drawContours(new_mask, contours, -1, 255, -1)
-
-        # Save mask
-        mask_path = os.path.join(val_mask_dir, filename)
-        cv2.imwrite(mask_path, new_mask)
+        # Save processed image
+        output_img_path = os.path.join(val_img_dir, f"{img_id}.jpg")
+        cv2.imwrite(output_img_path, img)
 
         # Print progress periodically
-        if idx % 100 == 0:
-            print(f"Processed {idx}/{len(val_metadata)} validation images")
+        if (idx + 1) % 100 == 0 or (idx + 1) == len(validation_ids):
+            print(f"Processed {idx + 1}/{len(validation_ids)} validation images")
 
     print(f"Segmentation data setup complete. Data saved to {output_dir}")
     return train_dir, val_dir
-
 
 def create_dataset_splits(metadata_path, image_dir_1, image_dir_2, output_dir='./res'):
     """
@@ -368,11 +338,22 @@ def main():
 
     # Train UNet segmentator
     parser.add_argument("--setup-segmentation", action="store_true",
-                        help="Setup data for segmentation model training")
+                        help="Prepare data for segmentation model training. Requires --isic-training-input, --isic-validation-input, and --isic-training-ground-truth.")
+
     parser.add_argument("--train-segmentation", action="store_true",
-                        help="Train the segmentation model for lesion segmentation")
+                        help="Train the segmentation model for lesion segmentation.")
+
     parser.add_argument("--segmentation-dir", type=str, default="../data/segmentation_data",
-                        help="Directory for segmentation data")
+                        help="Directory to store prepared segmentation data.")
+
+    parser.add_argument("--isic-training-input", type=str,
+                        help="Path to the ISIC training input images.")
+
+    parser.add_argument("--isic-validation-input", type=str,
+                        help="Path to the ISIC validation input images.")
+
+    parser.add_argument("--isic-training-ground-truth", type=str,
+                        help="Path to the ISIC training ground truth masks.")
 
     args = parser.parse_args()
 
@@ -392,13 +373,14 @@ def main():
 
     # Setup segmentation data if requested
     if args.setup_segmentation:
-        if not (args.metadata and args.images_dir1 and args.images_dir2):
-            parser.error("--setup-segmentation requires --metadata, --images-dir1, and --images-dir2")
+        if not (args.isic_training_input and args.isic_validation_input and args.isic_training_ground_truth):
+            parser.error(
+                "--setup-segmentation requires --isic-training-input, --isic-validation-input, and --isic-training-ground-truth")
 
         train_dir, val_dir = setup_segmentation_data(
-            metadata_path=args.metadata,
-            image_dir_1=args.images_dir1,
-            image_dir_2=args.images_dir2,
+            training_input_dir=args.isic_training_input,
+            validation_input_dir=args.isic_validation_input,
+            training_ground_truth_dir=args.isic_training_ground_truth,
             output_dir=args.segmentation_dir
         )
     else:

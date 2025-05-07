@@ -12,6 +12,8 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.metrics import MeanIoU
 import tensorflow as tf
 
+import config
+
 
 class GraphicPreprocessing:
     """
@@ -20,6 +22,9 @@ class GraphicPreprocessing:
 
     def __init__(self, img_size=(299, 299)):
         self.img_size = img_size
+        self.segmentation_model = None
+        #if config.USE_GRAPHIC_PREPROCESSING and config.USE_IMAGE_SEGMENTATION:
+        #    self.segmentation_model = self._get_segmentation_model()
 
     def apply_preprocessing(self, image, use_hair_removal=True,
                           use_contrast_enhancement=True,
@@ -173,25 +178,27 @@ class GraphicPreprocessing:
             Segmented image with highlighted lesion boundary
         """
         # Get the segmentation model
-        model = self._get_segmentation_model()
+        if self.segmentation_model is None:
+            self.segmentation_model = self._get_segmentation_model()
 
         # Normalize the image
         input_image = image.astype(np.float32) / 255.0
         input_image = np.expand_dims(input_image, axis=0)
 
         # Predict mask
-        predicted_mask = model.predict(input_image)[0, :, :, 0]
+        predicted_mask = self.segmentation_model.predict(input_image)[0, :, :, 0]
         binary_mask = (predicted_mask > 0.5).astype(np.uint8)
 
         # Post-process the mask
         refined_mask = self._post_process_mask(binary_mask)
 
         # Highlight the lesion boundary on the original image
-        result = image.copy()
-        contours, _ = cv2.findContours(refined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-        cv2.drawContours(result, contours, -1, (0, 0, 255), 2)
+        background = cv2.bitwise_and(image, image, mask=cv2.bitwise_not(refined_mask))
+        background = (background * 0.4).astype(np.uint8)  # Darken background
+        lesion = cv2.bitwise_and(image, image, mask=refined_mask)
+        enhanced_image = cv2.add(background, lesion)
 
-        return result
+        return enhanced_image
 
     def _get_segmentation_model(self):
         """
@@ -496,6 +503,7 @@ class GraphicPreprocessing:
         plt.tight_layout()
         plt.show()
 
+_PREPROCESSOR = None
 
 def apply_graphic_preprocessing(image, use_hair_removal=True,
                                 use_contrast_enhancement=True,
@@ -515,8 +523,10 @@ def apply_graphic_preprocessing(image, use_hair_removal=True,
     Returns:
         Preprocessed image
     """
-    preprocessor = GraphicPreprocessing()
-    return preprocessor.apply_preprocessing(
+    global _PREPROCESSOR
+    if _PREPROCESSOR is None:
+        _PREPROCESSOR = GraphicPreprocessing()
+    return _PREPROCESSOR.apply_preprocessing(
         image,
         use_hair_removal=use_hair_removal,
         use_contrast_enhancement=use_contrast_enhancement,
@@ -542,79 +552,90 @@ def train_segmentation_model(train_data_path, val_data_path=None, epochs=50, bat
     """
     from tensorflow.keras.preprocessing.image import ImageDataGenerator
     import matplotlib.pyplot as plt
+    import os
+    import tensorflow as tf
+    import numpy as np
 
     # Define custom metrics and loss functions at the module level
-    def dice_coef(y_true, y_pred, smooth=1):
-        y_true_f = tf.keras.backend.flatten(y_true)
-        y_pred_f = tf.keras.backend.flatten(y_pred)
-        intersection = tf.keras.backend.sum(y_true_f * y_pred_f)
-        return (2. * intersection + smooth) / (
-                tf.keras.backend.sum(y_true_f) + tf.keras.backend.sum(y_pred_f) + smooth)
+    def dice_coef(y_true, y_pred, smooth=1.0):
+        # Cast to float32
+        y_true = tf.cast(y_true, tf.float32)
+        y_pred = tf.cast(y_pred, tf.float32)
+
+        # Flatten the tensors to ensure shape compatibility
+        y_true_f = tf.reshape(y_true, [-1])
+        y_pred_f = tf.reshape(y_pred, [-1])
+
+        intersection = tf.reduce_sum(y_true_f * y_pred_f)
+        union = tf.reduce_sum(y_true_f) + tf.reduce_sum(y_pred_f)
+
+        return (2.0 * intersection + smooth) / (union + smooth)
 
     def dice_loss(y_true, y_pred):
-        return 1 - dice_coef(y_true, y_pred)
+        return 1.0 - dice_coef(y_true, y_pred)
 
-    custom_objects = {
-        'dice_loss': dice_loss,
-        'dice_coef': dice_coef
-    }
+    # Custom generator wrapper
+    def generator_wrapper(image_gen, mask_gen):
+        while True:
+            img = next(image_gen)
+            mask = next(mask_gen)
 
-    # Initialize the preprocessor to get the model
-    preprocessor = GraphicPreprocessing()
+            # Convert masks to binary (0.0 or 1.0)
+            mask = (mask > 0.5).astype(np.float32)
 
-    # Explicitly pass the custom objects to the _get_segmentation_model method
+            # Ensure mask has shape [batch, height, width, 1]
+            if mask.shape[-1] != 1:
+                mask = np.expand_dims(mask, axis=-1)
+
+            yield img, mask
+
+    # Create model directory
     model_path = os.path.join(save_path, "models", "unet_skin_lesion.h5")
+    os.makedirs(os.path.dirname(model_path), exist_ok=True)
 
-    if os.path.exists(model_path):
-        try:
-            model = load_model(model_path, custom_objects=custom_objects)
-            print(f"Loaded existing model from: {model_path}")
-        except Exception as e:
-            print(f"Error loading model: {e}")
-            print("Creating a new model instead.")
-            model = preprocessor._build_unet()
+    # Create results directory
+    os.makedirs(os.path.join(save_path, "results"), exist_ok=True)
 
-            # Compile model with dice coefficient loss
-            model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
-                          loss=dice_loss,
-                          metrics=[dice_coef, 'binary_accuracy', tf.keras.metrics.MeanIoU(num_classes=2)])
-    else:
-        # Create a new model
-        print(f"No existing model found at {model_path}. Creating a new model...")
-        model = preprocessor._build_unet()
+    # Create log directory
+    log_dir = os.path.join(save_path, "logs")
+    os.makedirs(log_dir, exist_ok=True)
 
-        # Compile model with dice coefficient loss
-        model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
-                      loss=dice_loss,
-                      metrics=[dice_coef, 'binary_accuracy', tf.keras.metrics.MeanIoU(num_classes=2)])
+    # Create model
+    preprocessor = GraphicPreprocessing()
+    model = preprocessor._build_unet()
 
-    # Define data generators
-    data_gen_args = dict(
-        rescale=1. / 255,
-        rotation_range=15,
-        width_shift_range=0.1,
-        height_shift_range=0.1,
-        zoom_range=0.1,
-        horizontal_flip=True,
-        fill_mode='nearest'
+    # Use Adam optimizer with a lower learning rate for stability
+    optimizer = tf.keras.optimizers.Adam(learning_rate=5e-5)
+
+    # Compile model
+    model.compile(
+        optimizer=optimizer,
+        loss=dice_loss,
+        metrics=[dice_coef, 'binary_accuracy']
     )
 
-    mask_gen_args = dict(
+    print(f"Created U-Net segmentation model")
+
+    # Configure data generators
+    data_gen_args = dict(
         rescale=1. / 255,
-        rotation_range=15,
+        rotation_range=20,
         width_shift_range=0.1,
         height_shift_range=0.1,
+        shear_range=0.1,
         zoom_range=0.1,
         horizontal_flip=True,
         fill_mode='nearest'
     )
 
     image_datagen = ImageDataGenerator(**data_gen_args)
-    mask_datagen = ImageDataGenerator(**mask_gen_args)
+    mask_datagen = ImageDataGenerator(**data_gen_args)
 
-    # Create generators
+    # Set seed for consistent augmentation
     seed = 42
-    image_generator = image_datagen.flow_from_directory(
+
+    # Training generators
+    train_image_generator = image_datagen.flow_from_directory(
         train_data_path,
         classes=['images'],
         class_mode=None,
@@ -624,7 +645,7 @@ def train_segmentation_model(train_data_path, val_data_path=None, epochs=50, bat
         seed=seed
     )
 
-    mask_generator = mask_datagen.flow_from_directory(
+    train_mask_generator = mask_datagen.flow_from_directory(
         train_data_path,
         classes=['masks'],
         class_mode=None,
@@ -634,114 +655,99 @@ def train_segmentation_model(train_data_path, val_data_path=None, epochs=50, bat
         seed=seed
     )
 
-    # Combine generators
-    train_generator = zip(image_generator, mask_generator)
+    # Use wrapper for correct mask handling
+    train_generator = generator_wrapper(train_image_generator, train_mask_generator)
 
-    # Create validation generator if validation data path is provided
-    if val_data_path:
-        val_image_generator = image_datagen.flow_from_directory(
-            val_data_path,
-            classes=['images'],
-            class_mode=None,
-            color_mode='rgb',
-            target_size=(299, 299),
-            batch_size=batch_size,
-            seed=seed
-        )
-
-        val_mask_generator = mask_datagen.flow_from_directory(
-            val_data_path,
-            classes=['masks'],
-            class_mode=None,
-            color_mode='grayscale',
-            target_size=(299, 299),
-            batch_size=batch_size,
-            seed=seed
-        )
-
-        val_generator = zip(val_image_generator, val_mask_generator)
-        validation_steps = val_image_generator.samples // batch_size
-    else:
-        val_generator = None
-        validation_steps = None
-
-    # Create model save directory if it doesn't exist
-    os.makedirs("models", exist_ok=True)
-
-    # Create callbacks
+    # Create callbacks without validation monitoring
     callbacks = [
+        # Model checkpoint - only monitor training metrics
         tf.keras.callbacks.ModelCheckpoint(
             filepath=model_path,
-            monitor='val_dice_coef' if val_data_path else 'dice_coef',
+            monitor='dice_coef',
             save_best_only=True,
             mode='max',
             verbose=1
         ),
+        # Early stopping
         tf.keras.callbacks.EarlyStopping(
-            monitor='val_dice_coef' if val_data_path else 'dice_coef',
-            patience=10,
+            monitor='dice_coef',
+            patience=15,
             mode='max',
             verbose=1
         ),
+        # Learning rate reduction
         tf.keras.callbacks.ReduceLROnPlateau(
-            monitor='val_dice_coef' if val_data_path else 'dice_coef',
-            factor=0.5,
-            patience=5,
+            monitor='dice_coef',
+            factor=0.2,
+            patience=8,
             min_lr=1e-7,
             mode='max',
             verbose=1
+        ),
+        # TensorBoard logging
+        tf.keras.callbacks.TensorBoard(
+            log_dir=log_dir,
+            histogram_freq=1,
+            write_graph=True,
+            update_freq='epoch'
         )
     ]
 
-    # Train the model
-    steps_per_epoch = image_generator.samples // batch_size
+    # Calculate steps per epoch
+    steps_per_epoch = train_image_generator.samples // batch_size
+    if steps_per_epoch == 0:
+        steps_per_epoch = 1
 
     print(f"Starting training for {epochs} epochs...")
-    print(f"Training data: {image_generator.samples} images")
-    if val_data_path:
-        print(f"Validation data: {val_image_generator.samples} images")
+    print(f"Training data: {train_image_generator.samples} images")
+    print(f"Steps per epoch: {steps_per_epoch}")
+    print("Training WITHOUT validation data")
 
-    history = model.fit(
-        train_generator,
-        steps_per_epoch=steps_per_epoch,
-        epochs=epochs,
-        validation_data=val_generator,
-        validation_steps=validation_steps,
-        callbacks=callbacks,
-        verbose=1
-    )
+    # Train model WITHOUT validation data
+    try:
+        history = model.fit(
+            train_generator,
+            steps_per_epoch=steps_per_epoch,
+            epochs=epochs,
+            callbacks=callbacks,
+            verbose=1
+        )
 
-    # Create results directory if it doesn't exist
-    os.makedirs(os.path.join(save_path, 'results'), exist_ok=True)
+        # Plot training history
+        plt.figure(figsize=(15, 5))
 
-    # Plot training history
-    plt.figure(figsize=(12, 4))
+        plt.subplot(1, 3, 1)
+        plt.plot(history.history['dice_coef'], label='Train')
+        plt.title('Dice Coefficient')
+        plt.xlabel('Epoch')
+        plt.ylabel('Dice Coefficient')
+        plt.legend()
 
-    # Plot Dice coefficient
-    plt.subplot(1, 2, 1)
-    plt.plot(history.history['dice_coef'], label='Train')
-    if val_data_path:
-        plt.plot(history.history['val_dice_coef'], label='Validation')
-    plt.title('Dice Coefficient')
-    plt.xlabel('Epoch')
-    plt.ylabel('Dice Coefficient')
-    plt.legend()
+        plt.subplot(1, 3, 2)
+        plt.plot(history.history['binary_accuracy'], label='Train')
+        plt.title('Binary Accuracy')
+        plt.xlabel('Epoch')
+        plt.ylabel('Accuracy')
+        plt.legend()
 
-    # Plot loss
-    plt.subplot(1, 2, 2)
-    plt.plot(history.history['loss'], label='Train')
-    if val_data_path:
-        plt.plot(history.history['val_loss'], label='Validation')
-    plt.title('Loss')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.legend()
+        plt.subplot(1, 3, 3)
+        plt.plot(history.history['loss'], label='Train')
+        plt.title('Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.legend()
 
-    plt.tight_layout()
-    plt.savefig(os.path.join(save_path, "results", "segmentation_training_history.png"))
-    plt.close()
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_path, "results", "segmentation_training_history.png"))
+        plt.close()
 
-    print(f"Training completed. Model saved to {model_path}")
-    print(f"Training history plot saved to {os.path.join(save_path, 'results', 'segmentation_training_history.png')}")
+        print(f"Training completed. Model saved to {model_path}")
+        print(
+            f"Training history plot saved to {os.path.join(save_path, 'results', 'segmentation_training_history.png')}")
 
-    return history
+        return history
+    except Exception as e:
+        print(f"Error during training: {e}")
+        model.save(model_path)
+        print(f"Partial model saved to {model_path}")
+        return None
