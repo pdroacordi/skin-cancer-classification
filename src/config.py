@@ -7,13 +7,13 @@ IMG_SIZE = (299, 299, 3)  # Width, height, channels
 GPU_MEMORY_LIMIT = 0.9  # Fraction of GPU memory to use
 
 # Pipeline configuration
-USE_GRAPHIC_PREPROCESSING = True    # Apply hair removal, contrast enhancement, etc.
+USE_GRAPHIC_PREPROCESSING = False    # Apply hair removal, contrast enhancement, etc.
 USE_DATA_AUGMENTATION     = False    # Apply data augmentation during training
 USE_DATA_PREPROCESSING    = False    # Apply data pre-processing, such as PCA, SMOTE, etc.
 USE_FINE_TUNING           = True     # Fine-tune pretrained CNN
 
 USE_HAIR_REMOVAL          = False
-USE_IMAGE_SEGMENTATION    = True
+USE_IMAGE_SEGMENTATION    = False
 USE_ENHANCED_CONTRAST     = False
 
 FINE_TUNING_AT_LAYER = {         # Layer index to start fine-tuning from
@@ -27,6 +27,7 @@ VISUALIZE = True                # Display processed images for debugging
 
 # Cross-validation
 NUM_KFOLDS = 5                   # Number of folds for cross-validation
+NUM_ITERATIONS = 2               # Number of iterations for cross-validation
 
 # Feature extraction
 NUM_PCA_COMPONENTS = None        # PCA components for dimensionality reduction (None = no PCA)
