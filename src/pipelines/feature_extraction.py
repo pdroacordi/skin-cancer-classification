@@ -706,244 +706,513 @@ def run_kfold_cross_validation(all_features, all_labels,
     """
     # Initialize KFold
     from sklearn.model_selection import StratifiedKFold
+    from config import NUM_KFOLDS, NUM_ITERATIONS
 
-    # Initialize StratifiedKFold
-    skf = StratifiedKFold(n_splits=NUM_KFOLDS, shuffle=True, random_state=42)
+    # Dictionary to store all iteration results
+    all_iterations_results = {
+        'fold_results': [],
+        'all_y_true': [],
+        'all_y_pred': []
+    }
 
-    # List to store evaluation results
-    fold_results = []
+    best_model_metrics = {
+        'iteration': 0,
+        'fold': 0,
+        'accuracy': 0,
+        'macro_avg_f1': 0,
+        'model_path': None,
+        'hyperparameters': None
+    }
 
-    # Dictionary to collect predictions
-    all_y_true = []
-    all_y_pred = []
-
-    # Run each fold
-    for fold, (train_idx, val_idx) in enumerate(skf.split(all_features, all_labels)):
+    # Run multiple iterations
+    for iteration in range(NUM_ITERATIONS):
         print(f"\n{'=' * 50}")
-        print(f"Fold {fold + 1}/{NUM_KFOLDS}")
+        print(f"Iteration {iteration + 1}/{NUM_ITERATIONS}")
         print(f"{'=' * 50}")
 
-        # Split data
-        train_features, val_features = all_features[train_idx], all_features[val_idx]
-        train_labels, val_labels = all_labels[train_idx], all_labels[val_idx]
-
-        train_features = train_features.astype(np.float32)
-        val_features = val_features.astype(np.float32)
-
-        # Create model save path
+        # Create iteration directory
         if result_dir:
-            model_save_path = os.path.join(
-                result_dir,
-                "models",
-                f"{classifier_name.lower()}_fold_{fold + 1}.joblib"
-            )
+            iter_dir = os.path.join(result_dir, f"iteration_{iteration + 1}")
+            os.makedirs(iter_dir, exist_ok=True)
+            os.makedirs(os.path.join(iter_dir, "plots"), exist_ok=True)
         else:
-            model_save_path = None
+            iter_dir = None
 
-        # Create fold result directory
-        if result_dir:
-            fold_dir = os.path.join(result_dir, f"fold_{fold + 1}")
-            os.makedirs(fold_dir, exist_ok=True)
-            os.makedirs(os.path.join(fold_dir, "plots"), exist_ok=True)
-        else:
-            fold_dir = None
+        # Initialize StratifiedKFold with a different random state for each iteration
+        skf = StratifiedKFold(n_splits=NUM_KFOLDS, shuffle=True, random_state=42 + iteration)
 
-        # Handle class imbalance based on the approach specified in config
-        class_weights = None
-        if USE_DATA_PREPROCESSING:
-            print(f"Applying data preprocessing to fold {fold + 1} training data...")
+        # List to store evaluation results for this iteration
+        fold_results = []
 
-            if CLASSIFIER_APPROACH == "class_weight":
-                train_features, train_labels, class_weights = apply_data_preprocessing(
-                    features=train_features,
-                    labels=train_labels,
-                    method="class_weight",
-                    random_state=42 + fold  # Different random state for each fold
+        # Dictionary to collect predictions for this iteration
+        iteration_y_true = []
+        iteration_y_pred = []
+
+        # Run each fold
+        for fold, (train_idx, val_idx) in enumerate(skf.split(all_features, all_labels)):
+            print(f"\n{'=' * 40}")
+            print(f"Iteration {iteration + 1}, Fold {fold + 1}/{NUM_KFOLDS}")
+            print(f"{'=' * 40}")
+
+            # Split data
+            train_features, val_features = all_features[train_idx], all_features[val_idx]
+            train_labels, val_labels = all_labels[train_idx], all_labels[val_idx]
+
+            train_features = train_features.astype(np.float32)
+            val_features = val_features.astype(np.float32)
+
+            # Create model save path
+            if iter_dir:
+                model_save_path = os.path.join(
+                    iter_dir,
+                    "models",
+                    f"{classifier_name.lower()}_iter_{iteration + 1}_fold_{fold + 1}.joblib"
                 )
-            elif CLASSIFIER_APPROACH == "hybrid":
-                train_features, train_labels, _ = apply_data_preprocessing(
-                    features=train_features,
-                    labels=train_labels,
-                    method="hybrid",
-                    random_state=42 + fold
-                )
-            elif CLASSIFIER_APPROACH == "undersampling":
-                train_features, train_labels, _ = apply_data_preprocessing(
-                    features=train_features,
-                    labels=train_labels,
-                    method="undersampling",
-                    random_state=42 + fold
-                )
-            else:  # Default to original SMOTE approach
-                train_features, train_labels, _ = apply_data_preprocessing(
-                    features=train_features,
-                    labels=train_labels,
-                    method="smote",
-                    random_state=42 + fold
-                )
-
-        # Create ML pipeline
-        pipeline = create_ml_pipeline(
-            classifier_name=classifier_name,
-            use_pca=use_pca,
-            n_components=n_components
-        )
-
-        try:
-            # Train model
-            if tune_hyperparams:
-                print(f"Tuning hyperparameters for fold {fold + 1}...")
-                param_grid = get_default_param_grid(classifier_name)
-
-                # Add class weight options for tree-based models
-                if class_weights is not None and classifier_name in ["RandomForest", "ExtraTrees", "AdaBoost"]:
-                    if "classifier__class_weight" not in param_grid:
-                        param_grid["classifier__class_weight"] = ['balanced', None]
-
-                grid_search = tune_hyperparameters(
-                    pipeline=pipeline,
-                    X=train_features,
-                    y=train_labels,
-                    param_grid=param_grid,
-                    cv=3,  # Smaller CV for speed
-                    class_weights=class_weights
-                )
-
-                # Use best model
-                fold_model = grid_search.best_estimator_
             else:
-                # Regular training with or without class weights
-                if class_weights is not None:
-                    # Get the classifier from the pipeline
-                    if hasattr(pipeline, 'named_steps') and 'classifier' in pipeline.named_steps:
-                        classifier = pipeline.named_steps['classifier']
+                model_save_path = None
 
-                        # Train the preprocessing steps
-                        if hasattr(pipeline, "steps") and len(pipeline.steps) > 1:
-                            for name, transform in pipeline.steps[:-1]:  # All steps except classifier
-                                if hasattr(transform, "fit"):
-                                    train_features = transform.fit_transform(train_features, train_labels)
+            # Create fold result directory
+            if iter_dir:
+                fold_dir = os.path.join(iter_dir, f"fold_{fold + 1}")
+                os.makedirs(fold_dir, exist_ok=True)
+                os.makedirs(os.path.join(fold_dir, "plots"), exist_ok=True)
+            else:
+                fold_dir = None
 
-                        # Check if classifier supports sample weights
-                        if hasattr(classifier, 'fit') and 'sample_weight' in classifier.fit.__code__.co_varnames:
-                            # Create sample weights from class weights
-                            sample_weights = np.array([class_weights[label] for label in train_labels])
-                            classifier.fit(train_features, train_labels, sample_weight=sample_weights)
-                            print(f"Fold {fold + 1}: Training with sample weights based on class imbalance")
+            # Handle class imbalance based on the approach specified in config
+            class_weights = None
+            if USE_DATA_PREPROCESSING:
+                print(f"Applying data preprocessing to iteration {iteration + 1}, fold {fold + 1} training data...")
+
+                if CLASSIFIER_APPROACH == "class_weight":
+                    train_features, train_labels, class_weights = apply_data_preprocessing(
+                        features=train_features,
+                        labels=train_labels,
+                        method="class_weight",
+                        random_state=42 + iteration * NUM_KFOLDS + fold
+                        # Different random state for each fold and iteration
+                    )
+                elif CLASSIFIER_APPROACH == "hybrid":
+                    train_features, train_labels, _ = apply_data_preprocessing(
+                        features=train_features,
+                        labels=train_labels,
+                        method="hybrid",
+                        random_state=42 + iteration * NUM_KFOLDS + fold
+                    )
+                elif CLASSIFIER_APPROACH == "undersampling":
+                    train_features, train_labels, _ = apply_data_preprocessing(
+                        features=train_features,
+                        labels=train_labels,
+                        method="undersampling",
+                        random_state=42 + iteration * NUM_KFOLDS + fold
+                    )
+                else:  # Default to original SMOTE approach
+                    train_features, train_labels, _ = apply_data_preprocessing(
+                        features=train_features,
+                        labels=train_labels,
+                        method="smote",
+                        random_state=42 + iteration * NUM_KFOLDS + fold
+                    )
+
+            # Create ML pipeline
+            pipeline = create_ml_pipeline(
+                classifier_name=classifier_name,
+                use_pca=use_pca,
+                n_components=n_components
+            )
+
+            try:
+                # Train model
+                if tune_hyperparams:
+                    print(f"Tuning hyperparameters for iteration {iteration + 1}, fold {fold + 1}...")
+                    param_grid = get_default_param_grid(classifier_name)
+
+                    # Add class weight options for tree-based models
+                    if class_weights is not None and classifier_name in ["RandomForest", "ExtraTrees", "AdaBoost"]:
+                        if "classifier__class_weight" not in param_grid:
+                            param_grid["classifier__class_weight"] = ['balanced', None]
+
+                    grid_search = tune_hyperparameters(
+                        pipeline=pipeline,
+                        X=train_features,
+                        y=train_labels,
+                        param_grid=param_grid,
+                        cv=3,  # Smaller CV for speed
+                        class_weights=class_weights
+                    )
+
+                    # Use best model
+                    fold_model = grid_search.best_estimator_
+                else:
+                    # Regular training with or without class weights
+                    if class_weights is not None:
+                        # Get the classifier from the pipeline
+                        if hasattr(pipeline, 'named_steps') and 'classifier' in pipeline.named_steps:
+                            classifier = pipeline.named_steps['classifier']
+
+                            # Train the preprocessing steps
+                            if hasattr(pipeline, "steps") and len(pipeline.steps) > 1:
+                                for name, transform in pipeline.steps[:-1]:  # All steps except classifier
+                                    if hasattr(transform, "fit"):
+                                        train_features = transform.fit_transform(train_features, train_labels)
+
+                            # Check if classifier supports sample weights
+                            if hasattr(classifier, 'fit') and 'sample_weight' in classifier.fit.__code__.co_varnames:
+                                # Create sample weights from class weights
+                                sample_weights = np.array([class_weights[label] for label in train_labels])
+                                classifier.fit(train_features, train_labels, sample_weight=sample_weights)
+                                print(
+                                    f"Iteration {iteration + 1}, Fold {fold + 1}: Training with sample weights based on class imbalance")
+                            else:
+                                # If sample_weight not supported, try to set class_weight attribute
+                                if hasattr(classifier, 'class_weight'):
+                                    classifier.class_weight = class_weights
+                                    print(f"Iteration {iteration + 1}, Fold {fold + 1}: Setting class_weight parameter")
+                                classifier.fit(train_features, train_labels)
+
+                            fold_model = pipeline
                         else:
-                            # If sample_weight not supported, try to set class_weight attribute
-                            if hasattr(classifier, 'class_weight'):
-                                classifier.class_weight = class_weights
-                                print(f"Fold {fold + 1}: Setting class_weight parameter")
-                            classifier.fit(train_features, train_labels)
-
-                        fold_model = pipeline
+                            # Fall back to regular pipeline fit
+                            pipeline.fit(train_features, train_labels)
+                            fold_model = pipeline
                     else:
-                        # Fall back to regular pipeline fit
+                        # Train model with default parameters
                         pipeline.fit(train_features, train_labels)
                         fold_model = pipeline
-                else:
-                    # Train model with default parameters
-                    pipeline.fit(train_features, train_labels)
-                    fold_model = pipeline
 
-            # Save model if path is provided
-            if model_save_path:
-                save_model(fold_model, model_save_path)
+                # Save model if path is provided
+                if model_save_path:
+                    save_model(fold_model, model_save_path)
 
-            # Evaluate on validation set
-            val_pred = fold_model.predict(val_features)
+                # Evaluate on validation set
+                val_pred = fold_model.predict(val_features)
 
-            # Add to overall predictions
-            all_y_true.extend(val_labels)
-            all_y_pred.extend(val_pred)
+                # Add to iteration predictions
+                iteration_y_true.extend(val_labels)
+                iteration_y_pred.extend(val_pred)
 
-            # Calculate metrics
-            report = classification_report(val_labels, val_pred, output_dict=True)
+                # Calculate metrics
+                report = classification_report(val_labels, val_pred, output_dict=True)
 
-            # Print classification report
-            print(f"\nFold {fold + 1} Validation Set Classification Report:")
-            print(classification_report(val_labels, val_pred))
+                # Print classification report
+                print(f"\nIteration {iteration + 1}, Fold {fold + 1} Validation Set Classification Report:")
+                print(classification_report(val_labels, val_pred))
 
-            # Plot confusion matrix if result directory is provided
-            if fold_dir:
-                cm_plot_path = os.path.join(fold_dir, "plots", "confusion_matrix.png")
-                plot_confusion_matrix(val_labels, val_pred, save_path=cm_plot_path)
+                if report['accuracy'] > best_model_metrics['accuracy'] or \
+                        (report['accuracy'] == best_model_metrics['accuracy'] and
+                         report['macro avg']['f1-score'] > best_model_metrics['macro_avg_f1']):
 
-            # Store fold results
-            fold_result = {
-                "fold": fold + 1,
-                "accuracy": report["accuracy"],
-                "macro_avg_precision": report["macro avg"]["precision"],
-                "macro_avg_recall": report["macro avg"]["recall"],
-                "macro_avg_f1": report["macro avg"]["f1-score"],
-                "class_report": report
-            }
+                    # For classical models, capture best hyperparameters
+                    if hasattr(fold_model, 'get_params'):
+                        model_params = fold_model.get_params()
+                    else:
+                        model_params = {}
 
-            fold_results.append(fold_result)
+                    # Store core configuration
+                    hyperparameters = {
+                        'classifier_name': classifier_name,
+                        'use_pca': use_pca,
+                        'n_components': n_components,
+                        'class_weights': class_weights,
+                        'preprocessing_approach': CLASSIFIER_APPROACH if USE_DATA_PREPROCESSING else None,
+                        'model_params': model_params
+                    }
 
-        except Exception as e:
-            print(f"Error in fold {fold + 1}: {e}")
-            continue
+                    best_model_metrics = {
+                        'iteration': iteration + 1,
+                        'fold': fold + 1,
+                        'accuracy': report['accuracy'],
+                        'macro_avg_f1': report['macro avg']['f1-score'],
+                        'model_path': model_save_path,
+                        'model': fold_model,  # Keep reference to the model object itself
+                        'hyperparameters': hyperparameters
+                    }
 
-            # Calculate overall metrics
-        all_y_true = np.array(all_y_true)
-        all_y_pred = np.array(all_y_pred)
+                # Plot confusion matrix if result directory is provided
+                if fold_dir:
+                    cm_plot_path = os.path.join(fold_dir, "plots", "confusion_matrix.png")
+                    plot_confusion_matrix(val_labels, val_pred, save_path=cm_plot_path)
 
-        # Print overall classification report
-        print("\nOverall K-Fold Cross-Validation Results:")
-        print(classification_report(all_y_true, all_y_pred))
+                # Store fold results
+                fold_result = {
+                    "iteration": iteration + 1,
+                    "fold": fold + 1,
+                    "accuracy": report["accuracy"],
+                    "macro_avg_precision": report["macro avg"]["precision"],
+                    "macro_avg_recall": report["macro avg"]["recall"],
+                    "macro_avg_f1": report["macro avg"]["f1-score"],
+                    "class_report": report
+                }
 
-        # Plot overall confusion matrix
-        if result_dir:
-            cm_plot_path = os.path.join(result_dir, "plots", "overall_confusion_matrix.png")
-            plot_confusion_matrix(all_y_true, all_y_pred, save_path=cm_plot_path)
+                fold_results.append(fold_result)
 
-        # Calculate average fold metrics
+            except Exception as e:
+                print(f"Error in iteration {iteration + 1}, fold {fold + 1}: {e}")
+                continue
+
+        # Convert iteration predictions to arrays
+        iteration_y_true = np.array(iteration_y_true)
+        iteration_y_pred = np.array(iteration_y_pred)
+
+        # Print overall classification report for this iteration
+        print(f"\nOverall Iteration {iteration + 1} Results:")
+        print(classification_report(iteration_y_true, iteration_y_pred))
+
+        # Plot overall confusion matrix for this iteration
+        if iter_dir:
+            cm_plot_path = os.path.join(iter_dir, "plots", "overall_confusion_matrix.png")
+            plot_confusion_matrix(iteration_y_true, iteration_y_pred, save_path=cm_plot_path)
+
+        # Store iteration results
+        all_iterations_results['fold_results'].extend(fold_results)
+        all_iterations_results['all_y_true'].extend(iteration_y_true)
+        all_iterations_results['all_y_pred'].extend(iteration_y_pred)
+
+        # Calculate average fold metrics for this iteration
         avg_accuracy = np.mean([res["accuracy"] for res in fold_results])
         avg_precision = np.mean([res["macro_avg_precision"] for res in fold_results])
         avg_recall = np.mean([res["macro_avg_recall"] for res in fold_results])
         avg_f1 = np.mean([res["macro_avg_f1"] for res in fold_results])
 
-        print(f"\nAverage K-Fold Metrics:")
+        print(f"\nIteration {iteration + 1} Average Metrics:")
         print(f"Accuracy: {avg_accuracy:.4f}")
         print(f"Precision: {avg_precision:.4f}")
         print(f"Recall: {avg_recall:.4f}")
         print(f"F1 Score: {avg_f1:.4f}")
 
-        # Save results to a text file
-        if result_dir:
-            with open(os.path.join(result_dir, "kfold_results.txt"), "w") as f:
+        # Save iteration results to a text file
+        if iter_dir:
+            with open(os.path.join(iter_dir, "iteration_results.txt"), "w") as f:
                 f.write(f"Classifier: {classifier_name}\n")
                 f.write(f"Use PCA: {use_pca}\n")
                 f.write(f"PCA Components: {n_components}\n")
                 f.write(f"Tune Hyperparameters: {tune_hyperparams}\n")
                 f.write(f"Number of Folds: {NUM_KFOLDS}\n")
+                f.write(f"Iteration: {iteration + 1}/{NUM_ITERATIONS}\n")
                 f.write(f"Use Data Preprocessing: {USE_DATA_PREPROCESSING}\n")
                 if USE_DATA_PREPROCESSING:
                     f.write(f"Preprocessing Method: {CLASSIFIER_APPROACH}\n\n")
 
-                f.write("Average K-Fold Metrics:\n")
+                f.write(f"Iteration {iteration + 1} Average Metrics:\n")
                 f.write(f"Accuracy: {avg_accuracy:.4f}\n")
                 f.write(f"Precision: {avg_precision:.4f}\n")
                 f.write(f"Recall: {avg_recall:.4f}\n")
                 f.write(f"F1 Score: {avg_f1:.4f}\n\n")
 
-                f.write("Overall Classification Report:\n")
-                f.write(classification_report(all_y_true, all_y_pred))
+                f.write("Classification Report:\n")
+                f.write(classification_report(iteration_y_true, iteration_y_pred))
 
                 f.write("\nConfusion Matrix:\n")
-                f.write(str(confusion_matrix(all_y_true, all_y_pred)))
+                f.write(str(confusion_matrix(iteration_y_true, iteration_y_pred)))
 
-                f.write("\n\nIndividual Fold Results:\n")
-                for fold, result in enumerate(fold_results):
-                    f.write(f"\nFold {fold + 1}:\n")
-                    f.write(f"Accuracy: {result['accuracy']:.4f}\n")
-                    f.write(f"Precision: {result['macro_avg_precision']:.4f}\n")
-                    f.write(f"Recall: {result['macro_avg_recall']:.4f}\n")
-                    f.write(f"F1 Score: {result['macro_avg_f1']:.4f}\n")
+    # Calculate overall metrics across all iterations
+    all_y_true = np.array(all_iterations_results['all_y_true'])
+    all_y_pred = np.array(all_iterations_results['all_y_pred'])
 
-        return fold_results
+    # Print overall classification report
+    print("\nOverall Results (All Iterations):")
+    print(classification_report(all_y_true, all_y_pred))
+
+    # Plot overall confusion matrix
+    if result_dir:
+        cm_plot_path = os.path.join(result_dir, "plots", "overall_confusion_matrix.png")
+        plot_confusion_matrix(all_y_true, all_y_pred, save_path=cm_plot_path)
+
+    # Calculate average metrics across all iterations
+    iteration_metrics = []
+    for iteration in range(NUM_ITERATIONS):
+        iter_results = [res for res in all_iterations_results['fold_results'] if res['iteration'] == iteration + 1]
+        avg_accuracy = np.mean([res['accuracy'] for res in iter_results])
+        avg_precision = np.mean([res['macro_avg_precision'] for res in iter_results])
+        avg_recall = np.mean([res['macro_avg_recall'] for res in iter_results])
+        avg_f1 = np.mean([res['macro_avg_f1'] for res in iter_results])
+
+        iteration_metrics.append({
+            'iteration': iteration + 1,
+            'accuracy': avg_accuracy,
+            'precision': avg_precision,
+            'recall': avg_recall,
+            'f1': avg_f1
+        })
+
+    # Overall average across all iterations
+    overall_avg_accuracy = np.mean([m['accuracy'] for m in iteration_metrics])
+    overall_avg_precision = np.mean([m['precision'] for m in iteration_metrics])
+    overall_avg_recall = np.mean([m['recall'] for m in iteration_metrics])
+    overall_avg_f1 = np.mean([m['f1'] for m in iteration_metrics])
+
+    print(f"\nAverage Metrics Across All Iterations:")
+    print(f"Accuracy: {overall_avg_accuracy:.4f}")
+    print(f"Precision: {overall_avg_precision:.4f}")
+    print(f"Recall: {overall_avg_recall:.4f}")
+    print(f"F1 Score: {overall_avg_f1:.4f}")
+
+    # Save results to a text file
+    if result_dir:
+        with open(os.path.join(result_dir, "overall_results.txt"), "w") as f:
+            f.write(f"Classifier: {classifier_name}\n")
+            f.write(f"Use PCA: {use_pca}\n")
+            f.write(f"PCA Components: {n_components}\n")
+            f.write(f"Tune Hyperparameters: {tune_hyperparams}\n")
+            f.write(f"Number of Folds: {NUM_KFOLDS}\n")
+            f.write(f"Number of Iterations: {NUM_ITERATIONS}\n")
+            f.write(f"Use Data Preprocessing: {USE_DATA_PREPROCESSING}\n")
+            if USE_DATA_PREPROCESSING:
+                f.write(f"Preprocessing Method: {CLASSIFIER_APPROACH}\n\n")
+
+            f.write("Average Metrics Across All Iterations:\n")
+            f.write(f"Accuracy: {overall_avg_accuracy:.4f}\n")
+            f.write(f"Precision: {overall_avg_precision:.4f}\n")
+            f.write(f"Recall: {overall_avg_recall:.4f}\n")
+            f.write(f"F1 Score: {overall_avg_f1:.4f}\n\n")
+
+            f.write("Per-Iteration Metrics:\n")
+            for m in iteration_metrics:
+                f.write(f"Iteration {m['iteration']}:\n")
+                f.write(f"  Accuracy: {m['accuracy']:.4f}\n")
+                f.write(f"  Precision: {m['precision']:.4f}\n")
+                f.write(f"  Recall: {m['recall']:.4f}\n")
+                f.write(f"  F1 Score: {m['f1']:.4f}\n\n")
+
+            f.write("Overall Classification Report (All Iterations):\n")
+            f.write(classification_report(all_y_true, all_y_pred))
+
+            f.write("\nConfusion Matrix (All Iterations):\n")
+            f.write(str(confusion_matrix(all_y_true, all_y_pred)))
+
+    return {
+        'fold_results': all_iterations_results['fold_results'],
+        'best_model_info': best_model_metrics,
+        'best_model': best_model_metrics.get('model', None),
+        'best_hyperparameters': best_model_metrics['hyperparameters'],
+        'result_dir': result_dir
+    }
+
+
+def train_final_feature_extraction_model(all_features, all_labels, best_hyperparameters, result_dir, class_names=None):
+    """
+    Train a final classical ML model on all training data using the best hyperparameters.
+
+    Args:
+        all_features: Combined training and validation features
+        all_labels: Combined training and validation labels
+        best_hyperparameters: Best hyperparameters found during cross-validation
+        result_dir: Directory to save results
+        class_names: List of class names
+
+    Returns:
+        Final trained model and evaluation results
+    """
+    print("\n" + "=" * 60)
+    print("Training Final Classical ML Model on All Training Data")
+    print("=" * 60)
+
+    # Create final model directory
+    final_model_dir = os.path.join(result_dir, "final_model")
+    os.makedirs(final_model_dir, exist_ok=True)
+    os.makedirs(os.path.join(final_model_dir, "plots"), exist_ok=True)
+
+    # Final model save path
+    final_model_path = os.path.join(final_model_dir, "final_ml_model.joblib")
+
+    # Extract hyperparameters
+    classifier_name = best_hyperparameters['classifier_name']
+    use_pca = best_hyperparameters['use_pca']
+    n_components = best_hyperparameters['n_components']
+    class_weights = best_hyperparameters.get('class_weights', None)
+
+    # Apply data preprocessing if it was used in the best model
+    preprocessed_features = all_features
+    preprocessed_labels = all_labels
+
+    if best_hyperparameters['preprocessing_approach'] is not None:
+        print(f"Applying {best_hyperparameters['preprocessing_approach']} preprocessing to all training data...")
+        preprocessed_features, preprocessed_labels, class_weights = apply_data_preprocessing(
+            features=all_features,
+            labels=all_labels,
+            method=best_hyperparameters['preprocessing_approach'],
+            random_state=42
+        )
+
+    # Create ML pipeline with best configuration
+    pipeline = create_ml_pipeline(
+        classifier_name=classifier_name,
+        use_pca=use_pca,
+        n_components=n_components
+    )
+
+    # If we have the model_params, try to set them directly
+    if 'model_params' in best_hyperparameters and best_hyperparameters['model_params']:
+        try:
+            # Set parameters for the classifier in the pipeline
+            if hasattr(pipeline, 'named_steps') and 'classifier' in pipeline.named_steps:
+                classifier = pipeline.named_steps['classifier']
+                relevant_params = {k.replace('classifier__', ''): v for k, v in
+                                   best_hyperparameters['model_params'].items()
+                                   if k.startswith('classifier__')}
+                classifier.set_params(**relevant_params)
+        except Exception as e:
+            print(f"Warning: Could not set all model parameters: {e}")
+
+    # Train the model on all data
+    print(f"Training final model on all {len(preprocessed_features)} samples...")
+
+    # Handle class weights if they were used
+    if class_weights is not None:
+        # Check if the classifier supports sample weights
+        if hasattr(pipeline, 'named_steps') and 'classifier' in pipeline.named_steps:
+            classifier = pipeline.named_steps['classifier']
+
+            # Train the preprocessing steps
+            if hasattr(pipeline, "steps") and len(pipeline.steps) > 1:
+                for name, transform in pipeline.steps[:-1]:  # All steps except classifier
+                    if hasattr(transform, "fit"):
+                        preprocessed_features = transform.fit_transform(preprocessed_features, preprocessed_labels)
+
+            # Check if classifier supports sample weights
+            if hasattr(classifier, 'fit') and 'sample_weight' in classifier.fit.__code__.co_varnames:
+                # Create sample weights from class weights
+                sample_weights = np.array([class_weights[label] for label in preprocessed_labels])
+                classifier.fit(preprocessed_features, preprocessed_labels, sample_weight=sample_weights)
+                print("Training with sample weights based on class imbalance")
+            else:
+                # If sample_weight not supported, try to set class_weight attribute
+                if hasattr(classifier, 'class_weight'):
+                    classifier.class_weight = class_weights
+                    print("Setting class_weight parameter")
+                classifier.fit(preprocessed_features, preprocessed_labels)
+
+            final_model = pipeline
+        else:
+            # Fall back to regular pipeline fit
+            pipeline.fit(preprocessed_features, preprocessed_labels)
+            final_model = pipeline
+    else:
+        # Train normally
+        pipeline.fit(preprocessed_features, preprocessed_labels)
+        final_model = pipeline
+
+    # Save the final model
+    save_model(final_model, final_model_path)
+    print(f"Final model trained and saved to: {final_model_path}")
+
+    # If possible, plot feature importance
+    if hasattr(final_model, 'named_steps') and 'classifier' in final_model.named_steps:
+        classifier = final_model.named_steps['classifier']
+        if hasattr(classifier, 'feature_importances_'):
+            fi_plot_path = os.path.join(final_model_dir, "plots", "final_model_feature_importance.png")
+
+            # Get feature names or indices
+            if hasattr(final_model, 'named_steps') and 'pca' in final_model.named_steps:
+                # For PCA, feature names are PCA components
+                feature_names = [f"PC{i + 1}" for i in range(len(classifier.feature_importances_))]
+            else:
+                # Otherwise, use feature indices
+                feature_names = [f"Feature {i + 1}" for i in range(len(classifier.feature_importances_))]
+
+            plot_feature_importance(classifier, feature_names, save_path=fi_plot_path)
+
+    return final_model, final_model_dir
 
 def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files_path,
                                     use_kfold=False, fine_tune_extractor=True,
@@ -1164,7 +1433,7 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
         all_labels = np.concatenate([train_labels_out, val_labels_out])
 
         # Run cross-validation
-        fold_results = run_kfold_cross_validation(
+        cv_results = run_kfold_cross_validation(
             all_features=all_features,
             all_labels=all_labels,
             classifier_name=CLASSICAL_CLASSIFIER_MODEL,
@@ -1174,24 +1443,73 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
             result_dir=result_dir
         )
 
-        # Train final model on all data
-        final_model, _ = train_and_evaluate_classical_model(
-            train_features=all_features,
-            train_labels=all_labels,
-            val_features=all_features,  # Use same data for quick validation
-            val_labels=all_labels,
-            classifier_name=CLASSICAL_CLASSIFIER_MODEL,
-            use_pca=(NUM_PCA_COMPONENTS is not None),
-            n_components=NUM_PCA_COMPONENTS,
-            tune_hyperparams=False,  # Already tuned in cross-validation
+        # Train final model with all training data using best hyperparameters
+        final_model, final_model_dir = train_final_feature_extraction_model(
+            all_features=all_features,
+            all_labels=all_labels,
+            best_hyperparameters=cv_results['best_hyperparameters'],
             result_dir=result_dir,
-            model_save_path=classifier_save_path,
-            class_weights=preprocessing_info.get("class_weights", None)
+            class_names=class_names
         )
 
+        # Extract test features and evaluate final model
+        test_features, test_labels_out = load_or_extract_features(
+            feature_extractor=feature_extractor,
+            paths=test_paths,
+            labels=test_labels,
+            preprocess_fn=preprocess_fn,
+            model_name=CNN_MODEL,
+            features_save_path=test_features_save_path
+        )
+
+        test_features = test_features.astype(np.float32)
+
+        # Evaluate on test set
+        print("\nEvaluating final model on test set...")
+        test_pred = final_model.predict(test_features)
+
+        # Calculate metrics
+        test_report = classification_report(test_labels_out, test_pred, output_dict=True)
+
+        # Print classification report
+        print("\nTest Set Classification Report (Final Model):")
+        print(classification_report(test_labels_out, test_pred))
+
+        # Plot confusion matrix
+        cm_plot_path = os.path.join(final_model_dir, "plots", "final_model_test_confusion_matrix.png")
+        plot_confusion_matrix(test_labels_out, test_pred, class_names, cm_plot_path)
+
+        # Store test results
+        test_results = {
+            "accuracy": test_report["accuracy"],
+            "macro_avg_precision": test_report["macro avg"]["precision"],
+            "macro_avg_recall": test_report["macro avg"]["recall"],
+            "macro_avg_f1": test_report["macro avg"]["f1-score"],
+            "class_report": test_report
+        }
+
+        # Save results to a text file
+        with open(os.path.join(final_model_dir, "final_model_test_results.txt"), "w") as f:
+            f.write(f"Feature Extractor: {CNN_MODEL}\n")
+            f.write(f"Classifier: {CLASSICAL_CLASSIFIER_MODEL}\n")
+            f.write(f"Use Fine-tuning: {USE_FINE_TUNING}\n")
+            f.write(f"Use Preprocessing: {USE_GRAPHIC_PREPROCESSING}\n")
+            f.write(f"Use PCA: {NUM_PCA_COMPONENTS is not None}\n")
+            f.write(f"PCA Components: {NUM_PCA_COMPONENTS}\n\n")
+            f.write(f"Use Data Preprocessing: {USE_DATA_PREPROCESSING}\n")
+            if USE_DATA_PREPROCESSING:
+                f.write(f"Preprocessing Method: {CLASSIFIER_APPROACH}\n\n")
+
+            f.write("Test Set Classification Report:\n")
+            f.write(classification_report(test_labels_out, test_pred))
+
+            f.write("\nConfusion Matrix:\n")
+            f.write(str(confusion_matrix(test_labels_out, test_pred)))
+
         results = {
-            'k_fold': fold_results,
-            'final_model': final_model
+            'k_fold': cv_results['fold_results'],
+            'best_model_info': cv_results['best_model_info'],
+            'final_model_test_results': test_results
         }
     else:
         # Train single model
