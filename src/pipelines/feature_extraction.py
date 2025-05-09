@@ -67,14 +67,13 @@ def create_result_directories(base_dir=RESULTS_DIR):
     Returns:
         str: Path to the created result directory.
     """
-    timestamp      = datetime.datetime.now().strftime("%Y%m%d_%H%M")
     str_hair       = "hair_removal_" if USE_HAIR_REMOVAL else ""
     str_contrast   = "contrast_" if USE_ENHANCED_CONTRAST else ""
     str_segmented  = "segmentation_" if USE_IMAGE_SEGMENTATION else ""
     str_graphic    = f"{str_segmented}{str_contrast}{str_hair}" if USE_GRAPHIC_PREPROCESSING else ""
     str_augment    = "use_augmentation_" if USE_DATA_AUGMENTATION else ""
     str_preprocess = f"use_data_preprocess_{CLASSIFIER_APPROACH}" if USE_DATA_PREPROCESSING else ""
-    result_dir     = os.path.join(base_dir, f"feature_extraction_{str_graphic}{str_augment}{str_preprocess}{timestamp}")
+    result_dir     = os.path.join(base_dir, f"feature_extraction_{str_graphic}{str_augment}{str_preprocess}")
 
     # Create subdirectories
     os.makedirs(result_dir, exist_ok=True)
