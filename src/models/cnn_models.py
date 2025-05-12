@@ -97,7 +97,7 @@ def create_model_name(base_model_name, mode, use_fine_tuning, use_preprocessing)
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
 
-    return f"{'_'.join(components)}_{timestamp}"
+    return f"{'_'.join(components)}"
 
 
 def load_or_create_cnn(model_name, mode='classifier', fine_tune=True,

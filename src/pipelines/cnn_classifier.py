@@ -59,7 +59,7 @@ def create_result_directories(base_dir=RESULTS_DIR):
     str_graphic    = f"{str_segmented}{str_contrast}{str_hair}" if USE_GRAPHIC_PREPROCESSING else ""
     str_augment    = "use_augmentation_" if USE_DATA_AUGMENTATION else ""
     str_preprocess = "use_data_preprocess_" if USE_DATA_PREPROCESSING else ""
-    result_dir     = os.path.join(base_dir, f"cnn_classifier_{str_graphic}{str_augment}{str_preprocess}")
+    result_dir     = os.path.join(base_dir, f"cnn_classifier_{CNN_MODEL}_{str_graphic}{str_augment}{str_preprocess}")
 
     # Create subdirectories
     os.makedirs(result_dir, exist_ok=True)
