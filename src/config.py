@@ -1,6 +1,6 @@
 NUM_CLASSES = 7  # Number of skin lesion classes in HAM10000
 BATCH_SIZE = 16  # Smaller batch size to prevent memory issues
-NUM_EPOCHS = 75
+NUM_EPOCHS = 100
 IMG_SIZE = (299, 299, 3)  # Width, height, channels
 
 # GPU memory management
@@ -8,7 +8,7 @@ GPU_MEMORY_LIMIT = 0.9  # Fraction of GPU memory to use
 
 # Pipeline configuration
 USE_GRAPHIC_PREPROCESSING = False    # Apply hair removal, contrast enhancement, etc.
-USE_DATA_AUGMENTATION     = False    # Apply data augmentation during training
+USE_DATA_AUGMENTATION     = True    # Apply data augmentation during training
 USE_DATA_PREPROCESSING    = False    # Apply data pre-processing, such as PCA, SMOTE, etc.
 USE_FINE_TUNING           = True     # Fine-tune pretrained CNN
 
@@ -23,7 +23,7 @@ FINE_TUNING_AT_LAYER = {         # Layer index to start fine-tuning from
     'Xception': 100
 }
 
-VISUALIZE = True                # Display processed images for debugging
+VISUALIZE = False                # Display processed images for debugging
 
 # Cross-validation
 NUM_KFOLDS = 5                   # Number of folds for cross-validation
