@@ -1,0 +1,49 @@
+Model: Xception
+Use Fine-tuning: True
+Use Preprocessing: False
+Use Data Augmentation: False
+Number of Folds: 5
+Number of Iterations: 2
+
+Average Metrics Across All Iterations:
+Accuracy: 0.8042
+Precision: 0.6567
+Recall: 0.5751
+F1 Score: 0.5961
+
+Per-Iteration Metrics:
+Iteration 1:
+  Accuracy: 0.8089
+  Precision: 0.6825
+  Recall: 0.5854
+  F1 Score: 0.6136
+
+Iteration 2:
+  Accuracy: 0.7996
+  Precision: 0.6308
+  Recall: 0.5648
+  F1 Score: 0.5785
+
+Overall Classification Report (All Iterations):
+              precision    recall  f1-score   support
+
+           0       0.50      0.44      0.47       556
+           1       0.69      0.72      0.71       874
+           2       0.63      0.55      0.59      1868
+           3       0.67      0.20      0.31       196
+           4       0.54      0.51      0.52      1892
+           5       0.89      0.93      0.91     11398
+           6       0.78      0.67      0.72       240
+
+    accuracy                           0.80     17024
+   macro avg       0.67      0.57      0.60     17024
+weighted avg       0.80      0.80      0.80     17024
+
+Confusion Matrix (All Iterations):
+[[  245    77   116     2    53    63     0]
+ [   51   631    54     2    34    97     5]
+ [   95    59  1033     6   286   382     7]
+ [   29    16    28    39    17    67     0]
+ [   57    55   173     3   969   623    12]
+ [   15    71   235     6   436 10614    21]
+ [    0     7     6     0     9    58   160]]
