@@ -1,0 +1,28 @@
+Model: VGG19
+Use Fine-tuning: True
+Use Preprocessing: False
+Use Data Augmentation: False
+
+Classification Report:
+              precision    recall  f1-score   support
+
+           0       0.62      0.63      0.63        49
+           1       0.68      0.70      0.69        77
+           2       0.68      0.68      0.68       165
+           3       0.75      0.35      0.48        17
+           4       0.67      0.57      0.62       167
+           5       0.91      0.94      0.93      1006
+           6       0.86      0.82      0.84        22
+
+    accuracy                           0.84      1503
+   macro avg       0.74      0.67      0.69      1503
+weighted avg       0.84      0.84      0.84      1503
+
+Confusion Matrix:
+[[ 31   5   8   0   1   4   0]
+ [  5  54  11   0   3   3   1]
+ [  7   5 113   0  12  28   0]
+ [  3   4   2   6   0   2   0]
+ [  2   3  15   0  95  52   0]
+ [  2   7  16   2  30 947   2]
+ [  0   1   1   0   0   2  18]]

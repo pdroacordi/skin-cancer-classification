@@ -1,0 +1,35 @@
+Model: Inception
+Use Fine-tuning: True
+Use Preprocessing: False
+Use Data Augmentation: True
+Number of Folds: 5
+
+Iteration 2 Average Metrics:
+Accuracy: 0.7983
+Precision: 0.6509
+Recall: 0.5891
+F1 Score: 0.6084
+
+Overall Classification Report:
+              precision    recall  f1-score   support
+
+           0       0.46      0.47      0.46       278
+           1       0.61      0.67      0.64       437
+           2       0.58      0.60      0.59       934
+           3       0.56      0.36      0.43        98
+           4       0.60      0.38      0.47       946
+           5       0.89      0.93      0.91      5699
+           6       0.81      0.70      0.75       120
+
+    accuracy                           0.80      8512
+   macro avg       0.64      0.59      0.61      8512
+weighted avg       0.79      0.80      0.79      8512
+
+Confusion Matrix:
+[[ 130   39   61    7   13   28    0]
+ [  22  294   46    3   16   53    3]
+ [  60   49  565    9   71  177    3]
+ [  14    7    7   35    4   31    0]
+ [  41   36  134    4  364  363    4]
+ [  15   55  157    5  134 5323   10]
+ [   0    4    4    0    6   22   84]]

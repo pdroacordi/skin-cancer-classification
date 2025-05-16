@@ -9,7 +9,7 @@ GPU_MEMORY_LIMIT = 0.9  # Fraction of GPU memory to use
 # Pipeline configuration
 USE_GRAPHIC_PREPROCESSING = False    # Apply hair removal, contrast enhancement, etc.
 USE_DATA_AUGMENTATION     = True    # Apply data augmentation during training
-USE_DATA_PREPROCESSING    = False    # Apply data pre-processing, such as PCA, SMOTE, etc.
+USE_DATA_PREPROCESSING    = True    # Apply data pre-processing, such as PCA, SMOTE, etc.
 USE_FINE_TUNING           = True     # Fine-tune pretrained CNN
 
 USE_HAIR_REMOVAL          = False
@@ -33,7 +33,7 @@ NUM_ITERATIONS = 2               # Number of iterations for cross-validation
 NUM_PCA_COMPONENTS = None        # PCA components for dimensionality reduction (None = no PCA)
 
 # Model selection
-CNN_MODEL                  = 'Xception'         # Options: 'VGG19', 'Inception', 'ResNet', 'Xception'
+CNN_MODEL                  = 'VGG19'         # Options: 'VGG19', 'Inception', 'ResNet', 'Xception'
 CLASSICAL_CLASSIFIER_MODEL = 'RandomForest'  # Options: 'RandomForest', 'XGBoost', 'AdaBoost', 'ExtraTrees', 'SVM'
 CLASSIFIER_APPROACH        = "class_weight"  # Options: "class_weight", "smote", "undersampling", "hybrid"
 
