@@ -1,5 +1,9 @@
 /results/**/models/
 /results/**/features/
+/results/**/**/logs/
+*.h5
+*.joblib
+
 
 # Ignorar arquivos compilados do Python
 __pycache__/
