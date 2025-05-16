@@ -2,7 +2,6 @@
 CNN model definitions and loading utilities.
 """
 
-import datetime
 import os
 import sys
 
@@ -13,7 +12,8 @@ from tensorflow.keras.layers import GlobalAveragePooling2D, Dense, Dropout
 from tensorflow.keras.models import Model, load_model
 from tensorflow.keras.optimizers import Adam
 
-from skincancer.src.config import USE_DATA_AUGMENTATION
+from skincancer.src.config import USE_DATA_AUGMENTATION, CNN_MODEL, USE_GRAPHIC_PREPROCESSING, USE_HAIR_REMOVAL, \
+    USE_ENHANCED_CONTRAST, USE_IMAGE_SEGMENTATION, USE_DATA_PREPROCESSING, USE_FINE_TUNING
 
 sys.path.append('..')
 from config import (
@@ -94,8 +94,6 @@ def create_model_name(base_model_name, mode, use_fine_tuning, use_preprocessing)
         f"ft_{use_fine_tuning}",
         f"preproc_{use_preprocessing}"
     ]
-
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
 
     return f"{'_'.join(components)}"
 
@@ -246,6 +244,136 @@ def get_feature_extractor_model(model_name, fine_tune=True, weights='imagenet', 
 
     return feature_extractor, False
 
+
+def find_trained_cnn_model(results_dir='./results', cnn_model_name=CNN_MODEL):
+    """
+    Procura por um modelo CNN já treinado no diretório de resultados,
+    seguindo a nomenclatura baseada nas configurações atuais.
+
+    Args:
+        results_dir (str): Diretório base de resultados
+        cnn_model_name (str): Nome do modelo CNN (VGG19, Inception, etc.)
+
+    Returns:
+        str: Caminho para o modelo CNN encontrado, ou None se não encontrado
+    """
+    import os
+    import glob
+
+    base_pattern = f"cnn_classifier_{cnn_model_name}"
+
+    if USE_GRAPHIC_PREPROCESSING:
+        if USE_HAIR_REMOVAL:
+            base_pattern += "_hair_removal"
+        if USE_ENHANCED_CONTRAST:
+            base_pattern += "_contrast"
+        if USE_IMAGE_SEGMENTATION:
+            base_pattern += "_segmentation"
+
+    if USE_DATA_AUGMENTATION:
+        base_pattern += "_use_augmentation"
+
+    if USE_DATA_PREPROCESSING:
+        base_pattern += "_use_data_preprocess"
+
+     # Caminhos possíveis para modelos finais - com e sem sufixos adicionais
+    search_patterns = [
+        os.path.join(results_dir, base_pattern, "final_model", "final_cnn_model.h5"),
+        os.path.join(results_dir, base_pattern + "*", "final_model", "final_cnn_model.h5")
+    ]
+
+    # Também busca em diretórios com sufixos parciais
+    partial_pattern = os.path.join(results_dir, f"cnn_classifier_{cnn_model_name}*", "final_model",
+                                   "final_cnn_model.h5")
+    search_patterns.append(partial_pattern)
+
+    # Busca modelo final em cada padrão
+    for pattern in search_patterns:
+        print(f"Buscando modelo com padrão: {pattern}")
+        matching_models = glob.glob(pattern)
+
+        if matching_models:
+            model_path = matching_models[0]
+            print(f"Modelo CNN final encontrado: {model_path}")
+            return model_path
+
+    print(f"Nenhum modelo CNN final para {cnn_model_name} encontrado.")
+    return None
+
+
+def get_feature_extractor_from_cnn(feature_extractor_save_path, cnn_model_path=None):
+    """
+    Obtém um extrator de features a partir de um modelo CNN já treinado,
+    ou cria um novo se nenhum modelo adequado for encontrado.
+
+    Args:
+        feature_extractor_save_path (str): Caminho para salvar o extrator de features
+        cnn_model_path (str, optional): Caminho específico para o modelo CNN, ou None para busca automática
+
+    Returns:
+        tuple: (feature_extractor, from_pretrained) onde from_pretrained é True se o extrator foi criado a partir de um CNN
+    """
+    # Verifica se o extrator já existe
+    if os.path.exists(feature_extractor_save_path):
+        print(f"Carregando extrator de features existente: {feature_extractor_save_path}")
+        feature_extractor = tf.keras.models.load_model(feature_extractor_save_path)
+        return feature_extractor, True  # Assumimos que é de um modelo treinado
+
+    # Se não foi fornecido um caminho específico, busca automaticamente
+    if cnn_model_path is None:
+        cnn_model_path = find_trained_cnn_model()
+
+    # Se encontrou um modelo CNN, converte para extrator
+    if cnn_model_path and os.path.exists(cnn_model_path):
+        print(f"Convertendo modelo CNN para extrator de features: {cnn_model_path}")
+        try:
+            # Carrega o modelo treinado
+            trained_model = tf.keras.models.load_model(cnn_model_path)
+
+            # Identifica a camada para extração de features
+            # Procura pela última camada antes da primeira camada Dense
+            extraction_layer = None
+            dense_found = False
+
+            for i in range(len(trained_model.layers) - 1, -1, -1):
+                layer = trained_model.layers[i]
+                if 'dense' in layer.name.lower():
+                    dense_found = True
+                elif dense_found:
+                    extraction_layer = layer
+                    break
+
+            # Se não achou uma camada apropriada, usa a penúltima
+            if extraction_layer is None:
+                extraction_layer = trained_model.layers[-2]
+
+            print(f"Usando camada '{extraction_layer.name}' para extração de features")
+
+            # Cria o extrator de features
+            feature_extractor = tf.keras.Model(
+                inputs=trained_model.input,
+                outputs=extraction_layer.output
+            )
+
+            # Salva o extrator
+            os.makedirs(os.path.dirname(feature_extractor_save_path), exist_ok=True)
+            feature_extractor.save(feature_extractor_save_path)
+            print(f"Extrator de features salvo em: {feature_extractor_save_path}")
+
+            return feature_extractor, True
+
+        except Exception as e:
+            print(f"Erro ao converter modelo CNN para extrator: {e}")
+            print("Usando método padrão para criar extrator...")
+
+    print("Criando novo extrator de features usando método padrão...")
+    feature_extractor, _ = get_feature_extractor_model(
+        model_name=CNN_MODEL,
+        fine_tune=USE_FINE_TUNING,
+        save_path=feature_extractor_save_path
+    )
+
+    return feature_extractor, False
 
 def fine_tune_feature_extractor(feature_extractor, X_train, y_train, X_val, y_val,
                                 epochs=10, batch_size=32, save_path=None,

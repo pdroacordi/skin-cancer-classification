@@ -33,7 +33,7 @@ NUM_ITERATIONS = 2               # Number of iterations for cross-validation
 NUM_PCA_COMPONENTS = None        # PCA components for dimensionality reduction (None = no PCA)
 
 # Model selection
-CNN_MODEL                  = 'VGG19'         # Options: 'VGG19', 'Inception', 'ResNet', 'Xception'
+CNN_MODEL                  = 'Inception'         # Options: 'VGG19', 'Inception', 'ResNet', 'Xception'
 CLASSICAL_CLASSIFIER_MODEL = 'RandomForest'  # Options: 'RandomForest', 'XGBoost', 'AdaBoost', 'ExtraTrees', 'SVM'
 CLASSIFIER_APPROACH        = "class_weight"  # Options: "class_weight", "smote", "undersampling", "hybrid"
 
