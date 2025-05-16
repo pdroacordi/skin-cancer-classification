@@ -405,30 +405,6 @@ def load_or_extract_features(feature_extractor, paths, labels=None,
     Returns:
         tuple: (features, labels) if labels is provided, otherwise just features.
     """
-    if features_save_path and os.path.exists(features_save_path):
-        print(f"Loading cached features from: {features_save_path}")
-        features_data = np.load(features_save_path, allow_pickle=True)
-
-        if isinstance(features_data, np.ndarray) and len(features_data.shape) == 2:
-            # Only features were saved
-            features = features_data.astype(np.float32)
-            if labels is not None:
-                return features, labels
-            return features
-        elif isinstance(features_data, dict) and 'features' in features_data and 'labels' in features_data:
-            # Both features and labels were saved
-            features = features_data['features'].astype(np.float32)
-            labels_loaded = features_data['labels']
-
-            if labels is not None:
-                # Verify labels match
-                if np.array_equal(labels, labels_loaded):
-                    return features, labels
-                else:
-                    print("Warning: Cached labels don't match provided labels. Re-extracting features.")
-            else:
-                return features, labels_loaded
-
     # Extract features
     print(f"Extracting features from {len(paths)} images...")
 
