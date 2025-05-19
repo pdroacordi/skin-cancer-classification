@@ -1,0 +1,35 @@
+Model: ResNet
+Use Fine-tuning: True
+Use Preprocessing: False
+Use Data Augmentation: True
+Number of Folds: 5
+
+Iteration 1 Average Metrics:
+Accuracy: 0.8575
+Precision: 0.7745
+Recall: 0.7289
+F1 Score: 0.7437
+
+Overall Classification Report:
+              precision    recall  f1-score   support
+
+           0       0.64      0.59      0.62       278
+           1       0.79      0.75      0.77       437
+           2       0.71      0.77      0.74       934
+           3       0.73      0.59      0.66        98
+           4       0.66      0.61      0.63       946
+           5       0.93      0.94      0.93      5699
+           6       0.90      0.86      0.88       120
+
+    accuracy                           0.86      8512
+   macro avg       0.77      0.73      0.75      8512
+weighted avg       0.86      0.86      0.86      8512
+
+Confusion Matrix:
+[[ 164   26   51    2   22   13    0]
+ [  29  327   35    1   13   29    3]
+ [  25   17  717    5   65  105    0]
+ [  10    5    5   58    9   11    0]
+ [  18   13   82    3  576  252    2]
+ [   9   24  118    8  179 5354    7]
+ [   0    2    2    2    5    6  103]]
