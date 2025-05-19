@@ -32,7 +32,7 @@ from config import (
     CLASSIFIER_APPROACH,
     USE_HAIR_REMOVAL,
     USE_IMAGE_SEGMENTATION,
-    USE_ENHANCED_CONTRAST
+    USE_ENHANCED_CONTRAST, NUM_ITERATIONS
 )
 
 from utils.data_loaders import load_paths_labels, resize_image
@@ -56,18 +56,22 @@ def setup_gpu_memory():
 
 
 def create_feature_extraction_directories(base_dir=RESULTS_DIR, cnn_model_name=CNN_MODEL,
-                                          classifier_name=CLASSICAL_CLASSIFIER_MODEL):
+                                          classifier_name=CLASSICAL_CLASSIFIER_MODEL,
+                                          num_iterations=NUM_ITERATIONS, num_folds=NUM_KFOLDS):
     """
-    Cria estrutura de diretórios padronizada para feature extraction.
+    Create standardized directory structure for feature extraction pipeline.
 
     Args:
-        base_dir (str): Diretório base de resultados
-        cnn_model_name (str): Nome do modelo CNN usado como extrator
-        classifier_name (str): Nome do classificador clássico
+        base_dir (str): Base results directory
+        cnn_model_name (str): CNN model name used as extractor
+        classifier_name (str): Classical classifier name
+        num_iterations (int): Number of cross-validation iterations
+        num_folds (int): Number of folds per iteration
 
     Returns:
-        dict: Dicionário com caminhos para os diretórios criados
+        dict: Dictionary with paths to created directories
     """
+    # Build feature extraction path components based on configuration
     str_hair = "hair_removal_" if USE_HAIR_REMOVAL else ""
     str_contrast = "contrast_" if USE_ENHANCED_CONTRAST else ""
     str_segmented = "segmentation_" if USE_IMAGE_SEGMENTATION else ""
@@ -75,34 +79,106 @@ def create_feature_extraction_directories(base_dir=RESULTS_DIR, cnn_model_name=C
     str_augment = "use_augmentation_" if USE_DATA_AUGMENTATION else ""
     str_preprocess = f"use_data_preprocess_{CLASSIFIER_APPROACH}" if USE_DATA_PREPROCESSING else ""
 
+    # Create main result directory path
     result_dir = os.path.join(base_dir,
                               f"feature_extraction_{cnn_model_name}_{str_graphic}{str_augment}{str_preprocess}")
 
-    # Cria diretório base
+    # Create base directory
     os.makedirs(result_dir, exist_ok=True)
 
-    # Cria diretório específico para o classificador
+    # Initialize directory structure dictionary
+    dirs = {
+        'base': result_dir,
+        'models': os.path.join(result_dir, "models"),
+        'features': os.path.join(result_dir, "features"),
+        'classifiers': {},  # Will hold classifier-specific directories
+        'features_by_fold': os.path.join(result_dir, "features_by_fold")  # For cross-validation feature storage
+    }
+
+    # Create base directories
+    os.makedirs(dirs['models'], exist_ok=True)
+    os.makedirs(dirs['features'], exist_ok=True)
+    os.makedirs(dirs['features_by_fold'], exist_ok=True)
+
+    # Set path for feature extractor model
+    dirs['extractor'] = os.path.join(dirs['models'], f"{cnn_model_name.lower()}_feature_extractor.h5")
+
+    # Set paths for combined features
+    dirs['all_features'] = os.path.join(dirs['features'], "all_features.npz")
+    dirs['test_features'] = os.path.join(dirs['features'], "test_features.npz")
+
+    # Create classifier-specific directory structure
     classifier_dir = os.path.join(result_dir, classifier_name.lower())
     os.makedirs(classifier_dir, exist_ok=True)
 
-    # Cria subdiretórios para o classificador
-    dirs = {
-        'base': result_dir,
-        'classifier': classifier_dir,
-        'models': os.path.join(result_dir, "models"),
-        'features': os.path.join(result_dir, "features"),
-        'plots': os.path.join(classifier_dir, "plots"),
+    # Create plots directory for the classifier
+    classifier_plots_dir = os.path.join(classifier_dir, "plots")
+    os.makedirs(classifier_plots_dir, exist_ok=True)
+
+    # Initialize classifier dictionary
+    classifier_dirs = {
+        'base': classifier_dir,
+        'plots': classifier_plots_dir,
+        'iterations': {},
+        'final_model': os.path.join(classifier_dir, "final_model")
     }
 
-    # Cria diretórios
-    for path in dirs.values():
-        os.makedirs(path, exist_ok=True)
+    # Create final_model directory and its plots subdirectory
+    os.makedirs(classifier_dirs['final_model'], exist_ok=True)
+    os.makedirs(os.path.join(classifier_dirs['final_model'], "plots"), exist_ok=True)
 
-    # Caminho para salvar o extrator de features
-    dirs['extractor'] = os.path.join(dirs['models'], f"{cnn_model_name.lower()}_feature_extractor.h5")
+    # Create iteration and fold directories
+    for iteration in range(1, num_iterations + 1):
+        iteration_dir = os.path.join(classifier_dir, f"iteration_{iteration}")
+        os.makedirs(iteration_dir, exist_ok=True)
+        os.makedirs(os.path.join(iteration_dir, "plots"), exist_ok=True)
+        os.makedirs(os.path.join(iteration_dir, "models"), exist_ok=True)
+
+        # Store iteration paths
+        iteration_dirs = {
+            'base': iteration_dir,
+            'plots': os.path.join(iteration_dir, "plots"),
+            'models': os.path.join(iteration_dir, "models"),
+            'folds': {}
+        }
+
+        # Create fold directories for this iteration
+        for fold in range(1, num_folds + 1):
+            fold_dir = os.path.join(iteration_dir, f"fold_{fold}")
+            os.makedirs(fold_dir, exist_ok=True)
+
+            # Create fold subdirectories
+            fold_features_dir = os.path.join(fold_dir, "features")
+            fold_models_dir = os.path.join(fold_dir, "models")
+            fold_plots_dir = os.path.join(fold_dir, "plots")
+
+            os.makedirs(fold_features_dir, exist_ok=True)
+            os.makedirs(fold_models_dir, exist_ok=True)
+            os.makedirs(fold_plots_dir, exist_ok=True)
+
+            # Store fold paths
+            fold_dirs = {
+                'base': fold_dir,
+                'features': fold_features_dir,
+                'models': fold_models_dir,
+                'plots': fold_plots_dir
+            }
+
+            # Add fold to iteration
+            iteration_dirs['folds'][fold] = fold_dirs
+
+        # Add iteration to classifier
+        classifier_dirs['iterations'][iteration] = iteration_dirs
+
+    # Add classifier to main directories
+    dirs['classifiers'][classifier_name] = classifier_dirs
+
+    # Also create features_by_fold/iteration_X directories for cross-validation feature storage
+    for iteration in range(1, num_iterations + 1):
+        iter_features_dir = os.path.join(dirs['features_by_fold'], f"iteration_{iteration}")
+        os.makedirs(iter_features_dir, exist_ok=True)
 
     return dirs
-
 
 def plot_confusion_matrix(y_true, y_pred, class_names=None, save_path=None):
     """
@@ -288,9 +364,9 @@ def extract_features(feature_extractor, images, batch_size=32):
 
 def extract_and_save_features(feature_extractor, paths, labels=None,
                               preprocess_fn=None, model_name=CNN_MODEL,
-                              features_save_path=None):
+                              features_save_path=None, apply_augmentation=USE_DATA_AUGMENTATION):
     """
-    Extract features and save them to disk.
+    Extract features and save them to disk with augmentation metadata.
 
     Args:
         feature_extractor: Feature extractor model.
@@ -299,55 +375,105 @@ def extract_and_save_features(feature_extractor, paths, labels=None,
         preprocess_fn (callable, optional): Function for image preprocessing.
         model_name (str): CNN model name for preprocessing.
         features_save_path (str, optional): Path to save features.
+        apply_augmentation (bool): Whether to apply data augmentation.
 
     Returns:
         tuple: (features, labels) if labels is provided, otherwise just features.
     """
     print(f"Extracting features from {len(paths)} images...")
 
-    # Extrai features
-    if labels is not None:
-        features, labels_out = extract_features_from_paths(
-            feature_extractor=feature_extractor,
-            paths=paths,
-            labels=labels,
-            preprocess_fn=preprocess_fn,
-            model_name=model_name
-        )
-    else:
-        features = extract_features_from_paths(
-            feature_extractor=feature_extractor,
-            paths=paths,
-            preprocess_fn=preprocess_fn,
-            model_name=model_name
-        )
-        labels_out = None
+    try:
+        # Extract features
+        if labels is not None:
+            features, labels_out = extract_features_from_paths(
+                feature_extractor=feature_extractor,
+                paths=paths,
+                labels=labels,
+                preprocess_fn=preprocess_fn,
+                model_name=model_name,
+                apply_augmentation=apply_augmentation
+            )
 
-    # Assegura que features estão no formato correto
-    features = features.astype(np.float32)
-
-    # Salva features se caminho foi fornecido
-    if features_save_path:
-        print(f"Saving features to: {features_save_path}")
-
-        # Cria diretório se não existir
-        os.makedirs(os.path.dirname(features_save_path), exist_ok=True)
-
-        # Determina formato baseado na extensão
-        if features_save_path.endswith('.npz'):
-            if labels_out is not None:
-                np.savez(features_save_path, features=features, labels=labels_out)
+            # Calculate augmentation factor if applicable
+            if apply_augmentation and len(features) > len(labels):
+                if len(features) % len(labels) == 0:
+                    augmentation_factor = len(features) // len(labels)
+                    print(f"Features extracted with {augmentation_factor}x augmentation.")
+                else:
+                    print(
+                        f"Warning: Feature count ({len(features)}) is not a clean multiple of label count ({len(labels)})")
+                    augmentation_factor = None
             else:
-                np.savez(features_save_path, features=features)
+                augmentation_factor = 1  # No effective augmentation
         else:
-            # Default para .npy se a extensão não for especificada
-            if not features_save_path.endswith('.npy'):
-                features_save_path += '.npy'
-            np.save(features_save_path, features)
+            features = extract_features_from_paths(
+                feature_extractor=feature_extractor,
+                paths=paths,
+                labels=None,
+                preprocess_fn=preprocess_fn,
+                model_name=model_name,
+                apply_augmentation=apply_augmentation
+            )
+            labels_out = None
+            augmentation_factor = None
 
-    if labels is not None:
-        return features, labels_out
-    else:
+        # Ensure features are in the correct format
+        if features is None or len(features) == 0:
+            print("WARNING: No features were extracted! This will cause errors.")
+            # Return empty arrays as a fallback instead of None
+            empty_shape = feature_extractor.output_shape[1:]
+            features = np.array([]).reshape((0, *empty_shape))
+            if labels is not None:
+                return features, labels
+            return features
+
+        features = features.astype(np.float32)
+
+        # Save features if path was provided
+        if features_save_path:
+            print(f"Saving features to: {features_save_path}")
+
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(features_save_path), exist_ok=True)
+
+            # Determine format based on extension
+            if features_save_path.endswith('.npz'):
+                # Save with augmentation metadata
+                if labels_out is not None:
+                    np.savez(
+                        features_save_path,
+                        features=features,
+                        labels=labels_out,
+                        augmentation_enabled=apply_augmentation,
+                        augmentation_factor=augmentation_factor if augmentation_factor is not None else 1
+                    )
+                else:
+                    np.savez(
+                        features_save_path,
+                        features=features,
+                        augmentation_enabled=apply_augmentation,
+                        augmentation_factor=augmentation_factor if augmentation_factor is not None else 1
+                    )
+            else:
+                # Default to .npy if extension is not specified
+                if not features_save_path.endswith('.npy'):
+                    features_save_path += '.npy'
+                np.save(features_save_path, features)
+
+        if labels is not None:
+            return features, labels_out if labels_out is not None else labels
+        else:
+            return features
+
+    except Exception as e:
+        print(f"ERROR in extract_and_save_features: {e}")
+        import traceback
+        traceback.print_exc()
+        # Handle the error gracefully by returning empty arrays
+        empty_shape = feature_extractor.output_shape[1:]
+        features = np.array([]).reshape((0, *empty_shape))
+        if labels is not None:
+            return features, labels
         return features
 
 def extract_features_from_paths(feature_extractor, paths, labels=None,
@@ -355,6 +481,7 @@ def extract_features_from_paths(feature_extractor, paths, labels=None,
                                 batch_size=BATCH_SIZE, apply_augmentation=USE_DATA_AUGMENTATION):
     """
     Extract features from image paths using a feature extractor model.
+    Memory-efficient version to avoid GPU OOM errors.
 
     Args:
         feature_extractor: Feature extractor model.
@@ -368,7 +495,7 @@ def extract_features_from_paths(feature_extractor, paths, labels=None,
         tuple: (features, labels) if labels is provided, otherwise just features.
     """
     # Load and preprocess images
-    print(f"Loading and preprocessing {len(paths)} images...")
+    print(f"Loading and preprocessing {len(paths)} images with batch_size={batch_size}...")
 
     # Create a preprocessing function for each image
     def process_image(path, augment=False, aug_index=None):
@@ -401,7 +528,7 @@ def extract_features_from_paths(feature_extractor, paths, labels=None,
 
         return image
 
-    # Process images in batches
+    # Process images in batches with additional error handling
     num_samples = len(paths)
     num_batches = int(np.ceil(num_samples / batch_size))
 
@@ -413,12 +540,19 @@ def extract_features_from_paths(feature_extractor, paths, labels=None,
         from utils.augmentation import AugmentationFactory
         augmentation_pipelines = AugmentationFactory.get_feature_extraction_augmentation()
         num_augmentations = len(augmentation_pipelines)
+        print(f"Using {num_augmentations} augmentation pipelines.")
     else:
         num_augmentations = 1
+        print("No augmentation applied.")
+
+    # Set up a smaller mini-batch size for prediction to avoid OOM errors
+    mini_batch_size = min(4, batch_size)  # Use mini-batches of at most 4 images
 
     for i in range(num_batches):
         start_idx = i * batch_size
         end_idx = min((i + 1) * batch_size, num_samples)
+
+        print(f"Processing batch {i+1}/{num_batches} (images {start_idx+1}-{end_idx} of {num_samples})")
 
         batch_paths = paths[start_idx:end_idx]
 
@@ -427,56 +561,145 @@ def extract_features_from_paths(feature_extractor, paths, labels=None,
         batch_indices = []
 
         for j, path in enumerate(batch_paths):
-            image = process_image(path)
-            if image is not None:
-                batch_images.append(image)
-                batch_indices.append(start_idx + j)
+            try:
+                image = process_image(path)
+                if image is not None:
+                    batch_images.append(image)
+                    batch_indices.append(start_idx + j)
 
-                # Add augmented versions if requested
-                if apply_augmentation and augmentation_pipelines:
-                    # Skip index 0 as it's the identity transformation (no augmentation)
-                    for aug_index in range(1, num_augmentations):
-                        aug_image = process_image(path, augment=True, aug_index=aug_index)
-                        if aug_image is not None:
-                            batch_images.append(aug_image)
-                            batch_indices.append(start_idx + j)
+                    # Add augmented versions if requested
+                    if apply_augmentation and augmentation_pipelines:
+                        # Skip index 0 as it's the identity transformation (no augmentation)
+                        for aug_index in range(1, num_augmentations):
+                            aug_image = process_image(path, augment=True, aug_index=aug_index)
+                            if aug_image is not None:
+                                batch_images.append(aug_image)
+                                batch_indices.append(start_idx + j)
+            except Exception as e:
+                print(f"Error processing image {path}: {e}")
+                continue
 
         if not batch_images:
+            print(f"No valid images in batch {i+1}, skipping.")
             continue
 
-        # Convert to numpy array
-        batch_images = np.array(batch_images)
+        # Process images in mini-batches to avoid OOM
+        mini_batch_features = []
+        num_mini_batches = int(np.ceil(len(batch_images) / mini_batch_size))
 
-        # Extract features
-        batch_features = feature_extractor.predict(batch_images, verbose=0)
+        for k in range(num_mini_batches):
+            mini_start = k * mini_batch_size
+            mini_end = min((k + 1) * mini_batch_size, len(batch_images))
+            mini_images = batch_images[mini_start:mini_end]
 
-        all_features.append(batch_features)
+            try:
+                # Convert to numpy array
+                mini_images_array = np.array(mini_images)
 
-        # Add labels if provided
-        if labels is not None:
-            # Repeat each label for the original + augmented versions
-            if apply_augmentation:
-                batch_labels = np.repeat(labels[np.unique(batch_indices)], num_augmentations)
-            else:
-                batch_labels = labels[batch_indices]
-            all_labels.append(batch_labels)
+                # Extract features for this mini-batch
+                mini_features = feature_extractor.predict(mini_images_array, verbose=0)
+                mini_batch_features.append(mini_features)
 
-    # Concatenate results
-    features = np.concatenate(all_features, axis=0) if all_features else np.array([])
-    features = features.astype(np.float32)
+                # Clean up to free memory
+                del mini_images_array, mini_features
+                gc.collect()
+                tf.keras.backend.clear_session()
 
-    if labels is not None and all_labels:
-        labels_out = np.concatenate(all_labels, axis=0)
-        return features, labels_out
+            except tf.errors.ResourceExhaustedError:
+                print(f"OOM error in mini-batch {k+1}. Trying with single images...")
 
-    return features
+                # If mini-batch fails, try with individual images
+                for idx, img in enumerate(mini_images):
+                    try:
+                        img_array = np.expand_dims(img, axis=0)
+                        single_feature = feature_extractor.predict(img_array, verbose=0)
+                        mini_batch_features.append(single_feature)
+
+                        # Clean up
+                        del img_array, single_feature
+                        gc.collect()
+                        tf.keras.backend.clear_session()
+
+                    except Exception as e2:
+                        print(f"    Error processing single image {mini_start+idx}: {e2}")
+                        continue
+
+            except Exception as e:
+                print(f"  Error in mini-batch {k+1}: {e}")
+                continue
+
+        # Combine mini-batch features if any were successfully extracted
+        if mini_batch_features:
+            try:
+                combined_features = np.vstack(mini_batch_features)
+                all_features.append(combined_features)
+
+                # Add labels if provided
+                if labels is not None:
+                    # Get unique indices and count number of features per index (including augmentations)
+                    unique_indices = np.unique(batch_indices)
+                    if apply_augmentation:
+                        # Count how many features were actually extracted for each index
+                        feature_count_per_index = 0
+                        if len(combined_features) > 0:
+                            feature_count_per_index = len(combined_features) / len(unique_indices)
+
+                        # Repeat each label based on actual extracted features
+                        batch_labels = np.repeat(labels[unique_indices], feature_count_per_index)
+                    else:
+                        batch_labels = labels[batch_indices[:len(combined_features)]]
+
+                    all_labels.append(batch_labels)
+
+                # Clean up
+                del mini_batch_features, combined_features
+                gc.collect()
+
+            except Exception as e:
+                print(f"Error combining features from batch {i+1}: {e}")
+                # Just skip this batch if combining fails
+                continue
+
+        # Force garbage collection after each batch
+        gc.collect()
+        tf.keras.backend.clear_session()
+
+    # Concatenate results if any were successfully extracted
+    if all_features:
+        try:
+            features = np.concatenate(all_features, axis=0)
+            features = features.astype(np.float32)
+
+            if labels is not None and all_labels:
+                # Make sure labels and features have the same length
+                labels_out = np.concatenate(all_labels, axis=0)
+                if len(labels_out) > len(features):
+                    labels_out = labels_out[:len(features)]
+                elif len(labels_out) < len(features):
+                    # This shouldn't happen with the fixes above, but just in case
+                    print(f"Warning: Labels count ({len(labels_out)}) doesn't match features count ({len(features)})")
+                    features = features[:len(labels_out)]
+
+                return features, labels_out
+
+            return features
+        except Exception as e:
+            print(f"Error concatenating features: {e}")
+            # Return empty arrays if concatenation fails
+            empty_shape = feature_extractor.output_shape[1:]
+            return np.array([]).reshape((0, *empty_shape)), np.array([]) if labels is not None else np.array([])
+    else:
+        print("No features were successfully extracted.")
+        # Return empty arrays
+        empty_shape = feature_extractor.output_shape[1:]
+        return np.array([]).reshape((0, *empty_shape)), np.array([]) if labels is not None else np.array([])
 
 
 def load_or_extract_features(feature_extractor, paths, labels=None,
                              preprocess_fn=None, model_name=CNN_MODEL,
-                             features_save_path=None):
+                             features_save_path=None, apply_augmentation=USE_DATA_AUGMENTATION):
     """
-    Load cached features or extract new ones.
+    Load cached features or extract new ones with improved handling of augmented data.
 
     Args:
         feature_extractor: Feature extractor model.
@@ -485,11 +708,12 @@ def load_or_extract_features(feature_extractor, paths, labels=None,
         preprocess_fn (callable, optional): Function for image preprocessing.
         model_name (str): CNN model name for preprocessing.
         features_save_path (str, optional): Path to save/load features.
+        apply_augmentation (bool): Whether augmentation was applied or should be applied.
 
     Returns:
         tuple: (features, labels) if labels is provided, otherwise just features.
     """
-    # Extract features
+    # Extract features if no path is provided
     if features_save_path is None:
         print(f"Extracting features from {len(paths)} images...")
         return extract_features_from_paths(
@@ -497,72 +721,228 @@ def load_or_extract_features(feature_extractor, paths, labels=None,
             paths=paths,
             labels=labels,
             preprocess_fn=preprocess_fn,
-            model_name=model_name
+            model_name=model_name,
+            apply_augmentation=apply_augmentation
         )
 
-    # Tentativa de carregar features existentes
+    # Try to load cached features if file exists
     if os.path.exists(features_save_path):
         print(f"Loading cached features from: {features_save_path}")
         try:
-            # Tenta carregar dependendo da extensão do arquivo
+            # Try to load based on file extension
             if features_save_path.endswith('.npz'):
                 features_data = np.load(features_save_path, allow_pickle=True)
 
-                # Verifica se é um arquivo NPZ com as chaves esperadas
-                if isinstance(features_data,
-                              np.lib.npyio.NpzFile) and 'features' in features_data and 'labels' in features_data:
+                # Check if it's an NPZ file with the expected keys
+                if isinstance(features_data, np.lib.npyio.NpzFile) and 'features' in features_data:
                     features = features_data['features'].astype(np.float32)
-                    saved_labels = features_data['labels']
 
-                    # Verifica consistência de features e labels
+                    # Check if the file contains labels
+                    if 'labels' in features_data:
+                        saved_labels = features_data['labels']
+                    else:
+                        saved_labels = None
+
+                    # Check if the file contains augmentation metadata
+                    if 'augmentation_enabled' in features_data:
+                        cached_augmentation = bool(features_data['augmentation_enabled'])
+                        print(f"Cache metadata: augmentation_enabled={cached_augmentation}")
+                    else:
+                        cached_augmentation = None  # Unknown
+
+                    if 'augmentation_factor' in features_data:
+                        cached_aug_factor = int(features_data['augmentation_factor'])
+                        print(f"Cache metadata: augmentation_factor={cached_aug_factor}x")
+                    else:
+                        cached_aug_factor = None  # Unknown
+
+                    # Check feature consistency
                     if features.ndim != 2:
                         print(f"Warning: Cached features have unexpected shape: {features.shape}. Re-extracting...")
-                        return extract_and_save_features(feature_extractor, paths, labels, preprocess_fn, model_name,
-                                                         features_save_path)
+                        return extract_and_save_features(
+                            feature_extractor, paths, labels, preprocess_fn, model_name,
+                            features_save_path, apply_augmentation
+                        )
 
-                    # Verifica se labels correspondem (se fornecidos)
-                    if labels is not None:
-                        if len(labels) != len(saved_labels) or not np.array_equal(labels, saved_labels):
-                            print("Warning: Cached labels don't match provided labels. Re-extracting features...")
-                            return extract_and_save_features(feature_extractor, paths, labels, preprocess_fn,
-                                                             model_name, features_save_path)
+                    # Check if labels match (if provided)
+                    if labels is not None and saved_labels is not None:
+                        if len(labels) != len(saved_labels):
+                            # Check if the difference could be due to augmentation
+                            if len(saved_labels) > len(labels) and len(saved_labels) % len(labels) == 0:
+                                detected_aug_factor = len(saved_labels) // len(labels)
+                                print(f"Detected augmentation factor: {detected_aug_factor}x")
+
+                                # Determine if this matches our current augmentation settings
+                                if apply_augmentation:
+                                    print(f"Current settings use augmentation, consistent with cached features.")
+
+                                    # Options for handling label mismatch due to augmentation:
+
+                                    # Option 1: If cached labels are already correctly structured for augmentation,
+                                    # we can use them directly
+                                    if cached_aug_factor is not None and cached_aug_factor == detected_aug_factor:
+                                        print("Using cached features and labels with augmentation.")
+                                        return features, saved_labels
+
+                                    # Option 2: Use cached features but with current labels
+                                    # This option works when the model only needs the augmented features during training,
+                                    # but uses original labels for metrics
+                                    print("Using cached features with current labels.")
+                                    # Ensure feature count is a multiple of label count
+                                    feature_count = len(features)
+                                    expected_count = len(labels) * detected_aug_factor
+                                    if feature_count != expected_count:
+                                        print(f"Warning: Feature count {feature_count} doesn't match expected {expected_count}")
+                                        if feature_count > expected_count:
+                                            # Truncate extra features
+                                            features = features[:expected_count]
+                                        else:
+                                            # We have fewer features than expected, re-extract
+                                            print("Inconsistent feature count. Re-extracting...")
+                                            return extract_and_save_features(
+                                                feature_extractor, paths, labels, preprocess_fn,
+                                                model_name, features_save_path, apply_augmentation
+                                            )
+
+                                    return features, labels
+                                else:
+                                    print("Current settings don't use augmentation, but cached features do.")
+                                    print("Re-extracting features to match current settings...")
+                                    return extract_and_save_features(
+                                        feature_extractor, paths, labels, preprocess_fn,
+                                        model_name, features_save_path, apply_augmentation
+                                    )
+                            else:
+                                print(f"Label count mismatch not due to regular augmentation: Current={len(labels)}, Cached={len(saved_labels)}")
+                                print("Re-extracting features...")
+                                return extract_and_save_features(
+                                    feature_extractor, paths, labels, preprocess_fn,
+                                    model_name, features_save_path, apply_augmentation
+                                )
+                        elif not np.array_equal(labels, saved_labels):
+                            # Print detailed diagnostics
+                            print("Labels differ but have same length. Analyzing differences...")
+
+                            # Find and display the first few differences
+                            diff_indices = np.where(labels != saved_labels)[0]
+                            if len(diff_indices) > 0:
+                                print(f"Found {len(diff_indices)} differences out of {len(labels)} labels ({len(diff_indices)/len(labels)*100:.2f}%)")
+                                print(f"First 5 differences:")
+                                for i in range(min(5, len(diff_indices))):
+                                    idx = diff_indices[i]
+                                    print(f"  Index {idx}: Current={labels[idx]}, Cached={saved_labels[idx]}")
+
+                                # Determine if it's just a shuffle or actual class distribution difference
+                                unique_current = np.unique(labels)
+                                unique_saved = np.unique(saved_labels)
+
+                                if set(unique_current) != set(unique_saved):
+                                    print(f"Different classes present! Current: {unique_current}, Cached: {unique_saved}")
+                                else:
+                                    # Check class distribution
+                                    current_counts = np.bincount(labels)
+                                    saved_counts = np.bincount(saved_labels)
+
+                                    if len(current_counts) != len(saved_counts):
+                                        print(f"Different class count ranges: Current={len(current_counts)}, Cached={len(saved_counts)}")
+                                    elif np.array_equal(current_counts, saved_counts):
+                                        print("Label distributions match exactly! This appears to be just a different ordering/shuffling.")
+
+                                        # Use cached features with current labels if distributions match
+                                        print("Using cached features with current labels.")
+                                        return features, labels
+                                    else:
+                                        print("Label distributions differ! Here's the comparison:")
+                                        for i in range(len(current_counts)):
+                                            current_count = current_counts[i] if i < len(current_counts) else 0
+                                            saved_count = saved_counts[i] if i < len(saved_counts) else 0
+                                            if current_count != saved_count:
+                                                print(f"  Class {i}: Current={current_count}, Cached={saved_count}, Diff={current_count-saved_count}")
+
+                            print("Re-extracting features due to label mismatch...")
+                            return extract_and_save_features(
+                                feature_extractor, paths, labels, preprocess_fn,
+                                model_name, features_save_path, apply_augmentation
+                            )
+                        else:
+                            print("Labels match exactly! Using cached features.")
+
+                        # If we reach here, labels match exactly, so return features and labels
                         return features, labels
                     else:
-                        return features, saved_labels
+                        # No current labels or no saved labels
+                        if labels is None and saved_labels is not None:
+                            print("No labels provided, using cached features and labels.")
+                            return features, saved_labels
+                        elif labels is not None and saved_labels is None:
+                            print("Cached features have no labels. Using current labels.")
+                            return features, labels
+                        else:
+                            print("Both current and cached have no labels.")
+                            return features
                 else:
                     print("Warning: NPZ file format is not as expected. Re-extracting features...")
+                    return extract_and_save_features(
+                        feature_extractor, paths, labels, preprocess_fn,
+                        model_name, features_save_path, apply_augmentation
+                    )
 
             elif features_save_path.endswith('.npy'):
                 features = np.load(features_save_path, allow_pickle=False)
                 features = features.astype(np.float32)
 
-                # Verifica consistência básica
+                # Check basic consistency
                 if features.ndim != 2:
                     print(f"Warning: Cached features have unexpected shape: {features.shape}. Re-extracting...")
-                    return extract_and_save_features(feature_extractor, paths, labels, preprocess_fn, model_name,
-                                                     features_save_path)
+                    return extract_and_save_features(
+                        feature_extractor, paths, labels, preprocess_fn,
+                        model_name, features_save_path, apply_augmentation
+                    )
 
-                # Se não temos labels no arquivo, retorna apenas features ou par (features, labels)
+                # If there are no labels in the file, return features only or pair (features, labels)
                 if labels is not None:
-                    if len(features) != len(labels):
-                        print("Warning: Number of cached features doesn't match number of labels. Re-extracting...")
-                        return extract_and_save_features(feature_extractor, paths, labels, preprocess_fn, model_name,
-                                                         features_save_path)
+                    if len(features) != len(labels) and apply_augmentation and len(features) > len(labels):
+                        # Check if this is due to augmentation
+                        if len(features) % len(labels) == 0:
+                            augmentation_factor = len(features) // len(labels)
+                            print(f"Detected augmentation factor in .npy file: {augmentation_factor}x")
+                            print("Using cached features with current labels.")
+                            return features, labels
+                        else:
+                            print(f"Warning: Number of cached features ({len(features)}) doesn't match number of labels ({len(labels)}) and isn't a multiple. Re-extracting...")
+                            return extract_and_save_features(
+                                feature_extractor, paths, labels, preprocess_fn,
+                                model_name, features_save_path, apply_augmentation
+                            )
+                    elif len(features) != len(labels):
+                        print(f"Warning: Number of cached features ({len(features)}) doesn't match number of labels ({len(labels)}). Re-extracting...")
+                        return extract_and_save_features(
+                            feature_extractor, paths, labels, preprocess_fn,
+                            model_name, features_save_path, apply_augmentation
+                        )
                     return features, labels
                 return features
 
             else:
                 print(f"Unsupported feature file extension: {features_save_path}. Re-extracting features...")
-                return extract_and_save_features(feature_extractor, paths, labels, preprocess_fn, model_name,
-                                                 features_save_path)
+                return extract_and_save_features(
+                    feature_extractor, paths, labels, preprocess_fn,
+                    model_name, features_save_path, apply_augmentation
+                )
 
         except Exception as e:
             print(f"Error loading cached features: {e}. Re-extracting...")
-            return extract_and_save_features(feature_extractor, paths, labels, preprocess_fn, model_name,
-                                             features_save_path)
+            return extract_and_save_features(
+                feature_extractor, paths, labels, preprocess_fn,
+                model_name, features_save_path, apply_augmentation
+            )
 
-        # Se chegou aqui, o arquivo não existe ou houve problema no carregamento
-    return extract_and_save_features(feature_extractor, paths, labels, preprocess_fn, model_name, features_save_path)
+    # If we reach here, the file doesn't exist or there was a problem loading it
+    print(f"No cached features found at {features_save_path}. Extracting...")
+    return extract_and_save_features(
+        feature_extractor, paths, labels, preprocess_fn,
+        model_name, features_save_path, apply_augmentation
+    )
 
 
 def augment_features_with_balanced_sampling(features, labels, target_count=None):
@@ -604,9 +984,6 @@ def augment_features_with_balanced_sampling(features, labels, target_count=None)
             # First include all original samples
             aug_features = list(cls_features)
             aug_labels = list(cls_labels)
-
-            # Then add synthetic samples until reaching target count
-            samples_needed = target_count - len(cls_indices)
 
             # Use random oversampling with small Gaussian noise
             while len(aug_features) < target_count:
@@ -778,7 +1155,7 @@ def train_and_evaluate_classical_model(train_features, train_labels,
     return model, evaluation_results
 
 
-def run_kfold_feature_extraction(all_paths, all_labels, result_dir, class_names=None):
+def run_kfold_feature_extraction(all_paths, all_labels, dirs, class_names=None):
     """
     Run feature extraction for each fold of k-fold cross-validation.
     Extracts features separately for each fold to avoid data leakage.
@@ -786,7 +1163,7 @@ def run_kfold_feature_extraction(all_paths, all_labels, result_dir, class_names=
     Args:
         all_paths (numpy.array): All image paths.
         all_labels (numpy.array): All labels.
-        result_dir (str): Directory to save results.
+        dirs (dict): Directory to save results.
         class_names (list, optional): List of class names.
 
     Returns:
@@ -796,8 +1173,8 @@ def run_kfold_feature_extraction(all_paths, all_labels, result_dir, class_names=
     from config import NUM_KFOLDS, NUM_ITERATIONS
 
     # Create feature extraction directory
-    features_dir = os.path.join(result_dir, "features_by_fold")
-    os.makedirs(features_dir, exist_ok=True)
+    features_by_fold_dir = dirs['features_by_fold']
+    os.makedirs(features_by_fold_dir, exist_ok=True)
 
     # Define preprocessing function
     preprocess_fn = None
@@ -810,10 +1187,10 @@ def run_kfold_feature_extraction(all_paths, all_labels, result_dir, class_names=
             visualize=False
         )
 
-    # Get feature extractor model
     feature_extractor, _ = get_feature_extractor_model(
         model_name=CNN_MODEL,
-        fine_tune=USE_FINE_TUNING
+        fine_tune=USE_FINE_TUNING,
+        save_path=dirs['extractor']  # Use the path from the directory structure
     )
 
     # Initialize results dictionary
@@ -828,7 +1205,7 @@ def run_kfold_feature_extraction(all_paths, all_labels, result_dir, class_names=
         print(f"{'=' * 50}")
 
         # Create iteration directory
-        iter_dir = os.path.join(features_dir, f"iteration_{iteration + 1}")
+        iter_dir = os.path.join(features_by_fold_dir, f"iteration_{iteration + 1}")
         os.makedirs(iter_dir, exist_ok=True)
 
         # Initialize stratified k-fold
@@ -844,9 +1221,9 @@ def run_kfold_feature_extraction(all_paths, all_labels, result_dir, class_names=
             stratify_labels = all_labels
 
         # Run each fold
-        for fold, (train_idx, val_idx) in enumerate(skf.split(all_paths, stratify_labels)):
+        for fold, (train_idx, val_idx) in enumerate(skf.split(all_paths, stratify_labels), 1):
             print(f"\n{'=' * 40}")
-            print(f"Extracting features for Iteration {iteration + 1}, Fold {fold + 1}/{NUM_KFOLDS}")
+            print(f"Extracting features for Iteration {iteration}, Fold {fold}/{NUM_KFOLDS}")
             print(f"{'=' * 40}")
 
             # Split data
@@ -854,8 +1231,8 @@ def run_kfold_feature_extraction(all_paths, all_labels, result_dir, class_names=
             train_labels, val_labels = all_labels[train_idx], all_labels[val_idx]
 
             # Paths for saving features
-            train_features_path = os.path.join(iter_dir, f"train_features_fold_{fold + 1}.npz")
-            val_features_path = os.path.join(iter_dir, f"val_features_fold_{fold + 1}.npz")
+            train_features_path = os.path.join(iter_dir, f"train_features_fold_{fold}.npz")
+            val_features_path = os.path.join(iter_dir, f"val_features_fold_{fold}.npz")
 
             # Extract features for this fold
             train_features, train_labels_out = load_or_extract_features(
@@ -878,7 +1255,7 @@ def run_kfold_feature_extraction(all_paths, all_labels, result_dir, class_names=
 
             # Store fold information
             fold_info = {
-                'fold': fold + 1,
+                'fold': fold,
                 'train_features_path': train_features_path,
                 'val_features_path': val_features_path,
                 'train_indices': train_idx,
@@ -886,7 +1263,7 @@ def run_kfold_feature_extraction(all_paths, all_labels, result_dir, class_names=
             }
             iteration_folds.append(fold_info)
 
-            print(f"Fold {fold + 1} feature extraction complete.")
+            print(f"Fold {fold} feature extraction complete.")
             print(f"Training features shape: {train_features.shape}")
             print(f"Validation features shape: {val_features.shape}")
 
@@ -894,16 +1271,18 @@ def run_kfold_feature_extraction(all_paths, all_labels, result_dir, class_names=
             del train_features, val_features, train_labels_out, val_labels_out
             gc.collect()
 
-        # Store iteration information
+            # Store iteration information
         fold_features['iterations'].append({
-            'iteration': iteration + 1,
+            'iteration': iteration,
             'folds': iteration_folds
         })
+
+        print("\nFeature extraction for all folds completed successfully.")
 
     print("\nFeature extraction for all folds completed successfully.")
 
     # Save fold information
-    fold_info_path = os.path.join(features_dir, "fold_features_info.json")
+    fold_info_path = os.path.join(features_by_fold_dir, "fold_features_info.json")
     import json
     with open(fold_info_path, 'w') as f:
         # Convert numpy arrays to lists for JSON serialization
@@ -923,7 +1302,7 @@ def run_model_training_by_fold(fold_features, result_dir, tune_hyperparams=True,
     Train classical models using pre-extracted features for each fold.
 
     Args:
-        fold_features (dict): Dictionary with fold-specific feature paths
+        fold_features (dict): Dictionary with fold-specific feature paths from run_kfold_feature_extraction
         result_dir (str): Directory to save results
         tune_hyperparams (bool): Whether to tune hyperparameters
         class_names (list, optional): List of class names
@@ -948,19 +1327,21 @@ def run_model_training_by_fold(fold_features, result_dir, tune_hyperparams=True,
         'hyperparameters': None
     }
 
+    base_dir = result_dir
+
     # Process each iteration
     for iteration_data in fold_features['iterations']:
         iteration = iteration_data['iteration']
         folds = iteration_data['folds']
 
         print(f"\n{'=' * 50}")
-        print(f"Training Models: Iteration {iteration}/{len(fold_features['iterations'])}")
+        print(f"Training Models: Iteration {iteration+1}/{len(fold_features['iterations'])}")
         print(f"{'=' * 50}")
 
-        # Create iteration directory
-        iter_dir = os.path.join(result_dir, f"iteration_{iteration}")
+        iter_dir = os.path.join(base_dir, f"iteration_{iteration+1}")
+        iter_plots_dir = os.path.join(iter_dir, "plots")
         os.makedirs(iter_dir, exist_ok=True)
-        os.makedirs(os.path.join(iter_dir, "plots"), exist_ok=True)
+        os.makedirs(iter_plots_dir, exist_ok=True)
 
         # List to store evaluation results for this iteration
         fold_results = []
@@ -976,17 +1357,18 @@ def run_model_training_by_fold(fold_features, result_dir, tune_hyperparams=True,
             val_features_path = fold_data['val_features_path']
 
             print(f"\n{'=' * 40}")
-            print(f"Training: Iteration {iteration}, Fold {fold}/{len(folds)}")
+            print(f"Training: Iteration {iteration+1}, Fold {fold}/{len(folds)}")
             print(f"{'=' * 40}")
 
-            # Create fold directory
             fold_dir = os.path.join(iter_dir, f"fold_{fold}")
+            fold_models_dir = os.path.join(fold_dir, "models")
+            fold_plots_dir = os.path.join(fold_dir, "plots")
             os.makedirs(fold_dir, exist_ok=True)
-            os.makedirs(os.path.join(fold_dir, "plots"), exist_ok=True)
-            os.makedirs(os.path.join(fold_dir, "models"), exist_ok=True)
+            os.makedirs(fold_models_dir, exist_ok=True)
+            os.makedirs(fold_plots_dir, exist_ok=True)
 
             # Model save path
-            model_save_path = os.path.join(fold_dir, "models", f"{CLASSICAL_CLASSIFIER_MODEL.lower()}_model.joblib")
+            model_save_path = os.path.join(fold_models_dir, f"{CLASSICAL_CLASSIFIER_MODEL.lower()}_model.joblib")
 
             # Load features
             print(f"Loading training features from: {train_features_path}")
@@ -1627,7 +2009,7 @@ def train_final_feature_extraction_model(all_features, all_labels, best_hyperpar
     print("=" * 60)
 
     # Create final model directory
-    final_model_dir = os.path.join(result_dir, "final_model")
+    final_model_dir = os.path.join(result_dir, CLASSICAL_CLASSIFIER_MODEL.lower(), "final_model")
     os.makedirs(final_model_dir, exist_ok=True)
     os.makedirs(os.path.join(final_model_dir, "plots"), exist_ok=True)
 
@@ -1648,8 +2030,9 @@ def train_final_feature_extraction_model(all_features, all_labels, best_hyperpar
 
         # Path for combined features
         combined_features_path = os.path.join(
-            final_model_dir,
-            "combined_features.npz"
+            result_dir,
+            "features",
+            "training_features.npz"
         )
 
         # Extract features from all data
@@ -1787,8 +2170,14 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
     setup_gpu_memory()
 
     # Create result directories
-    result_dir = create_result_directories()
-    print(f"Results will be saved to: {result_dir}")
+    dirs = create_feature_extraction_directories(
+        base_dir=RESULTS_DIR,
+        cnn_model_name=CNN_MODEL,
+        classifier_name=CLASSICAL_CLASSIFIER_MODEL,
+        num_iterations=NUM_ITERATIONS,
+        num_folds=NUM_KFOLDS
+    )
+    print(f"Results will be saved to: {dirs['base']}")
 
     # Load data paths and labels
     train_paths, train_labels = load_paths_labels(train_files_path)
@@ -1806,15 +2195,10 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
             visualize=VISUALIZE
         )
 
-    # Paths para salvar modelos e features
-    extractor_save_path = os.path.join(
-        result_dir,
-        "models",
-        f"{CNN_MODEL.lower()}_feature_extractor.h5"
-    )
+    extractor_path = dirs['extractor']
 
-    # Obter modelo de extração de features
-    feature_extractor, from_pretrained = get_feature_extractor_from_cnn(extractor_save_path)
+    # Get feature extractor model
+    feature_extractor, from_pretrained = get_feature_extractor_from_cnn(extractor_path)
 
     # Diferentes métodos dependendo se estamos usando validação cruzada
     if use_kfold:
@@ -1828,37 +2212,39 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
         fold_features = run_kfold_feature_extraction(
             all_paths=all_paths,
             all_labels=all_labels,
-            result_dir=result_dir,
+            dirs=dirs,
             class_names=class_names
         )
 
         # Treina modelos clássicos para cada fold usando as features extraídas
         cv_results = run_model_training_by_fold(
             fold_features=fold_features,
-            result_dir=result_dir,
             tune_hyperparams=tune_hyperparams,
+            result_dir=dirs['classifiers'][CLASSICAL_CLASSIFIER_MODEL]['base'],
             class_names=class_names
         )
 
         # Treina modelo final com todos os dados usando os melhores hiperparâmetros
-        final_model, final_model_dir = train_final_feature_extraction_model(
-            all_features=None,  # Será carregado dentro da função
-            all_labels=None,  # Será carregado dentro da função
-            best_hyperparameters=cv_results['best_hyperparameters'],
-            result_dir=result_dir,
-            class_names=class_names,
-            feature_extractor=feature_extractor,
-            all_paths=all_paths,
-            all_labels_orig=all_labels,  # Nome correto do parâmetro
-            preprocess_fn=preprocess_fn
-        )
+        try:
+            print("Iniciando treinamento do modelo final...")
+            final_model, final_model_dir = train_final_feature_extraction_model(
+                all_features=None,
+                all_labels=None,
+                best_hyperparameters=cv_results['best_hyperparameters'],
+                result_dir=dirs['base'],
+                class_names=class_names,
+                feature_extractor=feature_extractor,
+                all_paths=all_paths,
+                all_labels_orig=all_labels,
+                preprocess_fn=preprocess_fn
+            )
+            print(f"Modelo final treinado e salvo em: {final_model_dir}")
+        except Exception as e:
+            import traceback
+            print(f"ERRO no treinamento do modelo final: {e}")
+            traceback.print_exc()
 
-        # Extrai features de teste e avalia modelo final
-        test_features_save_path = os.path.join(
-            result_dir,
-            "features",
-            "test_features.npz"
-        )
+        test_features_path = dirs['test_features']
 
         test_features, test_labels_out = load_or_extract_features(
             feature_extractor=feature_extractor,
@@ -1866,7 +2252,7 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
             labels=test_labels,
             preprocess_fn=preprocess_fn,
             model_name=CNN_MODEL,
-            features_save_path=test_features_save_path
+            features_save_path=test_features_path
         )
 
         test_features = test_features.astype(np.float32)
@@ -1882,7 +2268,11 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
         print("\nTest Set Classification Report (Final Model):")
         print(classification_report(test_labels_out, test_pred))
 
-        # Plota matriz de confusão
+        # Get final model directory from classifier structure
+        classifier_dirs = dirs['classifiers'][CLASSICAL_CLASSIFIER_MODEL]
+        final_model_dir = classifier_dirs['final_model']
+
+        # Plot confusion matrix
         cm_plot_path = os.path.join(final_model_dir, "plots", "final_model_test_confusion_matrix.png")
         plot_confusion_matrix(test_labels_out, test_pred, class_names, cm_plot_path)
 
@@ -1924,38 +2314,23 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
         print("Extracting features without cross-validation...")
 
         # Paths para salvar features
-        train_features_save_path = os.path.join(
-            result_dir,
-            "features",
-            "train_features.npz"
-        )
+        train_features_path = os.path.join(dirs['features'], "train_features.npz")
+        val_features_path = os.path.join(dirs['features'], "val_features.npz")
+        test_features_path = dirs['test_features']
 
-        val_features_save_path = os.path.join(
-            result_dir,
-            "features",
-            "val_features.npz"
-        )
-
-        test_features_save_path = os.path.join(
-            result_dir,
-            "features",
-            "test_features.npz"
-        )
-
-        classifier_save_path = os.path.join(
-            result_dir,
-            "models",
+        classifier_path = os.path.join(
+            dirs['classifiers'][CLASSICAL_CLASSIFIER_MODEL]['models'],
             f"{CLASSICAL_CLASSIFIER_MODEL.lower()}_classifier.joblib"
         )
 
-        # Extrai features
+        # Extract features
         train_features, train_labels_out = load_or_extract_features(
             feature_extractor=feature_extractor,
             paths=train_paths,
             labels=train_labels,
             preprocess_fn=preprocess_fn,
             model_name=CNN_MODEL,
-            features_save_path=train_features_save_path
+            features_save_path=train_features_path
         )
 
         val_features, val_labels_out = load_or_extract_features(
@@ -1964,7 +2339,7 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
             labels=val_labels,
             preprocess_fn=preprocess_fn,
             model_name=CNN_MODEL,
-            features_save_path=val_features_save_path
+            features_save_path=val_features_path
         )
 
         # Converte para float32 se necessário
@@ -2043,8 +2418,8 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
             use_pca=(NUM_PCA_COMPONENTS is not None),
             n_components=NUM_PCA_COMPONENTS,
             tune_hyperparams=tune_hyperparams,
-            result_dir=result_dir,
-            model_save_path=classifier_save_path,
+            result_dir=dirs['classifiers'][CLASSICAL_CLASSIFIER_MODEL]['base'],
+            model_save_path=classifier_path,
             class_weights=preprocessing_info.get("class_weights", None)
         )
 
@@ -2055,7 +2430,7 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
             labels=test_labels,
             preprocess_fn=preprocess_fn,
             model_name=CNN_MODEL,
-            features_save_path=test_features_save_path
+            features_save_path=test_features_path
         )
 
         test_features = test_features.astype(np.float32)
@@ -2096,7 +2471,8 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
                 test_report["class_roc_auc"] = roc_auc
 
                 # Plota curvas ROC
-                roc_plot_path = os.path.join(result_dir, "plots", "roc_curves.png")
+                roc_plot_path = os.path.join(dirs['classifiers'][CLASSICAL_CLASSIFIER_MODEL]['plots'],
+                                             "roc_curves.png")
                 plot_roc_curves(model, test_features, test_labels_out, class_names, roc_plot_path)
             else:
                 # Classificação binária
@@ -2107,11 +2483,13 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
                 test_report["roc_auc"] = roc_auc
 
         # Plota matriz de confusão
-        cm_plot_path = os.path.join(result_dir, "plots", "test_confusion_matrix.png")
+        cm_plot_path = os.path.join(dirs['classifiers'][CLASSICAL_CLASSIFIER_MODEL]['plots'],
+                                    "test_confusion_matrix.png")
         plot_confusion_matrix(test_labels_out, test_pred, class_names, cm_plot_path)
 
         # Salva resultados
-        with open(os.path.join(result_dir, "test_results.txt"), "w") as f:
+        with open(os.path.join(dirs['classifiers'][CLASSICAL_CLASSIFIER_MODEL]['base'],
+                               "test_results.txt"), "w") as f:
             f.write(f"Feature Extractor: {CNN_MODEL}\n")
             f.write(f"Classifier: {CLASSICAL_CLASSIFIER_MODEL}\n")
             f.write(f"Use Fine-tuning: {USE_FINE_TUNING}\n")

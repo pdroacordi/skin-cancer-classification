@@ -30,7 +30,7 @@ def get_classifier(classifier_name, random_state=42):
     """
     if classifier_name == "RandomForest":
         return RandomForestClassifier(
-            n_estimators=100,
+            n_estimators=200,
             max_depth=None,
             min_samples_split=2,
             min_samples_leaf=1,

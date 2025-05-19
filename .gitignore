@@ -1,9 +1,8 @@
 /results/**/models/
 /results/**/features/
-/results/**/**/logs/
-*.h5
-*.joblib
-
+/results/**/logs/
+/results/**/features_by_fold/
+/results/**/final_model/
 
 # Ignorar arquivos compilados do Python
 __pycache__/

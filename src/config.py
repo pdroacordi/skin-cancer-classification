@@ -1,5 +1,5 @@
 NUM_CLASSES = 7  # Number of skin lesion classes in HAM10000
-BATCH_SIZE = 16  # Smaller batch size to prevent memory issues
+BATCH_SIZE = 8  # Smaller batch size to prevent memory issues
 NUM_EPOCHS = 100
 IMG_SIZE = (299, 299, 3)  # Width, height, channels
 
@@ -33,7 +33,7 @@ NUM_ITERATIONS = 2               # Number of iterations for cross-validation
 NUM_PCA_COMPONENTS = None        # PCA components for dimensionality reduction (None = no PCA)
 
 # Model selection
-CNN_MODEL                  = 'Inception'         # Options: 'VGG19', 'Inception', 'ResNet', 'Xception'
+CNN_MODEL                  = 'VGG19'         # Options: 'VGG19', 'Inception', 'ResNet', 'Xception'
 CLASSICAL_CLASSIFIER_MODEL = 'RandomForest'  # Options: 'RandomForest', 'XGBoost', 'AdaBoost', 'ExtraTrees', 'SVM'
 CLASSIFIER_APPROACH        = "class_weight"  # Options: "class_weight", "smote", "undersampling", "hybrid"
 
