@@ -457,7 +457,7 @@ def main():
             use_kfold=args.cv,
             fine_tune_extractor=USE_FINE_TUNING,
             balance_features=USE_DATA_AUGMENTATION,
-            tune_hyperparams=True,
+            tune_hyperparams=False,
             class_names=class_names
         )
 
