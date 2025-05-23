@@ -1,0 +1,37 @@
+================================================================================
+RELATÓRIO DE ANÁLISE DE RESULTADOS
+Classificação de Câncer de Pele - HAM10000
+================================================================================
+
+1. ESTATÍSTICAS GERAIS
+----------------------------------------
+Total de experimentos: 19
+Experimentos CNN: 4
+Experimentos Feature Extraction: 15
+
+Experimentos CNN válidos: 4
+Experimentos FE válidos: 0
+
+2. RANKING COMPLETO
+----------------------------------------
+Ranking completo por F1-Score:
+Pos. | Modelo                          | F1     | Acc    | Prec   | Rec    | Tipo
+-------------------------------------------------------------------------------------
+  1. | CNN-ResNet                     | 0.7451 | 0.8656 | 0.7745 | 0.7445 | CNN
+  2. | CNN-VGG19                      | 0.7164 | 0.8479 | 0.7591 | 0.7002 | CNN
+  3. | CNN-Xception                   | 0.7039 | 0.8422 | 0.7499 | 0.6841 | CNN
+  4. | CNN-Inception                  | 0.6065 | 0.7998 | 0.6867 | 0.5826 | CNN
+
+3. ANÁLISE POR TIPO
+----------------------------------------
+CNN End-to-End (4 modelos):
+  Média F1: 0.6930 ± 0.0521
+  Melhor F1: 0.7451
+  Pior F1: 0.6065
+
+5. CONCLUSÕES
+----------------------------------------
+• Melhor modelo geral: CNN-ResNet (F1: 0.7451)
+• Melhor arquitetura CNN: ResNet (F1 médio: 0.7451)
+
+================================================================================
