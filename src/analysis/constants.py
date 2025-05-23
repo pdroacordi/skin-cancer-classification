@@ -27,5 +27,5 @@ COLOR_PALETTE: Dict[str, str] = {
 # Figures --------------------------------------------------------------------
 DEFAULT_FIGSIZE = (14, 8)
 DEFAULT_DPI = 300
-OUTPUT_DIR = Path(".\\figures")  # changed via CLI flag if needed
+OUTPUT_DIR = Path("../../figures")  # changed via CLI flag if needed
 OUTPUT_DIR.mkdir(exist_ok=True)
