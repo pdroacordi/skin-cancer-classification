@@ -13,3 +13,4 @@ tqdm
 pywavelets
 segmentation-models==1.0.1
 tensorflow-addons
+click

@@ -1,0 +1,1371 @@
+.
+├── README.md
+├── requirements.txt
+├── res
+│   ├── test_files.txt
+│   ├── train_files.txt
+│   └── val_files.txt
+├── results
+│   ├── cnn_classifier_Inception_use_augmentation_use_data_preprocess_
+│   │   ├── final_model
+│   │   │   ├── evaluation_results.txt
+│   │   │   ├── final_cnn_model.h5
+│   │   │   └── plots
+│   │   ├── iteration_1
+│   │   │   ├── fold_1
+│   │   │   │   └── plots
+│   │   │   ├── fold_2
+│   │   │   │   └── plots
+│   │   │   ├── fold_3
+│   │   │   │   └── plots
+│   │   │   ├── fold_4
+│   │   │   │   └── plots
+│   │   │   ├── fold_5
+│   │   │   │   └── plots
+│   │   │   ├── iteration_results.txt
+│   │   │   ├── models
+│   │   │   │   ├── inception_classifier_ft_True_preproc_False_iter_1_fold_1.h5
+│   │   │   │   ├── inception_classifier_ft_True_preproc_False_iter_1_fold_2.h5
+│   │   │   │   ├── inception_classifier_ft_True_preproc_False_iter_1_fold_3.h5
+│   │   │   │   ├── inception_classifier_ft_True_preproc_False_iter_1_fold_4.h5
+│   │   │   │   └── inception_classifier_ft_True_preproc_False_iter_1_fold_5.h5
+│   │   │   └── plots
+│   │   ├── iteration_2
+│   │   │   ├── fold_1
+│   │   │   │   └── plots
+│   │   │   ├── fold_2
+│   │   │   │   └── plots
+│   │   │   ├── fold_3
+│   │   │   │   └── plots
+│   │   │   ├── fold_4
+│   │   │   │   └── plots
+│   │   │   ├── fold_5
+│   │   │   │   └── plots
+│   │   │   ├── iteration_results.txt
+│   │   │   ├── models
+│   │   │   │   ├── inception_classifier_ft_True_preproc_False_iter_2_fold_1.h5
+│   │   │   │   ├── inception_classifier_ft_True_preproc_False_iter_2_fold_2.h5
+│   │   │   │   ├── inception_classifier_ft_True_preproc_False_iter_2_fold_3.h5
+│   │   │   │   ├── inception_classifier_ft_True_preproc_False_iter_2_fold_4.h5
+│   │   │   │   └── inception_classifier_ft_True_preproc_False_iter_2_fold_5.h5
+│   │   │   └── plots
+│   │   ├── models
+│   │   ├── overall_results.txt
+│   │   └── plots
+│   ├── cnn_classifier_ResNet_use_augmentation_use_data_preprocess_
+│   │   ├── final_model
+│   │   │   ├── evaluation_results.txt
+│   │   │   ├── final_cnn_model.h5
+│   │   │   └── plots
+│   │   ├── iteration_1
+│   │   │   ├── fold_1
+│   │   │   │   └── plots
+│   │   │   ├── fold_2
+│   │   │   │   └── plots
+│   │   │   ├── fold_3
+│   │   │   │   └── plots
+│   │   │   ├── fold_4
+│   │   │   │   └── plots
+│   │   │   ├── fold_5
+│   │   │   │   └── plots
+│   │   │   ├── iteration_results.txt
+│   │   │   ├── models
+│   │   │   │   ├── resnet_classifier_ft_True_preproc_False_iter_1_fold_1.h5
+│   │   │   │   ├── resnet_classifier_ft_True_preproc_False_iter_1_fold_2.h5
+│   │   │   │   ├── resnet_classifier_ft_True_preproc_False_iter_1_fold_3.h5
+│   │   │   │   ├── resnet_classifier_ft_True_preproc_False_iter_1_fold_4.h5
+│   │   │   │   └── resnet_classifier_ft_True_preproc_False_iter_1_fold_5.h5
+│   │   │   └── plots
+│   │   ├── iteration_2
+│   │   │   ├── fold_1
+│   │   │   │   └── plots
+│   │   │   ├── fold_2
+│   │   │   │   └── plots
+│   │   │   ├── fold_3
+│   │   │   │   └── plots
+│   │   │   ├── fold_4
+│   │   │   │   └── plots
+│   │   │   ├── fold_5
+│   │   │   │   └── plots
+│   │   │   ├── iteration_results.txt
+│   │   │   ├── models
+│   │   │   │   ├── resnet_classifier_ft_True_preproc_False_iter_2_fold_1.h5
+│   │   │   │   ├── resnet_classifier_ft_True_preproc_False_iter_2_fold_2.h5
+│   │   │   │   ├── resnet_classifier_ft_True_preproc_False_iter_2_fold_3.h5
+│   │   │   │   ├── resnet_classifier_ft_True_preproc_False_iter_2_fold_4.h5
+│   │   │   │   └── resnet_classifier_ft_True_preproc_False_iter_2_fold_5.h5
+│   │   │   └── plots
+│   │   ├── models
+│   │   ├── overall_results.txt
+│   │   └── plots
+│   ├── cnn_classifier_VGG19_use_augmentation_
+│   │   ├── final_model
+│   │   │   ├── evaluation_results.txt
+│   │   │   ├── final_cnn_model.h5
+│   │   │   └── plots
+│   │   ├── iteration_1
+│   │   │   ├── fold_1
+│   │   │   │   └── plots
+│   │   │   ├── fold_2
+│   │   │   │   └── plots
+│   │   │   ├── fold_3
+│   │   │   │   └── plots
+│   │   │   ├── fold_4
+│   │   │   │   └── plots
+│   │   │   ├── fold_5
+│   │   │   │   └── plots
+│   │   │   ├── iteration_results.txt
+│   │   │   ├── models
+│   │   │   │   ├── vgg19_classifier_ft_True_preproc_False_iter_1_fold_1.h5
+│   │   │   │   ├── vgg19_classifier_ft_True_preproc_False_iter_1_fold_2.h5
+│   │   │   │   ├── vgg19_classifier_ft_True_preproc_False_iter_1_fold_3.h5
+│   │   │   │   ├── vgg19_classifier_ft_True_preproc_False_iter_1_fold_4.h5
+│   │   │   │   └── vgg19_classifier_ft_True_preproc_False_iter_1_fold_5.h5
+│   │   │   └── plots
+│   │   ├── iteration_2
+│   │   │   ├── fold_1
+│   │   │   │   └── plots
+│   │   │   ├── fold_2
+│   │   │   │   └── plots
+│   │   │   ├── fold_3
+│   │   │   │   └── plots
+│   │   │   ├── fold_4
+│   │   │   │   └── plots
+│   │   │   ├── fold_5
+│   │   │   │   └── plots
+│   │   │   ├── iteration_results.txt
+│   │   │   ├── models
+│   │   │   │   ├── vgg19_classifier_ft_True_preproc_False_iter_2_fold_1.h5
+│   │   │   │   ├── vgg19_classifier_ft_True_preproc_False_iter_2_fold_2.h5
+│   │   │   │   ├── vgg19_classifier_ft_True_preproc_False_iter_2_fold_3.h5
+│   │   │   │   ├── vgg19_classifier_ft_True_preproc_False_iter_2_fold_4.h5
+│   │   │   │   └── vgg19_classifier_ft_True_preproc_False_iter_2_fold_5.h5
+│   │   │   └── plots
+│   │   ├── models
+│   │   ├── overall_results.txt
+│   │   └── plots
+│   ├── cnn_classifier_Xception_use_augmentation_use_data_preprocess_
+│   │   ├── final_model
+│   │   │   ├── evaluation_results.txt
+│   │   │   ├── final_cnn_model.h5
+│   │   │   └── plots
+│   │   ├── iteration_1
+│   │   │   ├── fold_1
+│   │   │   │   └── plots
+│   │   │   ├── fold_2
+│   │   │   │   └── plots
+│   │   │   ├── fold_3
+│   │   │   │   └── plots
+│   │   │   ├── fold_4
+│   │   │   │   └── plots
+│   │   │   ├── fold_5
+│   │   │   │   └── plots
+│   │   │   ├── iteration_results.txt
+│   │   │   ├── models
+│   │   │   │   ├── xception_classifier_ft_True_preproc_False_iter_1_fold_1.h5
+│   │   │   │   ├── xception_classifier_ft_True_preproc_False_iter_1_fold_2.h5
+│   │   │   │   ├── xception_classifier_ft_True_preproc_False_iter_1_fold_3.h5
+│   │   │   │   ├── xception_classifier_ft_True_preproc_False_iter_1_fold_4.h5
+│   │   │   │   └── xception_classifier_ft_True_preproc_False_iter_1_fold_5.h5
+│   │   │   └── plots
+│   │   ├── iteration_2
+│   │   │   ├── fold_1
+│   │   │   │   └── plots
+│   │   │   ├── fold_2
+│   │   │   │   └── plots
+│   │   │   ├── fold_3
+│   │   │   │   └── plots
+│   │   │   ├── fold_4
+│   │   │   │   └── plots
+│   │   │   ├── fold_5
+│   │   │   │   └── plots
+│   │   │   ├── iteration_results.txt
+│   │   │   ├── models
+│   │   │   │   ├── xception_classifier_ft_True_preproc_False_iter_2_fold_1.h5
+│   │   │   │   ├── xception_classifier_ft_True_preproc_False_iter_2_fold_2.h5
+│   │   │   │   ├── xception_classifier_ft_True_preproc_False_iter_2_fold_3.h5
+│   │   │   │   ├── xception_classifier_ft_True_preproc_False_iter_2_fold_4.h5
+│   │   │   │   └── xception_classifier_ft_True_preproc_False_iter_2_fold_5.h5
+│   │   │   └── plots
+│   │   ├── models
+│   │   ├── overall_results.txt
+│   │   └── plots
+│   ├── feature_extraction_Inception_use_augmentation_
+│   │   ├── adaboost
+│   │   │   ├── final_model
+│   │   │   │   ├── final_ml_model.joblib
+│   │   │   │   ├── final_model_test_results.txt
+│   │   │   │   └── plots
+│   │   │   ├── iteration_1
+│   │   │   │   ├── fold_1
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_2
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_3
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_4
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_5
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── iteration_results.txt
+│   │   │   │   ├── models
+│   │   │   │   └── plots
+│   │   │   ├── iteration_2
+│   │   │   │   ├── fold_1
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_2
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_3
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_4
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_5
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── iteration_results.txt
+│   │   │   │   ├── models
+│   │   │   │   └── plots
+│   │   │   ├── overall_results.txt
+│   │   │   └── plots
+│   │   ├── extratrees
+│   │   │   ├── final_model
+│   │   │   │   ├── final_ml_model.joblib
+│   │   │   │   ├── final_model_test_results.txt
+│   │   │   │   └── plots
+│   │   │   ├── iteration_1
+│   │   │   │   ├── fold_1
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_2
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_3
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_4
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_5
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── iteration_results.txt
+│   │   │   │   ├── models
+│   │   │   │   └── plots
+│   │   │   ├── iteration_2
+│   │   │   │   ├── fold_1
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_2
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_3
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_4
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_5
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── iteration_results.txt
+│   │   │   │   ├── models
+│   │   │   │   └── plots
+│   │   │   ├── overall_results.txt
+│   │   │   └── plots
+│   │   ├── features
+│   │   │   ├── test_features.npz
+│   │   │   └── training_features.npz
+│   │   ├── features_by_fold
+│   │   │   ├── fold_features_info.json
+│   │   │   ├── iteration_1
+│   │   │   │   ├── train_features_fold_1.npz
+│   │   │   │   ├── train_features_fold_2.npz
+│   │   │   │   ├── train_features_fold_3.npz
+│   │   │   │   ├── train_features_fold_4.npz
+│   │   │   │   ├── train_features_fold_5.npz
+│   │   │   │   ├── val_features_fold_1.npz
+│   │   │   │   ├── val_features_fold_2.npz
+│   │   │   │   ├── val_features_fold_3.npz
+│   │   │   │   ├── val_features_fold_4.npz
+│   │   │   │   └── val_features_fold_5.npz
+│   │   │   └── iteration_2
+│   │   │       ├── train_features_fold_1.npz
+│   │   │       ├── train_features_fold_2.npz
+│   │   │       ├── train_features_fold_3.npz
+│   │   │       ├── train_features_fold_4.npz
+│   │   │       ├── train_features_fold_5.npz
+│   │   │       ├── val_features_fold_1.npz
+│   │   │       ├── val_features_fold_2.npz
+│   │   │       ├── val_features_fold_3.npz
+│   │   │       ├── val_features_fold_4.npz
+│   │   │       └── val_features_fold_5.npz
+│   │   ├── models
+│   │   │   └── inception_feature_extractor.h5
+│   │   ├── randomforest
+│   │   │   ├── final_model
+│   │   │   │   ├── final_ml_model.joblib
+│   │   │   │   ├── final_model_test_results.txt
+│   │   │   │   └── plots
+│   │   │   ├── iteration_1
+│   │   │   │   ├── fold_1
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_2
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_3
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_4
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_5
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── iteration_results.txt
+│   │   │   │   ├── models
+│   │   │   │   └── plots
+│   │   │   ├── iteration_2
+│   │   │   │   ├── fold_1
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_2
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_3
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_4
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_5
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── iteration_results.txt
+│   │   │   │   ├── models
+│   │   │   │   └── plots
+│   │   │   ├── overall_results.txt
+│   │   │   └── plots
+│   │   └── xgboost
+│   │       ├── final_model
+│   │       │   ├── final_ml_model.joblib
+│   │       │   ├── final_model_test_results.txt
+│   │       │   └── plots
+│   │       ├── iteration_1
+│   │       │   ├── fold_1
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── fold_2
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── fold_3
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── fold_4
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── fold_5
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── iteration_results.txt
+│   │       │   ├── models
+│   │       │   └── plots
+│   │       ├── iteration_2
+│   │       │   ├── fold_1
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── fold_2
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── fold_3
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── fold_4
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── fold_5
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── iteration_results.txt
+│   │       │   ├── models
+│   │       │   └── plots
+│   │       ├── overall_results.txt
+│   │       └── plots
+│   ├── feature_extraction_ResNet_use_augmentation_
+│   │   ├── adaboost
+│   │   │   ├── final_model
+│   │   │   │   ├── final_ml_model.joblib
+│   │   │   │   ├── final_model_test_results.txt
+│   │   │   │   └── plots
+│   │   │   ├── iteration_1
+│   │   │   │   ├── fold_1
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_2
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_3
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_4
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_5
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── iteration_results.txt
+│   │   │   │   ├── models
+│   │   │   │   └── plots
+│   │   │   ├── iteration_2
+│   │   │   │   ├── fold_1
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_2
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_3
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_4
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_5
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── iteration_results.txt
+│   │   │   │   ├── models
+│   │   │   │   └── plots
+│   │   │   ├── overall_results.txt
+│   │   │   └── plots
+│   │   ├── extratrees
+│   │   │   ├── final_model
+│   │   │   │   ├── final_ml_model.joblib
+│   │   │   │   ├── final_model_test_results.txt
+│   │   │   │   └── plots
+│   │   │   ├── iteration_1
+│   │   │   │   ├── fold_1
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_2
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_3
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_4
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_5
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── iteration_results.txt
+│   │   │   │   ├── models
+│   │   │   │   └── plots
+│   │   │   ├── iteration_2
+│   │   │   │   ├── fold_1
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_2
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_3
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_4
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_5
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── iteration_results.txt
+│   │   │   │   ├── models
+│   │   │   │   └── plots
+│   │   │   ├── overall_results.txt
+│   │   │   └── plots
+│   │   ├── features
+│   │   │   ├── test_features.npz
+│   │   │   └── training_features.npz
+│   │   ├── features_by_fold
+│   │   │   ├── fold_features_info.json
+│   │   │   ├── iteration_1
+│   │   │   │   ├── train_features_fold_1.npz
+│   │   │   │   ├── train_features_fold_2.npz
+│   │   │   │   ├── train_features_fold_3.npz
+│   │   │   │   ├── train_features_fold_4.npz
+│   │   │   │   ├── train_features_fold_5.npz
+│   │   │   │   ├── val_features_fold_1.npz
+│   │   │   │   ├── val_features_fold_2.npz
+│   │   │   │   ├── val_features_fold_3.npz
+│   │   │   │   ├── val_features_fold_4.npz
+│   │   │   │   └── val_features_fold_5.npz
+│   │   │   └── iteration_2
+│   │   │       ├── train_features_fold_1.npz
+│   │   │       ├── train_features_fold_2.npz
+│   │   │       ├── train_features_fold_3.npz
+│   │   │       ├── train_features_fold_4.npz
+│   │   │       ├── train_features_fold_5.npz
+│   │   │       ├── val_features_fold_1.npz
+│   │   │       ├── val_features_fold_2.npz
+│   │   │       ├── val_features_fold_3.npz
+│   │   │       ├── val_features_fold_4.npz
+│   │   │       └── val_features_fold_5.npz
+│   │   ├── models
+│   │   │   └── resnet_feature_extractor.h5
+│   │   ├── randomforest
+│   │   │   ├── final_model
+│   │   │   │   ├── final_ml_model.joblib
+│   │   │   │   ├── final_model_test_results.txt
+│   │   │   │   └── plots
+│   │   │   ├── iteration_1
+│   │   │   │   ├── fold_1
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_2
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_3
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_4
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_5
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── iteration_results.txt
+│   │   │   │   ├── models
+│   │   │   │   └── plots
+│   │   │   ├── iteration_2
+│   │   │   │   ├── fold_1
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_2
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_3
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_4
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_5
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── iteration_results.txt
+│   │   │   │   ├── models
+│   │   │   │   └── plots
+│   │   │   ├── overall_results.txt
+│   │   │   └── plots
+│   │   └── xgboost
+│   │       ├── final_model
+│   │       │   ├── final_ml_model.joblib
+│   │       │   ├── final_model_test_results.txt
+│   │       │   └── plots
+│   │       ├── iteration_1
+│   │       │   ├── fold_1
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── fold_2
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── fold_3
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── fold_4
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── fold_5
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── iteration_results.txt
+│   │       │   ├── models
+│   │       │   └── plots
+│   │       ├── iteration_2
+│   │       │   ├── fold_1
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── fold_2
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── fold_3
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── fold_4
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── fold_5
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── iteration_results.txt
+│   │       │   ├── models
+│   │       │   └── plots
+│   │       ├── overall_results.txt
+│   │       └── plots
+│   ├── feature_extraction_VGG19_use_augmentation_
+│   │   ├── adaboost
+│   │   │   ├── final_model
+│   │   │   │   ├── final_ml_model.joblib
+│   │   │   │   ├── final_model_test_results.txt
+│   │   │   │   └── plots
+│   │   │   ├── iteration_1
+│   │   │   │   ├── fold_1
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_2
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_3
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_4
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_5
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── iteration_results.txt
+│   │   │   │   ├── models
+│   │   │   │   └── plots
+│   │   │   ├── iteration_2
+│   │   │   │   ├── fold_1
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_2
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_3
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_4
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_5
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── adaboost_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── iteration_results.txt
+│   │   │   │   ├── models
+│   │   │   │   └── plots
+│   │   │   ├── overall_results.txt
+│   │   │   └── plots
+│   │   ├── extratrees
+│   │   │   ├── final_model
+│   │   │   │   ├── final_ml_model.joblib
+│   │   │   │   ├── final_model_test_results.txt
+│   │   │   │   └── plots
+│   │   │   ├── iteration_1
+│   │   │   │   ├── fold_1
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_2
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_3
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_4
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_5
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── iteration_results.txt
+│   │   │   │   ├── models
+│   │   │   │   └── plots
+│   │   │   ├── iteration_2
+│   │   │   │   ├── fold_1
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_2
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_3
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_4
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_5
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── extratrees_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── iteration_results.txt
+│   │   │   │   ├── models
+│   │   │   │   └── plots
+│   │   │   ├── overall_results.txt
+│   │   │   └── plots
+│   │   ├── features
+│   │   │   ├── test_features.npz
+│   │   │   └── training_features.npz
+│   │   ├── features_by_fold
+│   │   │   ├── fold_features_info.json
+│   │   │   ├── iteration_1
+│   │   │   │   ├── train_features_fold_1.npz
+│   │   │   │   ├── train_features_fold_2.npz
+│   │   │   │   ├── train_features_fold_3.npz
+│   │   │   │   ├── train_features_fold_4.npz
+│   │   │   │   ├── train_features_fold_5.npz
+│   │   │   │   ├── val_features_fold_1.npz
+│   │   │   │   ├── val_features_fold_2.npz
+│   │   │   │   ├── val_features_fold_3.npz
+│   │   │   │   ├── val_features_fold_4.npz
+│   │   │   │   └── val_features_fold_5.npz
+│   │   │   └── iteration_2
+│   │   │       ├── train_features_fold_1.npz
+│   │   │       ├── train_features_fold_2.npz
+│   │   │       ├── train_features_fold_3.npz
+│   │   │       ├── train_features_fold_4.npz
+│   │   │       ├── train_features_fold_5.npz
+│   │   │       ├── val_features_fold_1.npz
+│   │   │       ├── val_features_fold_2.npz
+│   │   │       ├── val_features_fold_3.npz
+│   │   │       ├── val_features_fold_4.npz
+│   │   │       └── val_features_fold_5.npz
+│   │   ├── models
+│   │   │   └── vgg19_feature_extractor.h5
+│   │   ├── randomforest
+│   │   │   ├── final_model
+│   │   │   │   ├── final_ml_model.joblib
+│   │   │   │   ├── final_model_test_results.txt
+│   │   │   │   └── plots
+│   │   │   ├── iteration_1
+│   │   │   │   ├── fold_1
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_2
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_3
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_4
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_5
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── iteration_results.txt
+│   │   │   │   ├── models
+│   │   │   │   └── plots
+│   │   │   ├── iteration_2
+│   │   │   │   ├── fold_1
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_2
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_3
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_4
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── fold_5
+│   │   │   │   │   ├── features
+│   │   │   │   │   ├── models
+│   │   │   │   │   │   └── randomforest_model.joblib
+│   │   │   │   │   └── plots
+│   │   │   │   ├── iteration_results.txt
+│   │   │   │   ├── models
+│   │   │   │   └── plots
+│   │   │   ├── overall_results.txt
+│   │   │   └── plots
+│   │   └── xgboost
+│   │       ├── final_model
+│   │       │   ├── final_ml_model.joblib
+│   │       │   ├── final_model_test_results.txt
+│   │       │   └── plots
+│   │       ├── iteration_1
+│   │       │   ├── fold_1
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── fold_2
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── fold_3
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── fold_4
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── fold_5
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── iteration_results.txt
+│   │       │   ├── models
+│   │       │   └── plots
+│   │       ├── iteration_2
+│   │       │   ├── fold_1
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── fold_2
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── fold_3
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── fold_4
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── fold_5
+│   │       │   │   ├── features
+│   │       │   │   ├── models
+│   │       │   │   │   └── xgboost_model.joblib
+│   │       │   │   └── plots
+│   │       │   ├── iteration_results.txt
+│   │       │   ├── models
+│   │       │   └── plots
+│   │       ├── overall_results.txt
+│   │       └── plots
+│   └── feature_extraction_Xception_use_augmentation_
+│       ├── adaboost
+│       │   ├── final_model
+│       │   │   ├── final_ml_model.joblib
+│       │   │   ├── final_model_test_results.txt
+│       │   │   └── plots
+│       │   ├── iteration_1
+│       │   │   ├── fold_1
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── adaboost_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── fold_2
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── adaboost_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── fold_3
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── adaboost_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── fold_4
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── adaboost_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── fold_5
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── adaboost_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── iteration_results.txt
+│       │   │   ├── models
+│       │   │   └── plots
+│       │   ├── iteration_2
+│       │   │   ├── fold_1
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── adaboost_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── fold_2
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── adaboost_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── fold_3
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── adaboost_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── fold_4
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── adaboost_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── fold_5
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── adaboost_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── iteration_results.txt
+│       │   │   ├── models
+│       │   │   └── plots
+│       │   ├── overall_results.txt
+│       │   └── plots
+│       ├── extratrees
+│       │   ├── final_model
+│       │   │   ├── final_ml_model.joblib
+│       │   │   ├── final_model_test_results.txt
+│       │   │   └── plots
+│       │   ├── iteration_1
+│       │   │   ├── fold_1
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── extratrees_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── fold_2
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── extratrees_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── fold_3
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── extratrees_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── fold_4
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── extratrees_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── fold_5
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── extratrees_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── iteration_results.txt
+│       │   │   ├── models
+│       │   │   └── plots
+│       │   ├── iteration_2
+│       │   │   ├── fold_1
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── extratrees_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── fold_2
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── extratrees_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── fold_3
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── extratrees_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── fold_4
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── extratrees_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── fold_5
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── extratrees_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── iteration_results.txt
+│       │   │   ├── models
+│       │   │   └── plots
+│       │   ├── overall_results.txt
+│       │   └── plots
+│       ├── features
+│       │   ├── test_features.npz
+│       │   └── training_features.npz
+│       ├── features_by_fold
+│       │   ├── fold_features_info.json
+│       │   ├── iteration_1
+│       │   │   ├── train_features_fold_1.npz
+│       │   │   ├── train_features_fold_2.npz
+│       │   │   ├── train_features_fold_3.npz
+│       │   │   ├── train_features_fold_4.npz
+│       │   │   ├── train_features_fold_5.npz
+│       │   │   ├── val_features_fold_1.npz
+│       │   │   ├── val_features_fold_2.npz
+│       │   │   ├── val_features_fold_3.npz
+│       │   │   ├── val_features_fold_4.npz
+│       │   │   └── val_features_fold_5.npz
+│       │   └── iteration_2
+│       │       ├── train_features_fold_1.npz
+│       │       ├── train_features_fold_2.npz
+│       │       ├── train_features_fold_3.npz
+│       │       ├── train_features_fold_4.npz
+│       │       ├── train_features_fold_5.npz
+│       │       ├── val_features_fold_1.npz
+│       │       ├── val_features_fold_2.npz
+│       │       ├── val_features_fold_3.npz
+│       │       ├── val_features_fold_4.npz
+│       │       └── val_features_fold_5.npz
+│       ├── models
+│       │   └── xception_feature_extractor.h5
+│       ├── randomforest
+│       │   ├── final_model
+│       │   │   ├── final_ml_model.joblib
+│       │   │   ├── final_model_test_results.txt
+│       │   │   └── plots
+│       │   ├── iteration_1
+│       │   │   ├── fold_1
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── randomforest_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── fold_2
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── randomforest_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── fold_3
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── randomforest_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── fold_4
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── randomforest_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── fold_5
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── randomforest_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── iteration_results.txt
+│       │   │   ├── models
+│       │   │   └── plots
+│       │   ├── iteration_2
+│       │   │   ├── fold_1
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── randomforest_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── fold_2
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── randomforest_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── fold_3
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── randomforest_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── fold_4
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── randomforest_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── fold_5
+│       │   │   │   ├── features
+│       │   │   │   ├── models
+│       │   │   │   │   └── randomforest_model.joblib
+│       │   │   │   └── plots
+│       │   │   ├── iteration_results.txt
+│       │   │   ├── models
+│       │   │   └── plots
+│       │   ├── overall_results.txt
+│       │   └── plots
+│       └── xgboost
+│           ├── final_model
+│           │   ├── final_ml_model.joblib
+│           │   ├── final_model_test_results.txt
+│           │   └── plots
+│           ├── iteration_1
+│           │   ├── fold_1
+│           │   │   ├── models
+│           │   │   │   └── xgboost_model.joblib
+│           │   │   └── plots
+│           │   ├── fold_2
+│           │   │   ├── models
+│           │   │   │   └── xgboost_model.joblib
+│           │   │   └── plots
+│           │   ├── fold_3
+│           │   │   ├── models
+│           │   │   │   └── xgboost_model.joblib
+│           │   │   └── plots
+│           │   ├── fold_4
+│           │   │   ├── models
+│           │   │   │   └── xgboost_model.joblib
+│           │   │   └── plots
+│           │   ├── fold_5
+│           │   │   ├── models
+│           │   │   │   └── xgboost_model.joblib
+│           │   │   └── plots
+│           │   ├── iteration_results.txt
+│           │   └── plots
+│           ├── iteration_2
+│           │   ├── fold_1
+│           │   │   ├── models
+│           │   │   │   └── xgboost_model.joblib
+│           │   │   └── plots
+│           │   ├── fold_2
+│           │   │   ├── models
+│           │   │   │   └── xgboost_model.joblib
+│           │   │   └── plots
+│           │   ├── fold_3
+│           │   │   ├── models
+│           │   │   │   └── xgboost_model.joblib
+│           │   │   └── plots
+│           │   ├── fold_4
+│           │   │   ├── models
+│           │   │   │   └── xgboost_model.joblib
+│           │   │   └── plots
+│           │   ├── fold_5
+│           │   │   ├── models
+│           │   │   │   └── xgboost_model.joblib
+│           │   │   └── plots
+│           │   ├── iteration_results.txt
+│           │   └── plots
+│           └── overall_results.txt
+├── src
+│   ├── __init__.py
+│   ├── __pycache__
+│   ├── analysis
+│   │   ├── __pycache__
+│   │   ├── classifier_analyisis.py
+│   │   ├── results_visualization.py
+│   │   └── run_analysis.py
+│   ├── config.py
+│   ├── main.py
+│   ├── models
+│   │   ├── __init__.py
+│   │   ├── __pycache__
+│   │   ├── classical_models.py
+│   │   ├── cnn_models.py
+│   │   └── unet_hair_remover.py
+│   ├── pipelines
+│   │   ├── __init__.py
+│   │   ├── __pycache__
+│   │   ├── cnn_classifier.py
+│   │   └── feature_extraction.py
+│   └── utils
+│       ├── __init__.py
+│       ├── __pycache__
+│       ├── augmentation.py
+│       ├── data_loaders.py
+│       ├── data_preprocessing.py
+│       ├── graphic_preprocessing.py
+│       └── hair_remover.py
+└── tree.txt
+
+948 directories, 421 files
