@@ -1,0 +1,36 @@
+Classifier: RandomForest
+Use PCA: False
+PCA Components: None
+Tune Hyperparameters: False
+Number of Folds: 5
+Iteration: 1
+Use Data Preprocessing: False
+Iteration 1 Average Metrics:
+Accuracy: 0.9967
+Precision: 0.9958
+Recall: 0.9949
+F1 Score: 0.9954
+
+Classification Report:
+              precision    recall  f1-score   support
+
+           0       0.99      0.99      0.99      2224
+           1       1.00      1.00      1.00      3496
+           2       0.99      0.99      0.99      7472
+           3       0.99      1.00      0.99       784
+           4       0.99      0.99      0.99      7568
+           5       1.00      1.00      1.00     45592
+           6       1.00      1.00      1.00       960
+
+    accuracy                           1.00     68096
+   macro avg       1.00      0.99      1.00     68096
+weighted avg       1.00      1.00      1.00     68096
+
+Confusion Matrix:
+[[ 2203     0     9     3     6     3     0]
+ [    0  3488     3     0     2     3     0]
+ [    9     2  7419     0     5    37     0]
+ [    1     0     1   781     1     0     0]
+ [    3     1    22     0  7480    62     0]
+ [    1     1    18     2    30 45540     0]
+ [    0     0     0     0     0     0   960]]

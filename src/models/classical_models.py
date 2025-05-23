@@ -14,7 +14,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
 sys.path.append('..')
-from config import NUM_PCA_COMPONENTS
+from config import NUM_PCA_COMPONENTS, NUM_CLASSES
 
 
 def get_classifier(classifier_name, random_state=42):
@@ -35,32 +35,41 @@ def get_classifier(classifier_name, random_state=42):
             min_samples_split=2,
             min_samples_leaf=1,
             max_features='sqrt',
+            bootstrap=True,
+            class_weight='balanced',
+            oob_score=True,
+            n_jobs=-1,
             random_state=random_state,
-            n_jobs=-1
         )
     elif classifier_name == "XGBoost":
         # Import XGBoost only if needed to avoid dependency issues
         from xgboost import XGBClassifier
         return XGBClassifier(
-            n_estimators=100,
-            learning_rate=0.1,
-            max_depth=5,
+            n_estimators=200,
+            learning_rate=0.05,
+            max_depth=4,
+            min_child_weight=1,
+            gamma=0.2,
             subsample=0.8,
             colsample_bytree=0.8,
+            reg_alpha=0.1,
+            reg_lambda=1.0,
+            objective='multi:softprob',
+            num_class=NUM_CLASSES,
+            tree_method='hist',
             random_state=random_state,
-            n_jobs=-1,
-            use_label_encoder=False,
-            eval_metric='mlogloss'
+            eval_metric='mlogloss',
         )
     elif classifier_name == "AdaBoost":
         return AdaBoostClassifier(
-            n_estimators=100,
+            n_estimators=150,
             learning_rate=0.1,
+            algorithm='SAMME',
             random_state=random_state
         )
     elif classifier_name == "ExtraTrees":
         return ExtraTreesClassifier(
-            n_estimators=100,
+            n_estimators=200,
             max_depth=None,
             min_samples_split=2,
             min_samples_leaf=1,
@@ -70,10 +79,11 @@ def get_classifier(classifier_name, random_state=42):
         )
     elif classifier_name == "SVM":
         return SVC(
-            C=1.0,
+            C=10.0,
             kernel='rbf',
-            gamma='scale',
+            gamma=0.01,
             probability=True,
+            class_weight='balanced',
             random_state=random_state
         )
     else:
