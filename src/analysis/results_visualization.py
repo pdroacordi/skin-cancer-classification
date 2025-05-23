@@ -1,24 +1,20 @@
 """
-Scripts de análise corrigidos para gerar gráficos limpos e usar features pré-extraídas.
+Analisador completo corrigido para extrair métricas dos locais corretos e criar análises completas.
 """
 
-import os
-import json
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-from pathlib import Path
-import glob
 import re
-from sklearn.metrics import classification_report, confusion_matrix, roc_curve, auc
-import tensorflow as tf
-from collections import defaultdict
-from scipy import stats
 import warnings
+from pathlib import Path
+
+import joblib
+import matplotlib.pyplot as plt
+import numpy as np
+import seaborn as sns
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+
 warnings.filterwarnings('ignore')
 
-# Configuração de estilo melhorada
+# Configuração de estilo
 plt.style.use('default')
 sns.set_style("whitegrid")
 plt.rcParams.update({
@@ -36,61 +32,109 @@ plt.rcParams.update({
     'savefig.pad_inches': 0.1
 })
 
-class SkinCancerResultsAnalyzer:
-    def __init__(self, results_dir='./results', test_files_path='./res/test_files.txt', output_dir='./paper_figures'):
+class CompleteResultsAnalyzer:
+    def __init__(self, results_dir='./results', output_dir='./paper_figures'):
         self.results_dir = Path(results_dir)
-        self.test_files_path = Path(test_files_path)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
 
-        # Configurações do HAM10000
         self.class_names = ['AKIEC', 'BCC', 'BKL', 'DF', 'MEL', 'NV', 'VASC']
-        self.class_full_names = [
-            'Actinic Keratoses',
-            'Basal Cell Carcinoma',
-            'Benign Keratosis',
-            'Dermatofibroma',
-            'Melanoma',
-            'Melanocytic Nevi',
-            'Vascular Lesions'
-        ]
-
-        # Configurações dos modelos
         self.cnn_models = ['VGG19', 'Inception', 'ResNet', 'Xception']
-        self.ml_classifiers = ['RandomForest', 'XGBoost', 'AdaBoost', 'ExtraTrees']
+        self.ml_classifiers = ['randomforest', 'xgboost', 'adaboost', 'extratrees']
 
-        # Paleta de cores melhorada
         self.color_palette = {
             'CNN': '#1f77b4',
             'Feature_Extraction': '#ff7f0e',
             'VGG19': '#2ca02c',
             'Inception': '#d62728',
             'ResNet': '#9467bd',
-            'Xception': '#8c564b'
+            'Xception': '#8c564b',
+            'RandomForest': '#17becf',
+            'XGBoost': '#bcbd22',
+            'AdaBoost': '#ff7f0e',
+            'ExtraTrees': '#e377c2'
         }
 
         self.results_data = {}
-        self.test_results = {}
 
-    def load_test_data_info(self):
-        """Carrega informações sobre o conjunto de teste."""
-        test_info = {}
-        if self.test_files_path.exists():
-            with open(self.test_files_path, 'r') as f:
-                test_paths = []
-                test_labels = []
-                for line in f:
-                    path, label = line.strip().split('\t')
-                    test_paths.append(path)
-                    test_labels.append(int(label))
+    def _parse_results_file_robust(self, file_path):
+        """Parser robusto para extrair métricas."""
+        metrics = {}
 
-                test_info['paths'] = test_paths
-                test_labels = np.array(test_labels)
-                test_info['labels'] = test_labels
-                test_info['class_distribution'] = np.bincount(test_labels)
-                test_info['total_samples'] = len(test_labels)
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
 
-        return test_info
+            # Padrões mais específicos para diferentes formatos
+            patterns = {
+                'accuracy': [
+                    r'Average.*?Accuracy:\s*([0-9]*\.?[0-9]+)',
+                    r'Accuracy:\s*([0-9]*\.?[0-9]+)',
+                    r'accuracy\s+([0-9]*\.?[0-9]+)'
+                ],
+                'precision': [
+                    r'Average.*?Precision:\s*([0-9]*\.?[0-9]+)',
+                    r'Precision:\s*([0-9]*\.?[0-9]+)',
+                ],
+                'recall': [
+                    r'Average.*?Recall:\s*([0-9]*\.?[0-9]+)',
+                    r'Recall:\s*([0-9]*\.?[0-9]+)'
+                ],
+                'f1_score': [
+                    r'Average.*?F1.*?([0-9]*\.?[0-9]+)',
+                    r'F1 Score:\s*([0-9]*\.?[0-9]+)',
+                    r'F1:\s*([0-9]*\.?[0-9]+)'
+                ]
+            }
+
+            # Primeiro tenta extrair com padrões diretos
+            for metric, pattern_list in patterns.items():
+                for pattern in pattern_list:
+                    match = re.search(pattern, content, re.IGNORECASE | re.DOTALL)
+                    if match:
+                        try:
+                            value = float(match.group(1))
+                            metrics[metric] = value
+                            break
+                        except (ValueError, IndexError):
+                            continue
+
+            # Se não conseguiu extrair tudo, tenta com classification report
+            if len(metrics) < 4:
+                # Procura por macro avg na tabela de classification report
+                macro_pattern = r'macro avg\s+([0-9]*\.?[0-9]+)\s+([0-9]*\.?[0-9]+)\s+([0-9]*\.?[0-9]+)'
+                macro_match = re.search(macro_pattern, content)
+                if macro_match:
+                    precision_val = float(macro_match.group(1))
+                    recall_val = float(macro_match.group(2))
+                    f1_val = float(macro_match.group(3))
+
+                    if 'precision' not in metrics:
+                        metrics['precision'] = precision_val
+                    if 'recall' not in metrics:
+                        metrics['recall'] = recall_val
+                    if 'f1_score' not in metrics:
+                        metrics['f1_score'] = f1_val
+
+            return metrics
+
+        except Exception as e:
+            print(f"❌ Erro ao processar {file_path}: {e}")
+            return {}
+
+    def _extract_cnn_model_name(self, dirname):
+        """Extrai nome do modelo CNN do diretório."""
+        for model in self.cnn_models:
+            if model.lower() in dirname.lower():
+                return model
+        return "Unknown"
+
+    def _extract_fe_model_name(self, dirname):
+        """Extrai nome do extrator de features do diretório."""
+        for model in self.cnn_models:
+            if model.lower() in dirname.lower():
+                return model
+        return "Unknown"
 
     def collect_all_results(self):
         """Coleta todos os resultados dos experimentos."""
@@ -102,161 +146,498 @@ class SkinCancerResultsAnalyzer:
         # Coleta resultados Feature Extraction
         self._collect_feature_extraction_results()
 
-        # Carrega resultados de teste usando features pré-extraídas
-        self._load_precomputed_test_results()
+        print(f"✅ Resultados coletados: {len(self.results_data)} experimentos")
 
-        print(f"✅ Resultados coletados: {len(self.results_data)} experimentos de CV + {len(self.test_results)} testes finais")
+        # Mostra resumo
+        cnn_count = len([d for d in self.results_data.values() if d['type'] == 'CNN'])
+        fe_count = len([d for d in self.results_data.values() if d['type'] == 'Feature_Extraction'])
+
+        cnn_valid = len([d for d in self.results_data.values()
+                        if d['type'] == 'CNN' and d['cv_metrics'].get('f1_score', 0) > 0])
+        fe_valid = len([d for d in self.results_data.values()
+                       if d['type'] == 'Feature_Extraction' and d['cv_metrics'].get('f1_score', 0) > 0])
+
+        print(f"  Experimentos CNN: {cnn_count}")
+        print(f"  Experimentos Feature Extraction: {fe_count}")
+        print(f"  Experimentos CNN válidos: {cnn_valid}")
+        print(f"  Experimentos FE válidos: {fe_valid}")
 
     def _collect_cnn_results(self):
-        """Coleta resultados dos classificadores CNN."""
+        """Coleta resultados CNN."""
         cnn_dirs = list(self.results_dir.glob('cnn_classifier_*'))
+        print(f"  Encontrados {len(cnn_dirs)} diretórios CNN")
 
         for cnn_dir in cnn_dirs:
             model_name = self._extract_cnn_model_name(cnn_dir.name)
+            print(f"    Processando CNN: {cnn_dir.name} -> {model_name}")
 
-            # Resultados de cross-validation
+            # Busca overall_results.txt primeiro (cross-validation)
             overall_file = cnn_dir / 'overall_results.txt'
             if overall_file.exists():
-                cv_metrics = self._parse_results_file(overall_file)
+                print(f"      Encontrado: {overall_file}")
+                cv_metrics = self._parse_results_file_robust(overall_file)
 
-                key = f"CNN_{model_name}"
-                self.results_data[key] = {
-                    'type': 'CNN',
-                    'model': model_name,
-                    'cv_metrics': cv_metrics,
-                    'path': cnn_dir
-                }
+                if cv_metrics and cv_metrics.get('f1_score', 0) > 0:
+                    key = f"CNN_{model_name}"
+                    self.results_data[key] = {
+                        'type': 'CNN',
+                        'model': model_name,
+                        'cv_metrics': cv_metrics,
+                        'path': cnn_dir
+                    }
+                    print(f"      ✅ CNN {model_name} adicionado com métricas: {cv_metrics}")
+                else:
+                    print(f"      ⚠️ Métricas inválidas para CNN {model_name}")
+            else:
+                print(f"      ⚠️ Arquivo overall_results.txt não encontrado para {model_name}")
 
     def _collect_feature_extraction_results(self):
-        """Coleta resultados dos pipelines de feature extraction."""
+        """Coleta resultados Feature Extraction."""
         fe_dirs = list(self.results_dir.glob('feature_extraction_*'))
+        print(f"  Encontrados {len(fe_dirs)} diretórios Feature Extraction")
 
         for fe_dir in fe_dirs:
             extractor_name = self._extract_fe_model_name(fe_dir.name)
+            print(f"    Processando FE: {fe_dir.name} -> {extractor_name}")
 
-            # Procura por classificadores
+            # Procura por cada classificador
             for classifier_name in self.ml_classifiers:
-                classifier_dir = fe_dir / classifier_name.lower()
+                classifier_dir = fe_dir / classifier_name
 
                 if classifier_dir.exists():
+                    print(f"      Verificando classificador: {classifier_name}")
+
+                    # Busca overall_results.txt no diretório do classificador
                     overall_file = classifier_dir / 'overall_results.txt'
                     if overall_file.exists():
-                        cv_metrics = self._parse_results_file(overall_file)
+                        print(f"        Encontrado: {overall_file}")
+                        cv_metrics = self._parse_results_file_robust(overall_file)
 
-                        key = f"FE_{extractor_name}_{classifier_name}"
-                        self.results_data[key] = {
-                            'type': 'Feature_Extraction',
-                            'extractor': extractor_name,
-                            'classifier': classifier_name,
-                            'cv_metrics': cv_metrics,
-                            'path': classifier_dir
-                        }
+                        if cv_metrics and cv_metrics.get('f1_score', 0) > 0:
+                            key = f"FE_{extractor_name}_{classifier_name.title()}"
+                            self.results_data[key] = {
+                                'type': 'Feature_Extraction',
+                                'extractor': extractor_name,
+                                'classifier': classifier_name.title(),
+                                'cv_metrics': cv_metrics,
+                                'path': classifier_dir
+                            }
+                            print(f"        ✅ FE {extractor_name}+{classifier_name.title()} adicionado: {cv_metrics}")
+                        else:
+                            print(f"        ⚠️ Métricas inválidas para {extractor_name}+{classifier_name}")
+                    else:
+                        print(f"        ⚠️ overall_results.txt não encontrado para {classifier_name}")
 
-    def _load_precomputed_test_results(self):
-        """Carrega resultados de teste usando features pré-extraídas."""
-        print("📊 Carregando resultados de teste usando features pré-extraídas...")
+    def evaluate_final_models_on_test(self):
+        """Avalia modelos finais no conjunto de teste usando features já extraídas."""
+        print("🧪 Avaliando modelos finais no conjunto de teste...")
 
-        # Para Feature Extraction - usa features já extraídas
+        # Para cada Feature Extraction, carrega features de teste e avalia modelos finais
         fe_dirs = list(self.results_dir.glob('feature_extraction_*'))
+
         for fe_dir in fe_dirs:
             extractor_name = self._extract_fe_model_name(fe_dir.name)
 
-            # Carrega features de teste pré-extraídas
+            # Carrega features de teste
             test_features_file = fe_dir / 'features' / 'test_features.npz'
-            if test_features_file.exists():
-                try:
-                    test_data = np.load(test_features_file, allow_pickle=True)
-                    test_features = test_data['features']
-                    test_labels = test_data['labels'] if 'labels' in test_data else None
+            if not test_features_file.exists():
+                print(f"  ⚠️ Features de teste não encontradas para {extractor_name}")
+                continue
 
-                    # Para cada classificador
-                    for classifier_name in self.ml_classifiers:
-                        classifier_dir = fe_dir / classifier_name.lower()
-                        final_model_dir = classifier_dir / 'final_model'
+            try:
+                test_data = np.load(test_features_file, allow_pickle=True)
+                test_features = test_data['features']
+                test_labels = test_data['labels']
+                print(f"  ✅ Features de teste carregadas para {extractor_name}: {test_features.shape}")
 
-                        # Verifica se há resultados de teste
-                        test_results_file = final_model_dir / 'final_model_test_results.txt'
-                        if test_results_file.exists():
-                            test_metrics = self._parse_results_file(test_results_file)
+                # Avalia cada classificador
+                for classifier_name in self.ml_classifiers:
+                    classifier_dir = fe_dir / classifier_name
+                    final_model_file = classifier_dir / 'final_model' / 'final_ml_model.joblib'
 
-                            key = f"FE_{extractor_name}_{classifier_name}"
-                            self.test_results[key] = {
-                                'type': 'Feature_Extraction',
-                                'extractor': extractor_name,
-                                'classifier': classifier_name,
-                                'test_metrics': test_metrics,
-                                'features_available': True
-                            }
+                    if final_model_file.exists():
+                        try:
+                            # Carrega modelo final
+                            model = joblib.load(final_model_file)
 
-                except Exception as e:
-                    print(f"⚠️ Erro ao carregar features de {test_features_file}: {e}")
+                            # Faz predições
+                            y_pred = model.predict(test_features)
 
-        # Para CNN - verifica resultados de teste
-        cnn_dirs = list(self.results_dir.glob('cnn_classifier_*'))
-        for cnn_dir in cnn_dirs:
-            model_name = self._extract_cnn_model_name(cnn_dir.name)
+                            # Calcula métricas
+                            accuracy = accuracy_score(test_labels, y_pred)
+                            precision, recall, f1, _ = precision_recall_fscore_support(
+                                test_labels, y_pred, average='macro', zero_division=0
+                            )
 
-            final_model_dir = cnn_dir / 'final_model'
-            test_results_file = final_model_dir / 'evaluation_results.txt'
+                            # Armazena resultados
+                            key = f"FE_{extractor_name}_{classifier_name.title()}"
+                            if key in self.results_data:
+                                self.results_data[key]['test_metrics'] = {
+                                    'accuracy': accuracy,
+                                    'precision': precision,
+                                    'recall': recall,
+                                    'f1_score': f1
+                                }
+                                print(f"    ✅ {classifier_name.title()}: Acc={accuracy:.3f}, F1={f1:.3f}")
 
-            if test_results_file.exists():
-                test_metrics = self._parse_results_file(test_results_file)
+                        except Exception as e:
+                            print(f"    ❌ Erro ao avaliar {classifier_name}: {e}")
 
-                key = f"CNN_{model_name}"
-                self.test_results[key] = {
-                    'type': 'CNN',
-                    'model': model_name,
-                    'test_metrics': test_metrics,
-                    'features_available': False
+            except Exception as e:
+                print(f"  ❌ Erro ao carregar features de {extractor_name}: {e}")
+
+    def plot_cnn_vs_fe_by_network(self):
+        """Gráfico comparativo CNN vs Feature Extraction por rede - O QUE VOCÊ PEDIU!"""
+        fig, axes = plt.subplots(2, 2, figsize=(20, 12))
+        fig.suptitle('CNN End-to-End vs Feature Extraction + ML por Rede Neural',
+                     fontsize=16, fontweight='bold', y=0.95)
+
+        # Prepara dados organizados por rede
+        network_data = {}
+
+        for key, data in self.results_data.items():
+            if data['type'] == 'CNN':
+                network = data['model']
+                if network not in network_data:
+                    network_data[network] = {'CNN': None, 'FE': []}
+                network_data[network]['CNN'] = data['cv_metrics']
+
+            elif data['type'] == 'Feature_Extraction':
+                network = data['extractor']
+                if network not in network_data:
+                    network_data[network] = {'CNN': None, 'FE': []}
+
+                fe_result = {
+                    'classifier': data['classifier'],
+                    'metrics': data['cv_metrics']
                 }
+                network_data[network]['FE'].append(fe_result)
 
-    def _extract_cnn_model_name(self, dirname):
-        """Extrai nome do modelo CNN do diretório."""
-        for model in self.cnn_models:
-            if model in dirname:
-                return model
-        return "Unknown"
+        # 1. Comparação F1-Score por rede
+        ax1 = axes[0, 0]
+        networks = list(network_data.keys())
+        x = np.arange(len(networks))
+        width = 0.35
 
-    def _extract_fe_model_name(self, dirname):
-        """Extrai nome do extrator de features do diretório."""
-        for model in self.cnn_models:
-            if model in dirname:
-                return model
-        return "Unknown"
+        cnn_f1_scores = []
+        fe_best_f1_scores = []
+        fe_avg_f1_scores = []
 
-    def _parse_results_file(self, file_path):
-        """Parseia arquivo de resultados para extrair métricas."""
-        metrics = {}
+        for network in networks:
+            # CNN F1-Score
+            cnn_f1 = network_data[network]['CNN']['f1_score'] if network_data[network]['CNN'] else 0
+            cnn_f1_scores.append(cnn_f1)
 
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+            # Feature Extraction F1-Scores
+            fe_f1_list = [fe['metrics']['f1_score'] for fe in network_data[network]['FE']
+                         if fe['metrics'].get('f1_score', 0) > 0]
 
-            # Padrões para diferentes formatos
-            patterns = {
-                'accuracy': [r'Accuracy:\s*([\d.]+)', r'accuracy.*?([\d.]+)'],
-                'precision': [r'Precision:\s*([\d.]+)', r'macro avg.*?precision.*?([\d.]+)'],
-                'recall': [r'Recall:\s*([\d.]+)', r'macro avg.*?recall.*?([\d.]+)'],
-                'f1_score': [r'F1 Score:\s*([\d.]+)', r'macro avg.*?f1-score.*?([\d.]+)']
-            }
+            if fe_f1_list:
+                fe_best_f1_scores.append(max(fe_f1_list))
+                fe_avg_f1_scores.append(np.mean(fe_f1_list))
+            else:
+                fe_best_f1_scores.append(0)
+                fe_avg_f1_scores.append(0)
 
-            for metric, pattern_list in patterns.items():
-                for pattern in pattern_list:
-                    match = re.search(pattern, content, re.IGNORECASE | re.DOTALL)
-                    if match:
-                        metrics[metric] = float(match.group(1))
-                        break
+        bars1 = ax1.bar(x - width/2, cnn_f1_scores, width, label='CNN End-to-End',
+                       color=self.color_palette['CNN'], alpha=0.8)
+        bars2 = ax1.bar(x + width/2, fe_best_f1_scores, width, label='FE + ML (Melhor)',
+                       color=self.color_palette['Feature_Extraction'], alpha=0.8)
 
-        except Exception as e:
-            print(f"⚠️ Erro ao processar {file_path}: {e}")
+        ax1.set_xlabel('Rede Neural')
+        ax1.set_ylabel('F1-Score')
+        ax1.set_title('F1-Score: CNN vs Feature Extraction (Melhor)')
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(networks)
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
 
-        return metrics
+        # Adiciona valores nas barras
+        for bar, value in zip(bars1, cnn_f1_scores):
+            if value > 0:
+                ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+                        f'{value:.3f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+
+        for bar, value in zip(bars2, fe_best_f1_scores):
+            if value > 0:
+                ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+                        f'{value:.3f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+
+        # 2. Detalhamento por classificador para cada rede
+        ax2 = axes[0, 1]
+
+        # Cria dados para heatmap: Rede vs Classificador
+        classifiers_used = set()
+        for network_info in network_data.values():
+            for fe in network_info['FE']:
+                classifiers_used.add(fe['classifier'])
+
+        classifiers_used = sorted(list(classifiers_used))
+
+        if classifiers_used:
+            heatmap_data = np.zeros((len(networks), len(classifiers_used)))
+
+            for i, network in enumerate(networks):
+                for j, classifier in enumerate(classifiers_used):
+                    # Encontra F1-score para esta combinação
+                    for fe in network_data[network]['FE']:
+                        if fe['classifier'] == classifier:
+                            heatmap_data[i, j] = fe['metrics'].get('f1_score', 0)
+                            break
+
+            im = ax2.imshow(heatmap_data, cmap='viridis', aspect='auto')
+            ax2.set_xticks(np.arange(len(classifiers_used)))
+            ax2.set_yticks(np.arange(len(networks)))
+            ax2.set_xticklabels(classifiers_used, rotation=45)
+            ax2.set_yticklabels(networks)
+
+            # Adiciona valores nas células
+            for i in range(len(networks)):
+                for j in range(len(classifiers_used)):
+                    if heatmap_data[i, j] > 0:
+                        text = ax2.text(j, i, f'{heatmap_data[i, j]:.3f}',
+                                       ha="center", va="center", color="white",
+                                       fontweight='bold', fontsize=8)
+
+            ax2.set_title('F1-Score: Feature Extraction por Rede + Classificador')
+            ax2.set_xlabel('Classificador ML')
+            ax2.set_ylabel('Rede Neural (Extrator)')
+
+            # Colorbar
+            cbar = plt.colorbar(im, ax=ax2, shrink=0.8)
+            cbar.set_label('F1-Score', rotation=270, labelpad=15)
+
+        # 3. Diferença relativa CNN vs FE
+        ax3 = axes[1, 0]
+
+        differences = []
+        diff_labels = []
+        colors = []
+
+        for network in networks:
+            cnn_f1 = network_data[network]['CNN']['f1_score'] if network_data[network]['CNN'] else 0
+            fe_f1_list = [fe['metrics']['f1_score'] for fe in network_data[network]['FE']
+                         if fe['metrics'].get('f1_score', 0) > 0]
+
+            if fe_f1_list and cnn_f1 > 0:
+                best_fe_f1 = max(fe_f1_list)
+                diff = best_fe_f1 - cnn_f1  # Positivo = FE melhor, Negativo = CNN melhor
+                differences.append(diff)
+                diff_labels.append(network)
+                colors.append('green' if diff > 0 else 'red')
+
+        if differences:
+            bars = ax3.barh(diff_labels, differences, color=colors, alpha=0.7)
+            ax3.set_xlabel('Diferença F1-Score (FE - CNN)')
+            ax3.set_title('Vantagem Feature Extraction vs CNN por Rede')
+            ax3.axvline(x=0, color='black', linestyle='--', alpha=0.5)
+            ax3.grid(True, alpha=0.3)
+
+            # Adiciona valores
+            for bar, diff in zip(bars, differences):
+                ax3.text(diff + (0.005 if diff > 0 else -0.005), bar.get_y() + bar.get_height()/2,
+                        f'{diff:+.3f}', ha='left' if diff > 0 else 'right', va='center',
+                        fontsize=9, fontweight='bold')
+
+        # 4. Ranking detalhado
+        ax4 = axes[1, 1]
+
+        # Coleta todos os resultados para ranking
+        all_results = []
+
+        for network in networks:
+            # CNN
+            if network_data[network]['CNN']:
+                cnn_f1 = network_data[network]['CNN']['f1_score']
+                all_results.append({
+                    'name': f'CNN-{network}',
+                    'f1_score': cnn_f1,
+                    'type': 'CNN',
+                    'network': network
+                })
+
+            # Feature Extraction
+            for fe in network_data[network]['FE']:
+                if fe['metrics'].get('f1_score', 0) > 0:
+                    all_results.append({
+                        'name': f'{network}+{fe["classifier"][:4]}',
+                        'f1_score': fe['metrics']['f1_score'],
+                        'type': 'FE',
+                        'network': network
+                    })
+
+        # Ordena por F1-Score
+        all_results.sort(key=lambda x: x['f1_score'], reverse=True)
+
+        # Pega top 10
+        top_results = all_results[:10]
+
+        if top_results:
+            names = [r['name'] for r in top_results]
+            f1_scores = [r['f1_score'] for r in top_results]
+            result_colors = [self.color_palette['CNN'] if r['type'] == 'CNN'
+                           else self.color_palette['Feature_Extraction'] for r in top_results]
+
+            bars = ax4.barh(range(len(names)), f1_scores, color=result_colors, alpha=0.8)
+            ax4.set_yticks(range(len(names)))
+            ax4.set_yticklabels(names, fontsize=9)
+            ax4.set_xlabel('F1-Score')
+            ax4.set_title('Top 10 Modelos por F1-Score')
+            ax4.grid(True, alpha=0.3)
+
+            # Adiciona valores
+            for i, (bar, score) in enumerate(zip(bars, f1_scores)):
+                ax4.text(score + 0.005, i, f'{score:.3f}', va='center', fontsize=8)
+
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        plt.savefig(self.output_dir / 'cnn_vs_fe_by_network.png')
+        plt.close()
+
+    def generate_comprehensive_report(self):
+        """Gera relatório abrangente com todos os resultados."""
+        report_path = self.output_dir / 'comprehensive_analysis_report.txt'
+
+        with open(report_path, 'w', encoding='utf-8') as f:
+            f.write("="*80 + "\n")
+            f.write("RELATÓRIO ABRANGENTE - CLASSIFICAÇÃO DE CÂNCER DE PELE\n")
+            f.write("CNN End-to-End vs Feature Extraction + ML\n")
+            f.write("="*80 + "\n\n")
+
+            # Estatísticas gerais
+            f.write("1. ESTATÍSTICAS GERAIS\n")
+            f.write("-"*40 + "\n")
+            f.write(f"Total de experimentos: {len(self.results_data)}\n")
+
+            cnn_count = len([d for d in self.results_data.values() if d['type'] == 'CNN'])
+            fe_count = len([d for d in self.results_data.values() if d['type'] == 'Feature_Extraction'])
+
+            f.write(f"Experimentos CNN: {cnn_count}\n")
+            f.write(f"Experimentos Feature Extraction: {fe_count}\n\n")
+
+            # Ranking completo
+            f.write("2. RANKING COMPLETO\n")
+            f.write("-"*40 + "\n")
+
+            all_results = []
+            for key, data in self.results_data.items():
+                metrics = data['cv_metrics']
+                f1 = metrics.get('f1_score', 0)
+                acc = metrics.get('accuracy', 0)
+                prec = metrics.get('precision', 0)
+                rec = metrics.get('recall', 0)
+
+                if data['type'] == 'CNN':
+                    name = f"CNN-{data['model']}"
+                else:
+                    name = f"{data['extractor']}+{data['classifier']}"
+
+                all_results.append((name, f1, acc, prec, rec, data['type']))
+
+            # Ordena por F1-Score
+            all_results.sort(key=lambda x: x[1], reverse=True)
+
+            f.write("Ranking completo por F1-Score:\n")
+            f.write("Pos. | Modelo                          | F1     | Acc    | Prec   | Rec    | Tipo\n")
+            f.write("-"*85 + "\n")
+            for i, (name, f1, acc, prec, rec, tipo) in enumerate(all_results, 1):
+                f.write(f"{i:3d}. | {name:<30} | {f1:.4f} | {acc:.4f} | {prec:.4f} | {rec:.4f} | {tipo}\n")
+
+            f.write("\n")
+
+            # Análise por tipo
+            f.write("3. ANÁLISE POR TIPO\n")
+            f.write("-"*40 + "\n")
+
+            cnn_results = [r for r in all_results if r[5] == 'CNN']
+            fe_results = [r for r in all_results if r[5] == 'Feature_Extraction']
+
+            if cnn_results:
+                cnn_f1_scores = [r[1] for r in cnn_results]
+                f.write(f"CNN End-to-End ({len(cnn_results)} modelos):\n")
+                f.write(f"  Média F1: {np.mean(cnn_f1_scores):.4f} ± {np.std(cnn_f1_scores):.4f}\n")
+                f.write(f"  Melhor F1: {max(cnn_f1_scores):.4f}\n")
+                f.write(f"  Pior F1: {min(cnn_f1_scores):.4f}\n\n")
+
+            if fe_results:
+                fe_f1_scores = [r[1] for r in fe_results]
+                f.write(f"Feature Extraction + ML ({len(fe_results)} modelos):\n")
+                f.write(f"  Média F1: {np.mean(fe_f1_scores):.4f} ± {np.std(fe_f1_scores):.4f}\n")
+                f.write(f"  Melhor F1: {max(fe_f1_scores):.4f}\n")
+                f.write(f"  Pior F1: {min(fe_f1_scores):.4f}\n\n")
+
+            # Análise por rede neural
+            f.write("4. ANÁLISE POR REDE NEURAL\n")
+            f.write("-"*40 + "\n")
+
+            network_analysis = {}
+            for key, data in self.results_data.items():
+                if data['type'] == 'CNN':
+                    network = data['model']
+                    if network not in network_analysis:
+                        network_analysis[network] = {'CNN': [], 'FE': []}
+                    network_analysis[network]['CNN'].append(data['cv_metrics']['f1_score'])
+
+                elif data['type'] == 'Feature_Extraction':
+                    network = data['extractor']
+                    if network not in network_analysis:
+                        network_analysis[network] = {'CNN': [], 'FE': []}
+                    network_analysis[network]['FE'].append(data['cv_metrics']['f1_score'])
+
+            for network, results in network_analysis.items():
+                f.write(f"{network}:\n")
+                if results['CNN']:
+                    cnn_f1 = results['CNN'][0]  # Só há um CNN por rede
+                    f.write(f"  CNN F1: {cnn_f1:.4f}\n")
+
+                if results['FE']:
+                    fe_f1_scores = results['FE']
+                    f.write(f"  FE Média F1: {np.mean(fe_f1_scores):.4f} ± {np.std(fe_f1_scores):.4f}\n")
+                    f.write(f"  FE Melhor F1: {max(fe_f1_scores):.4f}\n")
+                    f.write(f"  FE Pior F1: {min(fe_f1_scores):.4f}\n")
+
+                    # Vantagem FE vs CNN
+                    if results['CNN']:
+                        advantage = max(fe_f1_scores) - results['CNN'][0]
+                        f.write(f"  Vantagem FE: {advantage:+.4f}\n")
+
+                f.write("\n")
+
+            # Conclusões
+            f.write("5. CONCLUSÕES\n")
+            f.write("-"*40 + "\n")
+
+            if all_results:
+                best_overall = all_results[0]
+                f.write(f"• Melhor modelo geral: {best_overall[0]} (F1: {best_overall[1]:.4f})\n")
+
+            # Melhor por categoria
+            if cnn_results:
+                best_cnn = max(cnn_results, key=lambda x: x[1])
+                f.write(f"• Melhor CNN: {best_cnn[0]} (F1: {best_cnn[1]:.4f})\n")
+
+            if fe_results:
+                best_fe = max(fe_results, key=lambda x: x[1])
+                f.write(f"• Melhor Feature Extraction: {best_fe[0]} (F1: {best_fe[1]:.4f})\n")
+
+            # Melhor por rede neural
+            for network, results in network_analysis.items():
+                cnn_f1 = results['CNN'][0] if results['CNN'] else 0
+                fe_best = max(results['FE']) if results['FE'] else 0
+
+                if cnn_f1 > 0 or fe_best > 0:
+                    if fe_best > cnn_f1:
+                        f.write(f"• Melhor arquitetura {network}: Feature Extraction (F1: {fe_best:.4f})\n")
+                    else:
+                        f.write(f"• Melhor arquitetura {network}: CNN (F1 médio: {cnn_f1:.4f})\n")
+
+            f.write("\n" + "="*80 + "\n")
+
+        print(f"📋 Relatório abrangente salvo em: {report_path}")
 
     def plot_performance_overview(self):
-        """Gráfico panorâmico da performance geral - CORRIGIDO."""
+        """Gráfico panorâmico da performance geral."""
         fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-        fig.suptitle('Visão Geral da Performance dos Modelos\nCNN End-to-End vs Feature Extraction + ML',
-                     fontsize=16, fontweight='bold', y=0.95)
+        fig.suptitle('Visão Geral da Performance dos Modelos', fontsize=16, fontweight='bold', y=0.95)
 
         # Prepara dados
         cnn_data = {k: v for k, v in self.results_data.items() if v['type'] == 'CNN'}
@@ -274,7 +655,7 @@ class SkinCancerResultsAnalyzer:
             fe_values = [v['cv_metrics'].get(metric, 0) for v in fe_data.values()
                         if v['cv_metrics'].get(metric, 0) > 0]
 
-            # Box plot simples e limpo
+            # Box plot
             data_to_plot = []
             labels = []
             colors = []
@@ -293,12 +674,11 @@ class SkinCancerResultsAnalyzer:
                 bp = ax.boxplot(data_to_plot, labels=labels, patch_artist=True,
                                showmeans=True, meanline=True)
 
-                # Colorir boxes
                 for patch, color in zip(bp['boxes'], colors):
                     patch.set_facecolor(color)
                     patch.set_alpha(0.7)
 
-                # Adiciona estatísticas de forma limpa
+                # Adiciona estatísticas
                 for i, values in enumerate(data_to_plot):
                     mean_val = np.mean(values)
                     ax.text(i+1, 0.95, f'μ={mean_val:.3f}',
@@ -312,686 +692,44 @@ class SkinCancerResultsAnalyzer:
 
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         plt.savefig(self.output_dir / 'performance_overview.png')
-        plt.close()  # Removido plt.show()
+        plt.close()
 
-    def plot_detailed_comparison(self):
-        """Comparação detalhada entre CNN e Feature Extraction - CORRIGIDA."""
-        fig, axes = plt.subplots(2, 3, figsize=(20, 12))
-        fig.suptitle('Análise Comparativa Detalhada: CNN vs Feature Extraction',
-                     fontsize=16, fontweight='bold', y=0.95)
+    def run_complete_analysis(self):
+        """Executa análise completa."""
+        print("🚀 Iniciando análise completa...")
 
-        # Prepara dados
-        cnn_results = []
-        fe_results = []
+        # 1. Coleta resultados
+        self.collect_all_results()
 
-        for key, data in self.results_data.items():
-            metrics = data['cv_metrics']
-            if data['type'] == 'CNN':
-                cnn_results.append({
-                    'model': data['model'],
-                    'accuracy': metrics.get('accuracy', 0),
-                    'precision': metrics.get('precision', 0),
-                    'recall': metrics.get('recall', 0),
-                    'f1_score': metrics.get('f1_score', 0)
-                })
-            else:
-                fe_results.append({
-                    'extractor': data['extractor'],
-                    'classifier': data['classifier'],
-                    'accuracy': metrics.get('accuracy', 0),
-                    'precision': metrics.get('precision', 0),
-                    'recall': metrics.get('recall', 0),
-                    'f1_score': metrics.get('f1_score', 0)
-                })
+        # 2. Avalia modelos finais (se necessário)
+        self.evaluate_final_models_on_test()
 
-        # 1. Scatter plot comparativo
-        ax1 = axes[0, 0]
-        if cnn_results and fe_results:
-            cnn_f1 = [r['f1_score'] for r in cnn_results]
-            cnn_acc = [r['accuracy'] for r in cnn_results]
-            fe_f1 = [r['f1_score'] for r in fe_results]
-            fe_acc = [r['accuracy'] for r in fe_results]
-
-            ax1.scatter(cnn_acc, cnn_f1, c=self.color_palette['CNN'], s=80,
-                       alpha=0.8, label='CNN', marker='o', edgecolors='black', linewidth=0.5)
-            ax1.scatter(fe_acc, fe_f1, c=self.color_palette['Feature_Extraction'], s=80,
-                       alpha=0.8, label='Feature Extraction', marker='s', edgecolors='black', linewidth=0.5)
-
-            ax1.set_xlabel('Acurácia')
-            ax1.set_ylabel('F1-Score')
-            ax1.set_title('Acurácia vs F1-Score')
-            ax1.legend()
-            ax1.grid(True, alpha=0.3)
-
-        # 2. Barras comparativas por métrica
-        ax2 = axes[0, 1]
-        metrics_comp = ['accuracy', 'precision', 'recall', 'f1_score']
-        metric_labels = ['Acc', 'Prec', 'Rec', 'F1']
-
-        if cnn_results and fe_results:
-            cnn_means = [np.mean([r[m] for r in cnn_results]) for m in metrics_comp]
-            fe_means = [np.mean([r[m] for r in fe_results]) for m in metrics_comp]
-
-            x = np.arange(len(metric_labels))
-            width = 0.35
-
-            bars1 = ax2.bar(x - width/2, cnn_means, width, label='CNN',
-                           color=self.color_palette['CNN'], alpha=0.8)
-            bars2 = ax2.bar(x + width/2, fe_means, width, label='Feature Extraction',
-                           color=self.color_palette['Feature_Extraction'], alpha=0.8)
-
-            ax2.set_xlabel('Métricas')
-            ax2.set_ylabel('Score Médio')
-            ax2.set_title('Comparação de Médias')
-            ax2.set_xticks(x)
-            ax2.set_xticklabels(metric_labels)
-            ax2.legend()
-            ax2.grid(True, alpha=0.3)
-
-            # Adiciona valores de forma limpa
-            for i, (bar1, bar2, cnn_val, fe_val) in enumerate(zip(bars1, bars2, cnn_means, fe_means)):
-                ax2.text(bar1.get_x() + bar1.get_width()/2, bar1.get_height() + 0.01,
-                        f'{cnn_val:.3f}', ha='center', va='bottom', fontsize=9)
-                ax2.text(bar2.get_x() + bar2.get_width()/2, bar2.get_height() + 0.01,
-                        f'{fe_val:.3f}', ha='center', va='bottom', fontsize=9)
-
-        # 3. Box plot de F1-Score
-        ax3 = axes[0, 2]
-        if cnn_results and fe_results:
-            f1_data = [[r['f1_score'] for r in cnn_results], [r['f1_score'] for r in fe_results]]
-            box_plot = ax3.boxplot(f1_data, labels=['CNN', 'FE'], patch_artist=True)
-
-            colors = [self.color_palette['CNN'], self.color_palette['Feature_Extraction']]
-            for patch, color in zip(box_plot['boxes'], colors):
-                patch.set_facecolor(color)
-                patch.set_alpha(0.7)
-
-            ax3.set_ylabel('F1-Score')
-            ax3.set_title('Distribuição F1-Score')
-            ax3.grid(True, alpha=0.3)
-
-        # 4. Heatmap CNN models (simplificado)
-        ax4 = axes[1, 0]
-        if cnn_results:
-            cnn_df = pd.DataFrame(cnn_results)
-            if not cnn_df.empty:
-                cnn_pivot = cnn_df.set_index('model')[['accuracy', 'precision', 'recall', 'f1_score']]
-
-                sns.heatmap(cnn_pivot, annot=True, fmt='.3f', cmap='Blues', ax=ax4,
-                           cbar_kws={'shrink': 0.8})
-                ax4.set_title('Performance CNN')
-                ax4.set_ylabel('Arquitetura')
-
-        # 5. Heatmap Feature Extraction (simplificado)
-        ax5 = axes[1, 1]
-        if fe_results:
-            fe_df = pd.DataFrame(fe_results)
-            if not fe_df.empty:
-                # Simplifica nomes para caber melhor
-                fe_df['combo'] = fe_df['extractor'] + '+' + fe_df['classifier'].str[:4]
-                fe_pivot = fe_df.set_index('combo')[['accuracy', 'precision', 'recall', 'f1_score']]
-
-                sns.heatmap(fe_pivot, annot=True, fmt='.3f', cmap='Oranges', ax=ax5,
-                           cbar_kws={'shrink': 0.8})
-                ax5.set_title('Performance Feature Extraction')
-                ax5.set_ylabel('Extrator + Classificador')
-
-        # 6. Análise estatística simplificada
-        ax6 = axes[1, 2]
-        if cnn_results and fe_results:
-            cnn_f1_vals = [r['f1_score'] for r in cnn_results]
-            fe_f1_vals = [r['f1_score'] for r in fe_results]
-
-            # Estatísticas descritivas
-            methods = ['CNN', 'FE']
-            means = [np.mean(cnn_f1_vals), np.mean(fe_f1_vals)]
-            stds = [np.std(cnn_f1_vals), np.std(fe_f1_vals)]
-
-            bars = ax6.bar(methods, means, yerr=stds, capsize=5,
-                          color=[self.color_palette['CNN'], self.color_palette['Feature_Extraction']],
-                          alpha=0.8)
-
-            ax6.set_ylabel('F1-Score')
-            ax6.set_title('Comparação Estatística')
-            ax6.grid(True, alpha=0.3)
-
-            # Adiciona valores
-            for bar, mean, std in zip(bars, means, stds):
-                ax6.text(bar.get_x() + bar.get_width()/2, bar.get_height() + std + 0.01,
-                        f'{mean:.3f}±{std:.3f}', ha='center', va='bottom', fontsize=10)
-
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-        plt.savefig(self.output_dir / 'detailed_comparison.png')
-        plt.close()  # Removido plt.show()
-
-    def plot_model_ranking(self):
-        """Ranking completo dos melhores modelos - CORRIGIDO."""
-        fig, axes = plt.subplots(2, 2, figsize=(18, 12))
-        fig.suptitle('Ranking dos Melhores Modelos', fontsize=16, fontweight='bold', y=0.95)
-
-        # Coleta todos os resultados
-        all_results = []
-
-        for key, data in self.results_data.items():
-            metrics = data['cv_metrics']
-
-            if data['type'] == 'CNN':
-                model_name = f"CNN-{data['model']}"
-                model_type = 'CNN'
-            else:
-                model_name = f"{data['extractor']}+{data['classifier'][:4]}"  # Abrevia classificador
-                model_type = 'Feature Extraction'
-
-            all_results.append({
-                'name': model_name,
-                'type': model_type,
-                'accuracy': metrics.get('accuracy', 0),
-                'precision': metrics.get('precision', 0),
-                'recall': metrics.get('recall', 0),
-                'f1_score': metrics.get('f1_score', 0)
-            })
-
-        # 1. Top 8 por F1-Score (reduzido para caber melhor)
-        ax1 = axes[0, 0]
-
-        sorted_results = sorted(all_results, key=lambda x: x['f1_score'], reverse=True)
-        top_8 = sorted_results[:8]
-
-        names = [r['name'] for r in top_8]
-        f1_scores = [r['f1_score'] for r in top_8]
-        colors = [self.color_palette['CNN'] if r['type'] == 'CNN' else self.color_palette['Feature_Extraction']
-                 for r in top_8]
-
-        bars = ax1.barh(range(len(names)), f1_scores, color=colors, alpha=0.8)
-
-        ax1.set_yticks(range(len(names)))
-        ax1.set_yticklabels(names, fontsize=9)
-        ax1.set_xlabel('F1-Score')
-        ax1.set_title('Top 8 Modelos por F1-Score')
-        ax1.grid(True, alpha=0.3)
-
-        # Adicionar valores de forma limpa
-        for i, (bar, score) in enumerate(zip(bars, f1_scores)):
-            ax1.text(score + 0.005, i, f'{score:.3f}', va='center', fontsize=9)
-
-        # 2. Scatter plot: Accuracy vs F1-Score
-        ax2 = axes[0, 1]
-
-        cnn_results = [r for r in all_results if r['type'] == 'CNN']
-        fe_results = [r for r in all_results if r['type'] == 'Feature Extraction']
-
-        if cnn_results:
-            cnn_acc = [r['accuracy'] for r in cnn_results]
-            cnn_f1 = [r['f1_score'] for r in cnn_results]
-            ax2.scatter(cnn_acc, cnn_f1, c=self.color_palette['CNN'], s=80, alpha=0.8,
-                       label='CNN', marker='o', edgecolors='black', linewidth=0.5)
-
-        if fe_results:
-            fe_acc = [r['accuracy'] for r in fe_results]
-            fe_f1 = [r['f1_score'] for r in fe_results]
-            ax2.scatter(fe_acc, fe_f1, c=self.color_palette['Feature_Extraction'], s=80, alpha=0.8,
-                       label='Feature Extraction', marker='s', edgecolors='black', linewidth=0.5)
-
-        # Destacar o melhor modelo
-        if sorted_results:
-            best_model = sorted_results[0]
-            ax2.scatter(best_model['accuracy'], best_model['f1_score'],
-                       c='gold', s=150, marker='*', edgecolor='black', linewidth=1,
-                       label='Melhor Modelo', zorder=5)
-
-        ax2.set_xlabel('Acurácia')
-        ax2.set_ylabel('F1-Score')
-        ax2.set_title('Acurácia vs F1-Score')
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
-
-        # 3. Radar chart dos top 4 (reduzido)
-        ax3 = plt.subplot(2, 2, 3, projection='polar')
-
-        top_4 = sorted_results[:4]
-        metrics_radar = ['accuracy', 'precision', 'recall', 'f1_score']
-        metric_labels = ['Acurácia', 'Precisão', 'Recall', 'F1-Score']
-
-        angles = np.linspace(0, 2 * np.pi, len(metrics_radar), endpoint=False).tolist()
-        angles += angles[:1]
-
-        colors = plt.cm.tab10(np.linspace(0, 1, len(top_4)))
-
-        for i, result in enumerate(top_4):
-            values = [result[m] for m in metrics_radar]
-            values += values[:1]
-
-            ax3.plot(angles, values, 'o-', linewidth=2, label=result['name'], color=colors[i])
-            ax3.fill(angles, values, alpha=0.1, color=colors[i])
-
-        ax3.set_xticks(angles[:-1])
-        ax3.set_xticklabels(metric_labels)
-        ax3.set_ylim(0, 1)
-        ax3.set_title('Top 4 Modelos - Radar')
-        ax3.legend(loc='upper right', bbox_to_anchor=(1.2, 1.0), fontsize=8)
-
-        # 4. Tabela dos melhores resultados (simplificada)
-        ax4 = axes[1, 1]
-        ax4.axis('tight')
-        ax4.axis('off')
-
-        # Prepara dados da tabela (top 6 para caber melhor)
-        table_data = []
-        for i, result in enumerate(top_8):
-            table_data.append([
-                f"{i+1}°",
-                result['name'][:12],  # Trunca nomes longos
-                f"{result['accuracy']:.3f}",
-                f"{result['f1_score']:.3f}"
-            ])
-
-        table = ax4.table(cellText=table_data,
-                         colLabels=['Rank', 'Modelo', 'Acc', 'F1'],
-                         cellLoc='center',
-                         loc='center')
-
-        table.auto_set_font_size(False)
-        table.set_fontsize(8)
-        table.scale(1.0, 1.2)
-
-        # Colorir header
-        for i in range(4):
-            table[(0, i)].set_facecolor('#4CAF50')
-            table[(0, i)].set_text_props(weight='bold', color='white')
-
-        # Colorir top 3
-        colors_rank = ['#FFD700', '#C0C0C0', '#CD7F32']  # Gold, Silver, Bronze
-        for i in range(min(3, len(table_data))):
-            for j in range(4):
-                table[(i+1, j)].set_facecolor(colors_rank[i])
-
-        ax4.set_title('Ranking - Top 8', fontweight='bold')
-
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-        plt.savefig(self.output_dir / 'model_ranking.png')
-        plt.close()  # Removido plt.show()
-
-    def plot_confusion_matrices_from_precomputed(self):
-        """Gera matrizes de confusão usando features pré-computadas."""
-        if not self.test_results:
-            print("❌ Nenhum resultado de teste disponível")
-            return
-
-        fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-        fig.suptitle('Matrizes de Confusão - Melhores Modelos (Conjunto de Teste)',
-                     fontsize=16, fontweight='bold', y=0.95)
-
-        # Ordena por F1-Score e pega os top 4
-        sorted_models = sorted(self.test_results.items(),
-                              key=lambda x: x[1]['test_metrics'].get('f1_score', 0),
-                              reverse=True)[:4]
-
-        for i, (model_key, model_data) in enumerate(sorted_models):
-            ax = axes[i // 2, i % 2]
-
-            # Tenta carregar matriz de confusão dos arquivos
-            if model_data['type'] == 'CNN':
-                model_path = self.results_data[model_key]['path'] / 'final_model'
-                title = f"CNN-{model_data['model']}"
-                results_file = model_path / 'evaluation_results.txt'
-            else:
-                model_path = self.results_data[model_key]['path'] / 'final_model'
-                title = f"{model_data['extractor']}+{model_data['classifier'][:4]}"
-                results_file = model_path / 'final_model_test_results.txt'
-
-            # Tenta extrair matriz de confusão
-            cm_data = self._extract_confusion_matrix_from_file(results_file)
-
-            if cm_data is not None:
-                # Plot matriz de confusão real
-                sns.heatmap(cm_data, annot=True, fmt='d', cmap='Blues', ax=ax,
-                           xticklabels=self.class_names, yticklabels=self.class_names,
-                           cbar_kws={'shrink': 0.8})
-            else:
-                # Matriz simulada baseada nas métricas
-                self._plot_simulated_confusion_matrix(ax, model_data)
-
-            # Métricas
-            f1 = model_data['test_metrics'].get('f1_score', 0)
-            acc = model_data['test_metrics'].get('accuracy', 0)
-
-            ax.set_title(f'{title}\nF1: {f1:.3f} | Acc: {acc:.3f}', fontsize=11)
-            ax.set_xlabel('Predito')
-            ax.set_ylabel('Real')
-
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-        plt.savefig(self.output_dir / 'confusion_matrices_test.png')
-        plt.close()  # Removido plt.show()
-
-    def _extract_confusion_matrix_from_file(self, file_path):
-        """Extrai matriz de confusão de arquivo de resultados."""
-        if not file_path.exists():
-            return None
-
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-
-            # Procura por matriz de confusão no texto
-            lines = content.split('\n')
-            matrix_start = -1
-
-            for i, line in enumerate(lines):
-                if 'confusion matrix' in line.lower() or 'matriz de confusão' in line.lower():
-                    matrix_start = i + 1
-                    break
-
-            if matrix_start > 0:
-                # Tenta extrair matriz
-                matrix_lines = []
-                for i in range(matrix_start, min(matrix_start + 10, len(lines))):
-                    line = lines[i].strip()
-                    if line and '[' in line:
-                        # Extrai números da linha
-                        numbers = re.findall(r'\d+', line)
-                        if len(numbers) == 7:  # HAM10000 tem 7 classes
-                            matrix_lines.append([int(n) for n in numbers])
-
-                if len(matrix_lines) == 7:
-                    return np.array(matrix_lines)
-
-        except Exception as e:
-            print(f"Erro ao extrair matriz de confusão de {file_path}: {e}")
-
-        return None
-
-    def _plot_simulated_confusion_matrix(self, ax, model_data):
-        """Plota matriz de confusão simulada baseada nas métricas."""
-        f1 = model_data['test_metrics'].get('f1_score', 0.8)
-
-        # Distribui amostras simuladas por classe (baseado no HAM10000)
-        class_samples = [49, 77, 165, 17, 167, 1007, 21]  # ~15% do dataset original para teste
-
-        # Cria matriz simulada
-        cm_sim = np.zeros((7, 7))
-        for i in range(7):
-            # Diagonal principal baseada no F1-Score
-            correct = int(class_samples[i] * f1)
-            cm_sim[i, i] = max(1, correct)  # Pelo menos 1
-
-            # Distribui erros nas outras classes
-            errors = class_samples[i] - correct
-            if errors > 0:
-                # Distribui erros aleatoriamente
-                remaining_errors = errors
-                for j in range(7):
-                    if i != j and remaining_errors > 0:
-                        error_count = min(remaining_errors, max(1, errors // 6))
-                        cm_sim[i, j] = error_count
-                        remaining_errors -= error_count
-
-        sns.heatmap(cm_sim, annot=True, fmt='.0f', cmap='Blues', ax=ax,
-                   xticklabels=self.class_names, yticklabels=self.class_names,
-                   cbar_kws={'shrink': 0.8})
-
-    def plot_statistical_summary(self):
-        """Resumo estatístico simplificado e limpo."""
-        fig, axes = plt.subplots(2, 2, figsize=(16, 10))
-        fig.suptitle('Análise Estatística dos Resultados', fontsize=16, fontweight='bold', y=0.95)
-
-        # Prepara dados
-        cnn_metrics = []
-        fe_metrics = []
-
-        for key, data in self.results_data.items():
-            metrics = data['cv_metrics']
-            if data['type'] == 'CNN':
-                cnn_metrics.append(metrics)
-            else:
-                fe_metrics.append(metrics)
-
-        # 1. Distribuição F1-Score
-        ax1 = axes[0, 0]
-
-        cnn_f1 = [m.get('f1_score', 0) for m in cnn_metrics if m.get('f1_score', 0) > 0]
-        fe_f1 = [m.get('f1_score', 0) for m in fe_metrics if m.get('f1_score', 0) > 0]
-
-        if cnn_f1:
-            ax1.hist(cnn_f1, alpha=0.7, label='CNN', bins=8, color=self.color_palette['CNN'])
-        if fe_f1:
-            ax1.hist(fe_f1, alpha=0.7, label='Feature Extraction', bins=8,
-                    color=self.color_palette['Feature_Extraction'])
-
-        ax1.set_xlabel('F1-Score')
-        ax1.set_ylabel('Frequência')
-        ax1.set_title('Distribuição F1-Score')
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
-
-        # 2. Comparação estatística
-        ax2 = axes[0, 1]
-
-        if cnn_f1 and fe_f1:
-            # Teste t
-            t_stat, p_value = stats.ttest_ind(cnn_f1, fe_f1)
-
-            # Box plot com estatísticas
-            bp = ax2.boxplot([cnn_f1, fe_f1], labels=['CNN', 'FE'], patch_artist=True)
-
-            colors = [self.color_palette['CNN'], self.color_palette['Feature_Extraction']]
-            for patch, color in zip(bp['boxes'], colors):
-                patch.set_facecolor(color)
-                patch.set_alpha(0.7)
-
-            ax2.set_ylabel('F1-Score')
-            ax2.set_title(f'Teste t: p-value = {p_value:.4f}')
-            ax2.grid(True, alpha=0.3)
-
-            # Adiciona significância
-            if p_value < 0.05:
-                y_max = max(max(cnn_f1), max(fe_f1))
-                ax2.text(1.5, y_max + 0.02, '***' if p_value < 0.001 else '**' if p_value < 0.01 else '*',
-                        ha='center', va='bottom', fontsize=16, fontweight='bold')
-
-        # 3. Ranking por tipo
-        ax3 = axes[1, 0]
-
-        # Calcula médias por tipo
-        if cnn_f1 and fe_f1:
-            means = [np.mean(cnn_f1), np.mean(fe_f1)]
-            stds = [np.std(cnn_f1), np.std(fe_f1)]
-            labels = ['CNN', 'Feature Extraction']
-
-            bars = ax3.bar(labels, means, yerr=stds, capsize=5,
-                          color=[self.color_palette['CNN'], self.color_palette['Feature_Extraction']],
-                          alpha=0.8)
-
-            ax3.set_ylabel('F1-Score Médio')
-            ax3.set_title('Comparação de Médias')
-            ax3.grid(True, alpha=0.3)
-
-            # Adiciona valores
-            for bar, mean, std in zip(bars, means, stds):
-                ax3.text(bar.get_x() + bar.get_width()/2, bar.get_height() + std + 0.01,
-                        f'{mean:.3f}±{std:.3f}', ha='center', va='bottom', fontsize=10)
-
-        # 4. Tabela de resumo
-        ax4 = axes[1, 1]
-        ax4.axis('tight')
-        ax4.axis('off')
-
-        # Dados da tabela
-        table_data = []
-
-        if cnn_f1:
-            table_data.append(['CNN', f'{len(cnn_f1)}', f'{np.mean(cnn_f1):.3f}',
-                             f'{np.std(cnn_f1):.3f}', f'{np.max(cnn_f1):.3f}'])
-
-        if fe_f1:
-            table_data.append(['Feature Extraction', f'{len(fe_f1)}', f'{np.mean(fe_f1):.3f}',
-                             f'{np.std(fe_f1):.3f}', f'{np.max(fe_f1):.3f}'])
-
-        if table_data:
-            table = ax4.table(cellText=table_data,
-                             colLabels=['Tipo', 'N', 'Média', 'Desvio', 'Máximo'],
-                             cellLoc='center',
-                             loc='center')
-
-            table.auto_set_font_size(False)
-            table.set_fontsize(10)
-            table.scale(1.2, 1.5)
-
-            # Colorir header
-            for i in range(5):
-                table[(0, i)].set_facecolor('#2196F3')
-                table[(0, i)].set_text_props(weight='bold', color='white')
-
-        ax4.set_title('Resumo Estatístico', fontweight='bold')
-
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-        plt.savefig(self.output_dir / 'statistical_analysis.png')
-        plt.close()  # Removido plt.show()
-
-    def generate_all_plots(self):
-        """Gera todos os gráficos principais - SEM MOSTRAR."""
-        print("📊 Gerando gráficos de análise...")
-
-        if not self.results_data:
-            self.collect_all_results()
-
-        # Gráficos principais
-        print("  1/5 - Visão geral da performance...")
+        # 3. Gera gráficos
+        print("📊 Gerando gráficos...")
         self.plot_performance_overview()
+        self.plot_cnn_vs_fe_by_network()  # O gráfico que você pediu!
 
-        print("  2/5 - Comparação detalhada...")
-        self.plot_detailed_comparison()
+        # 4. Gera relatório
+        print("📋 Gerando relatório...")
+        self.generate_comprehensive_report()
 
-        print("  3/5 - Ranking dos modelos...")
-        self.plot_model_ranking()
-
-        print("  4/5 - Matrizes de confusão...")
-        self.plot_confusion_matrices_from_precomputed()
-
-        print("  5/5 - Análise estatística...")
-        self.plot_statistical_summary()
-
-        print(f"✅ Gráficos salvos em: {self.output_dir}")
-
-    def generate_summary_report(self):
-        """Gera relatório de resumo em texto."""
-        report_path = self.output_dir / 'analysis_summary.txt'
-
-        with open(report_path, 'w', encoding='utf-8') as f:
-            f.write("="*80 + "\n")
-            f.write("RELATÓRIO DE ANÁLISE DE RESULTADOS\n")
-            f.write("Classificação de Câncer de Pele - HAM10000\n")
-            f.write("="*80 + "\n\n")
-
-            # Estatísticas gerais
-            f.write("1. ESTATÍSTICAS GERAIS\n")
-            f.write("-"*40 + "\n")
-            f.write(f"Total de experimentos: {len(self.results_data)}\n")
-
-            cnn_count = len([d for d in self.results_data.values() if d['type'] == 'CNN'])
-            fe_count = len([d for d in self.results_data.values() if d['type'] == 'Feature_Extraction'])
-
-            f.write(f"Experimentos CNN: {cnn_count}\n")
-            f.write(f"Experimentos Feature Extraction: {fe_count}\n")
-            f.write(f"Resultados de teste: {len(self.test_results)}\n\n")
-
-            # Melhores resultados
-            f.write("2. MELHORES RESULTADOS (Cross-Validation)\n")
-            f.write("-"*40 + "\n")
-
-            all_results = []
-            for key, data in self.results_data.items():
-                metrics = data['cv_metrics']
-                f1 = metrics.get('f1_score', 0)
-
-                if data['type'] == 'CNN':
-                    name = f"CNN-{data['model']}"
-                else:
-                    name = f"{data['extractor']}+{data['classifier']}"
-
-                all_results.append((name, f1, data['type']))
-
-            # Ordena por F1-Score
-            all_results.sort(key=lambda x: x[1], reverse=True)
-
-            f.write("Top 10 modelos por F1-Score:\n")
-            for i, (name, f1, model_type) in enumerate(all_results[:10], 1):
-                f.write(f"{i:2d}. {name:<30} | F1: {f1:.4f} | {model_type}\n")
-
-            f.write("\n")
-
-            # Comparação CNN vs FE
-            f.write("3. COMPARAÇÃO CNN vs FEATURE EXTRACTION\n")
-            f.write("-"*40 + "\n")
-
-            cnn_f1_scores = [r[1] for r in all_results if r[2] == 'CNN']
-            fe_f1_scores = [r[1] for r in all_results if r[2] == 'Feature_Extraction']
-
-            if cnn_f1_scores:
-                f.write(f"CNN - Média F1: {np.mean(cnn_f1_scores):.4f} ± {np.std(cnn_f1_scores):.4f}\n")
-                f.write(f"CNN - Melhor F1: {max(cnn_f1_scores):.4f}\n")
-
-            if fe_f1_scores:
-                f.write(f"FE - Média F1: {np.mean(fe_f1_scores):.4f} ± {np.std(fe_f1_scores):.4f}\n")
-                f.write(f"FE - Melhor F1: {max(fe_f1_scores):.4f}\n")
-
-            # Teste estatístico
-            if cnn_f1_scores and fe_f1_scores:
-                t_stat, p_value = stats.ttest_ind(cnn_f1_scores, fe_f1_scores)
-                f.write(f"Teste t: p-value = {p_value:.4f}\n")
-                if p_value < 0.05:
-                    f.write("Diferença estatisticamente significativa!\n")
-
-            f.write("\n")
-
-            # Resultados de teste
-            if self.test_results:
-                f.write("4. RESULTADOS NO CONJUNTO DE TESTE\n")
-                f.write("-"*40 + "\n")
-
-                test_results_sorted = sorted(self.test_results.items(),
-                                           key=lambda x: x[1]['test_metrics'].get('f1_score', 0),
-                                           reverse=True)
-
-                for i, (key, data) in enumerate(test_results_sorted[:5], 1):
-                    if data['type'] == 'CNN':
-                        name = f"CNN-{data['model']}"
-                    else:
-                        name = f"{data['extractor']}+{data['classifier']}"
-
-                    f1 = data['test_metrics'].get('f1_score', 0)
-                    acc = data['test_metrics'].get('accuracy', 0)
-
-                    f.write(f"{i}. {name:<30} | F1: {f1:.4f} | Acc: {acc:.4f}\n")
-
-            f.write("\n" + "="*80 + "\n")
-
-        print(f"📋 Relatório salvo em: {report_path}")
+        print("✅ Análise completa finalizada!")
+        print(f"📁 Resultados salvos em: {self.output_dir}")
 
 
-# Função principal simplificada
+
+# Função principal para executar
 def main():
-    """Função principal para executar análise completa."""
-    analyzer = SkinCancerResultsAnalyzer(
+    """Função principal."""
+    analyzer = CompleteResultsAnalyzer(
         results_dir='./results',
-        test_files_path='./res/test_files.txt',
         output_dir='./paper_figures'
     )
 
-    print("🚀 Iniciando análise de resultados...")
+    analyzer.run_complete_analysis()
 
-    # Coleta resultados
-    analyzer.collect_all_results()
+    return analyzer
 
-    # Gera todos os gráficos (sem mostrar)
-    analyzer.generate_all_plots()
-
-    # Gera relatório
-    analyzer.generate_summary_report()
-
-    print("✅ Análise completa!")
-    print(f"📁 Gráficos salvos em: {analyzer.output_dir}")
-    print("📋 Consulte analysis_summary.txt para detalhes")
-
-
+# Script executável
 if __name__ == "__main__":
     main()
