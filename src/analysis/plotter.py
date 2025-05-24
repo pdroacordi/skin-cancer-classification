@@ -6,9 +6,10 @@ methods were kept and extended so *cli.py* continues to work transparently.
 """
 
 from __future__ import annotations
-from pathlib import Path
-from typing import List, Dict
+
 import re
+from pathlib import Path
+from typing import List
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -21,6 +22,8 @@ from .constants import (
     DEFAULT_FIGSIZE,
     DEFAULT_DPI,
     OUTPUT_DIR,
+    CLASSES,
+    HEATMAP_CMAP
 )
 
 sns.set_style("whitegrid")
@@ -48,9 +51,10 @@ class Plotter:
     # ---------------------------------------------------------------------
     # constructor & public helpers
     # ---------------------------------------------------------------------
-    def __init__(self, train_df: pd.DataFrame, test_df: pd.DataFrame, out_dir: Path = OUTPUT_DIR):
+    def __init__(self, train_df: pd.DataFrame, test_df: pd.DataFrame, per_class_df: pd.DataFrame, out_dir: Path = OUTPUT_DIR):
         self.train = train_df.copy()
         self.test = test_df.copy()
+        self.per_class = per_class_df.copy()
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -74,6 +78,7 @@ class Plotter:
         self._fig_05_metrics_ensemble_per_cnn()
         self._fig_06_heatmap_f1()
         self._fig_07_boxplot_cv()
+        self._fig_08_f1_per_class_heatmap()
 
     # ------------------------------------------------------------------
     # Figure 1 – Geral CNN + Ensembles
@@ -308,7 +313,32 @@ class Plotter:
         self._save(fig, "07_boxplot_cv.png")
 
     # ------------------------------------------------------------------
-    # helpers – identical to old code so downstream remains unchanged
+    # Figure 08 – Heatmap F1-Score por classe
+    # ------------------------------------------------------------------
+    def _fig_08_f1_per_class_heatmap(self) -> None:
+        if self.per_class.empty:
+            print("⚠️  Nenhum dado de F1 por classe – Fig. 08 pulada.")
+            return
+
+        pivot = (self.per_class
+                 .pivot_table(index="label", columns="class", values="f1"))
+        # ordem consistente
+        label_order = [*CNN_MODELS] + [f"{net}+{clf}" for net in CNN_MODELS for clf in ML_CLASSIFIERS]
+        pivot = pivot.reindex(index=label_order).reindex(columns=CLASSES).fillna(0)
+
+        fig_h = max(6, 0.35 * len(pivot))
+        fig, ax = plt.subplots(figsize=(14, fig_h))
+        sns.heatmap(pivot,
+                    annot=True, fmt=".2f",
+                    cmap=HEATMAP_CMAP, vmin=0, vmax=1,
+                    linewidths=.5, cbar_kws={"label": "F1-Score"}, ax=ax)
+        ax.set_title("F1-Score por Classe – Todas as Combinações")
+        ax.set_xlabel("Classe (sigla)")
+        ax.set_ylabel("Combinação CNN + Classificador")
+        self._save(fig, "08_f1_class_heatmap.png")
+
+    # ------------------------------------------------------------------
+    # helpers
     # ------------------------------------------------------------------
     def _get_metric(self, network: str, classifier: str, *, train: bool, metric: str = "f1_score") -> float:
         """Return *metric* (defaults to *f1_score*) for the given combination."""

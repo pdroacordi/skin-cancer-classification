@@ -24,8 +24,19 @@ COLOR_PALETTE: Dict[str, str] = {
     "ExtraTrees": "#e377c2",
 }
 
+CLASSES: List[str] = [
+    "akiec",  # Actinic keratoses and intra‑epithelial carcinoma
+    "bcc",    # Basal cell carcinoma
+    "bkl",    # Benign keratosis‑like lesions
+    "df",     # Dermatofibroma
+    "mel",    # Melanoma
+    "nv",     # Melanocytic nevi
+    "vasc",   # Vascular lesions
+]
+
 # Figures --------------------------------------------------------------------
 DEFAULT_FIGSIZE = (14, 8)
 DEFAULT_DPI = 300
 OUTPUT_DIR = Path("../../figures")  # changed via CLI flag if needed
 OUTPUT_DIR.mkdir(exist_ok=True)
+HEATMAP_CMAP = "YlGnBu"

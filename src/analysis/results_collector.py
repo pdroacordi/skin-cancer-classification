@@ -11,7 +11,7 @@ from typing import List
 import pandas as pd
 
 from .constants import CNN_MODELS, ML_CLASSIFIERS
-from .metrics_parser import parse_metrics
+from .metrics_parser import parse_metrics, parse_class_f1
 
 @dataclass
 class CollectorConfig:
@@ -25,6 +25,7 @@ class ResultsCollector:
         self.cfg = cfg
         self.train_records: List[dict] = []
         self.test_records: List[dict] = []
+        self.per_class_records: List[dict] = []
 
     # ---------------------------------------------------------------------
     # public API
@@ -33,10 +34,13 @@ class ResultsCollector:
         self._collect_cnn()
         self._collect_feature_extraction()
 
-    def to_dataframes(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def to_dataframes(self) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         train_df = pd.DataFrame(self.train_records)
         test_df = pd.DataFrame(self.test_records)
-        return train_df, test_df
+        class_df = pd.DataFrame(self.per_class_records)
+        print(test_df.head())
+        print(class_df.head())
+        return train_df, test_df, class_df
 
     # ---------------------------------------------------------------------
     # internals
@@ -62,6 +66,7 @@ class ResultsCollector:
                     "classifier": "CNN",
                     **parse_metrics(test_file),
                 })
+                self._append_class_f1(test_file, model_name, "CNN")
 
     def _collect_feature_extraction(self) -> None:
         for fe_dir in self.cfg.results_dir.glob("feature_extraction_*"):
@@ -88,3 +93,20 @@ class ResultsCollector:
                         "classifier": clf,
                         **parse_metrics(test_file),
                     })
+                    self._append_class_f1(test_file, extractor_name, clf)
+
+    def _append_class_f1(self, file_path: Path, network: str, classifier: str) -> None:
+        print("entrou em _append_class_f1")
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="ignore")
+        except FileNotFoundError:
+            return
+        for cls, f1 in parse_class_f1(content).items():
+            print(f"[_append_class_f1] {network} {classifier} {cls} {f1}")
+            self.per_class_records.append({
+                "network": network,
+                "classifier": classifier,
+                "label": network if classifier == "CNN" else f"{network}+{classifier}",
+                "class": cls,
+                "f1": f1,
+            })

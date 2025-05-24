@@ -17,10 +17,10 @@ def main(results_dir: Path, figures_dir: Path) -> None:
     print("🔍  Vasculhando métricas em", results_dir)
     collector = ResultsCollector(CollectorConfig(results_dir=results_dir))
     collector.collect()
-    train_df, test_df = collector.to_dataframes()
+    train_df, test_df, class_df = collector.to_dataframes()
     print(f"📈  {len(train_df)} registros de treino | {len(test_df)} de teste encontrados.")
 
-    plotter = Plotter(train_df, test_df, out_dir=figures_dir)
+    plotter = Plotter(train_df, test_df, class_df, out_dir=figures_dir)
     plotter.make_all_figures()
     print("🎉  Todas as figuras foram geradas!")
 
