@@ -38,8 +38,6 @@ class ResultsCollector:
         train_df = pd.DataFrame(self.train_records)
         test_df = pd.DataFrame(self.test_records)
         class_df = pd.DataFrame(self.per_class_records)
-        print(test_df.head())
-        print(class_df.head())
         return train_df, test_df, class_df
 
     # ---------------------------------------------------------------------
@@ -102,7 +100,6 @@ class ResultsCollector:
         except FileNotFoundError:
             return
         for cls, f1 in parse_class_f1(content).items():
-            print(f"[_append_class_f1] {network} {classifier} {cls} {f1}")
             self.per_class_records.append({
                 "network": network,
                 "classifier": classifier,
