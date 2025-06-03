@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 import pandas as pd
+import numpy as np
 
 from .constants import CNN_MODELS, ML_CLASSIFIERS
 from .metrics_parser import parse_metrics, parse_class_f1
@@ -26,19 +27,21 @@ class ResultsCollector:
         self.train_records: List[dict] = []
         self.test_records: List[dict] = []
         self.per_class_records: List[dict] = []
+        self.iter_records: list[dict] = []
 
-    # ---------------------------------------------------------------------
+        # ---------------------------------------------------------------------
     # public API
     # ---------------------------------------------------------------------
     def collect(self) -> None:
         self._collect_cnn()
         self._collect_feature_extraction()
 
-    def to_dataframes(self) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    def to_dataframes(self) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         train_df = pd.DataFrame(self.train_records)
         test_df = pd.DataFrame(self.test_records)
         class_df = pd.DataFrame(self.per_class_records)
-        return train_df, test_df, class_df
+        iter_df = pd.DataFrame(self.iter_records)
+        return train_df, test_df, class_df, iter_df
 
     # ---------------------------------------------------------------------
     # internals
@@ -55,6 +58,8 @@ class ResultsCollector:
                     "classifier": "CNN",
                     **parse_metrics(train_file),
                 })
+            for iter_file in self._find_iter_files(cnn_dir):
+                self._append_iteration_f1(iter_file, model_name, "CNN")
             # test metrics
             test_file = cnn_dir / "final_model" / "evaluation_results.txt"
             if test_file.exists():
@@ -82,6 +87,8 @@ class ResultsCollector:
                         "classifier": clf,
                         **parse_metrics(train_file),
                     })
+                for iter_file in self._find_iter_files(clf_dir):
+                    self._append_iteration_f1(iter_file, extractor_name, clf)
                 # test metrics -----------------------------------------------------
                 test_file = clf_dir / "final_model" / "final_model_test_results.txt"
                 if test_file.exists():
@@ -94,7 +101,6 @@ class ResultsCollector:
                     self._append_class_f1(test_file, extractor_name, clf)
 
     def _append_class_f1(self, file_path: Path, network: str, classifier: str) -> None:
-        print("entrou em _append_class_f1")
         try:
             content = file_path.read_text(encoding="utf-8", errors="ignore")
         except FileNotFoundError:
@@ -107,3 +113,40 @@ class ResultsCollector:
                 "class": cls,
                 "f1": f1,
             })
+
+
+    def _append_iteration_f1(self, iter_file: Path,
+                             network: str, classifier: str) -> None:
+        try:
+            content = iter_file.read_text(encoding="utf-8", errors="ignore")
+        except FileNotFoundError:
+            return
+        from .metrics_parser import parse_iteration_f1s  # import aqui p/ evitar ciclo
+        f1_list = parse_iteration_f1s(content)
+        if not f1_list:
+            return
+        self.iter_records.append({
+            "network": network,
+            "classifier": classifier,
+            "label": network if classifier == "CNN" else f"{network}+{classifier}",
+            "f1_mean": float(np.mean(f1_list)),
+            "f1_std": float(np.std(f1_list, ddof=1)),
+        })
+
+    # -----------------------------------------------------------------
+    # helper
+    # -----------------------------------------------------------------
+    @staticmethod
+    def _find_iter_files(base: Path) -> List[Path]:
+        """
+        Retorna todos os arquivos cujo nome termina em 'iteration_results.txt'
+        OU 'iterations_results.txt' em QUALQUER sub-pasta chamada iteration_*.
+        """
+        patterns = [
+            "iteration_*/*iteration_results.txt",
+            "iteration_*/*iterations_results.txt",  # variação plural
+        ]
+        files: List[Path] = []
+        for pat in patterns:
+            files.extend(base.glob(pat))
+        return files

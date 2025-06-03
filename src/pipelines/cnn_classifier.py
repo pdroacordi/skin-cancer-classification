@@ -4,6 +4,7 @@ Handles training, evaluation, and K-fold cross-validation.
 """
 
 import datetime
+import gc
 import math
 import os
 import sys
@@ -29,13 +30,17 @@ from config import (
     USE_DATA_PREPROCESSING,
     USE_HAIR_REMOVAL,
     USE_IMAGE_SEGMENTATION,
-    USE_ENHANCED_CONTRAST, FINE_TUNING_AT_LAYER
+    USE_ENHANCED_CONTRAST,
+    FINE_TUNING_AT_LAYER,
+    NUM_ITERATIONS,
+    NUM_CLASSES, NUM_FINAL_MODELS
 )
 
 from utils.data_loaders import load_paths_labels, MemoryEfficientDataGenerator
 from utils.graphic_preprocessing import apply_graphic_preprocessing
 from utils.augmentation import AugmentationFactory
 from models.cnn_models import load_or_create_cnn, get_callbacks, create_model_name
+from utils.fold_utils import save_fold_results, plot_metric_distributions
 
 
 def setup_gpu_memory():
@@ -882,8 +887,440 @@ def run_cross_validation(all_data_paths, all_data_labels, class_names=None):
     return fold_results
 
 
+def train_multiple_final_cnn_models(all_data_paths, all_data_labels, best_hyperparameters,
+                                    result_dir, class_names=None, num_models=10):
+    """
+    Train multiple final CNN models on all training data using the best hyperparameters.
+
+    Args:
+        all_data_paths: Combined training and validation paths
+        all_data_labels: Combined training and validation labels
+        best_hyperparameters: Best hyperparameters found during cross-validation
+        result_dir: Directory to save results
+        class_names: List of class names
+        num_models: Number of models to train
+
+    Returns:
+        List of trained models and their directories
+    """
+    print("\n" + "=" * 60)
+    print(f"Training {num_models} Final CNN Models on All Training Data")
+    print("=" * 60)
+
+    # Create final models directory
+    final_models_dir = os.path.join(result_dir, "final_models")
+    os.makedirs(final_models_dir, exist_ok=True)
+
+    # Get augmentation pipeline if enabled
+    augment_fn = None
+    if best_hyperparameters.get('use_augmentation', USE_DATA_AUGMENTATION):
+        augmentation = AugmentationFactory.get_medium_augmentation()
+        augment_fn = lambda img: augmentation(image=img)['image']
+
+    # Preprocessing function
+    preprocess_fn = None
+    if best_hyperparameters.get('use_graphic_preprocessing', USE_GRAPHIC_PREPROCESSING):
+        preprocess_fn = lambda img: apply_graphic_preprocessing(
+            img,
+            use_hair_removal=best_hyperparameters.get('use_hair_removal', USE_HAIR_REMOVAL),
+            use_contrast_enhancement=best_hyperparameters.get('use_enhanced_contrast', USE_ENHANCED_CONTRAST),
+            use_segmentation=best_hyperparameters.get('use_image_segmentation', USE_IMAGE_SEGMENTATION),
+            visualize=False
+        )
+
+    trained_models = []
+
+    for model_idx in range(num_models):
+        print(f"\n{'=' * 50}")
+        print(f"Training CNN Model {model_idx + 1}/{num_models}")
+        print(f"{'=' * 50}")
+
+        # Create model-specific directory
+        model_dir = os.path.join(final_models_dir, f"model_{model_idx + 1}")
+        os.makedirs(model_dir, exist_ok=True)
+        os.makedirs(os.path.join(model_dir, "plots"), exist_ok=True)
+
+        # Model save path
+        model_path = os.path.join(model_dir, "final_cnn_model.h5")
+
+        # Create data generators with different random shuffling for each model
+        train_gen = MemoryEfficientDataGenerator(
+            paths=all_data_paths,
+            labels=all_data_labels,
+            batch_size=best_hyperparameters.get('batch_size', BATCH_SIZE),
+            model_name=best_hyperparameters['model_name'],
+            preprocess_fn=preprocess_fn,
+            augment_fn=augment_fn,
+            shuffle=True
+        )
+
+        # For validation during training, use a small subset
+        val_size = min(1000, len(all_data_paths) // 5)
+        val_indices = np.random.RandomState(42 + model_idx).choice(
+            len(all_data_paths), val_size, replace=False
+        )
+        val_paths = all_data_paths[val_indices]
+        val_labels = all_data_labels[val_indices]
+
+        val_gen = MemoryEfficientDataGenerator(
+            paths=val_paths,
+            labels=val_labels,
+            batch_size=best_hyperparameters.get('batch_size', BATCH_SIZE),
+            model_name=best_hyperparameters['model_name'],
+            preprocess_fn=preprocess_fn,
+            augment_fn=None,
+            shuffle=False
+        )
+
+        # Calculate steps
+        steps_per_epoch = math.ceil(len(all_data_paths) / best_hyperparameters.get('batch_size', BATCH_SIZE))
+        validation_steps = math.ceil(len(val_paths) / best_hyperparameters.get('batch_size', BATCH_SIZE))
+
+        # TensorBoard log directory
+        log_dir = os.path.join(model_dir, "logs", datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+
+        # Create model
+        model, _ = load_or_create_cnn(
+            model_name=best_hyperparameters['model_name'],
+            mode='classifier',
+            fine_tune=best_hyperparameters.get('fine_tuning', USE_FINE_TUNING),
+            save_path=None  # Don't load existing
+        )
+
+        # Get callbacks
+        callbacks = get_callbacks(model_path, log_dir)
+
+        # Train the model
+        print(f"Training model {model_idx + 1} on all {len(all_data_paths)} samples...")
+        history = model.fit(
+            train_gen.get_keras_generator(),
+            steps_per_epoch=steps_per_epoch,
+            epochs=NUM_EPOCHS,
+            validation_data=val_gen.get_keras_generator(),
+            validation_steps=validation_steps,
+            callbacks=callbacks,
+            verbose=1
+        )
+
+        # Plot training history
+        history_plot_path = os.path.join(model_dir, "plots", "training_history.png")
+        plot_training_history(history, history_plot_path)
+
+        trained_models.append({
+            'model': model,
+            'model_path': model_path,
+            'model_dir': model_dir,
+            'model_idx': model_idx + 1,
+            'history': history
+        })
+
+        # Clear memory
+        clear_session()
+        gc.collect()
+
+    print(f"\nAll {num_models} CNN models trained successfully!")
+
+    # Save training summary
+    summary_path = os.path.join(final_models_dir, "training_summary.txt")
+    with open(summary_path, "w") as f:
+        f.write(f"Multiple Final CNN Models Training Summary\n")
+        f.write(f"{'=' * 50}\n\n")
+        f.write(f"Number of models trained: {num_models}\n")
+        f.write(f"CNN Model: {best_hyperparameters['model_name']}\n")
+        f.write(f"Use Fine-tuning: {best_hyperparameters.get('fine_tuning', USE_FINE_TUNING)}\n")
+        f.write(f"Use Augmentation: {best_hyperparameters.get('use_augmentation', USE_DATA_AUGMENTATION)}\n")
+        f.write(
+            f"Use Preprocessing: {best_hyperparameters.get('use_graphic_preprocessing', USE_GRAPHIC_PREPROCESSING)}\n")
+        f.write(f"Batch Size: {best_hyperparameters.get('batch_size', BATCH_SIZE)}\n")
+        f.write(f"Models saved in: {final_models_dir}\n")
+
+    return trained_models, final_models_dir
+
+
+def evaluate_multiple_final_cnn_models(trained_models, test_paths, test_labels,
+                                       result_dir, class_names=None):
+    """
+    Evaluate multiple final CNN models on the test set and perform statistical analysis.
+
+    Args:
+        trained_models: List of trained model dictionaries
+        test_paths: Test image paths
+        test_labels: Test labels
+        result_dir: Directory to save results
+        class_names: List of class names
+
+    Returns:
+        Dictionary with evaluation results and statistical analysis
+    """
+    from scipy import stats
+    import pandas as pd
+
+    print("\n" + "=" * 60)
+    print("Evaluating Multiple Final CNN Models on Test Set")
+    print("=" * 60)
+
+    # Preprocessing function
+    preprocess_fn = None
+    if USE_GRAPHIC_PREPROCESSING:
+        preprocess_fn = lambda img: apply_graphic_preprocessing(
+            img,
+            use_hair_removal=USE_HAIR_REMOVAL,
+            use_contrast_enhancement=USE_ENHANCED_CONTRAST,
+            use_segmentation=USE_IMAGE_SEGMENTATION,
+            visualize=False
+        )
+
+    # Results storage
+    all_results = {
+        'model_metrics': [],
+        'predictions': [],
+        'accuracies': [],
+        'f1_scores': [],
+        'precisions': [],
+        'recalls': [],
+        'class_metrics': []
+    }
+
+    # Evaluate each model
+    for model_info in trained_models:
+        model = model_info['model']
+        model_idx = model_info['model_idx']
+        model_dir = model_info['model_dir']
+
+        print(f"\nEvaluating CNN Model {model_idx}/{len(trained_models)}...")
+
+        # Create test generator
+        test_gen = MemoryEfficientDataGenerator(
+            paths=test_paths,
+            labels=test_labels,
+            batch_size=BATCH_SIZE,
+            model_name=CNN_MODEL,
+            preprocess_fn=preprocess_fn,
+            augment_fn=None,
+            shuffle=False
+        )
+
+        # Calculate steps
+        test_steps = math.ceil(len(test_paths) / BATCH_SIZE)
+
+        # Collect predictions
+        y_true = []
+        y_pred = []
+
+        for i in range(test_steps):
+            try:
+                X_batch, y_batch = next(test_gen)
+                pred_batch = model.predict(X_batch, verbose=0)
+
+                true_batch = np.argmax(y_batch, axis=1)
+                pred_batch_cls = np.argmax(pred_batch, axis=1)
+
+                y_true.extend(true_batch)
+                y_pred.extend(pred_batch_cls)
+            except StopIteration:
+                break
+
+        y_true = np.array(y_true)
+        y_pred = np.array(y_pred)
+
+        # Calculate metrics
+        test_report = classification_report(y_true, y_pred, output_dict=True)
+
+        # Store predictions and metrics
+        all_results['predictions'].append(y_pred)
+        all_results['accuracies'].append(test_report['accuracy'])
+        all_results['f1_scores'].append(test_report['macro avg']['f1-score'])
+        all_results['precisions'].append(test_report['macro avg']['precision'])
+        all_results['recalls'].append(test_report['macro avg']['recall'])
+
+        # Store detailed metrics
+        all_results['model_metrics'].append({
+            'model_idx': model_idx,
+            'accuracy': test_report['accuracy'],
+            'macro_avg_precision': test_report['macro avg']['precision'],
+            'macro_avg_recall': test_report['macro avg']['recall'],
+            'macro_avg_f1': test_report['macro avg']['f1-score'],
+            'class_report': test_report
+        })
+
+        # Store per-class metrics
+        for class_idx in range(len(class_names) if class_names else NUM_CLASSES):
+            class_key = str(class_idx)
+            if class_key in test_report:
+                class_name = class_names[class_idx] if class_names else f"Class {class_idx}"
+                all_results['class_metrics'].append({
+                    'model_idx': model_idx,
+                    'class_idx': class_idx,
+                    'class_name': class_name,
+                    'precision': test_report[class_key]['precision'],
+                    'recall': test_report[class_key]['recall'],
+                    'f1_score': test_report[class_key]['f1-score'],
+                    'support': test_report[class_key]['support']
+                })
+
+        # Save individual model results
+        with open(os.path.join(model_dir, "test_results.txt"), "w") as f:
+            f.write(f"Model {model_idx} Test Results\n")
+            f.write(f"{'=' * 30}\n\n")
+            f.write(f"Model: {CNN_MODEL}\n")
+            f.write(f"Use Fine-tuning: {USE_FINE_TUNING}\n")
+            f.write(f"Use Preprocessing: {USE_GRAPHIC_PREPROCESSING}\n")
+            f.write(f"Use Data Augmentation: {USE_DATA_AUGMENTATION}\n\n")
+            f.write("Classification Report:\n")
+            f.write(classification_report(y_true, y_pred))
+            f.write("\nConfusion Matrix:\n")
+            f.write(str(confusion_matrix(y_true, y_pred)))
+
+        # Plot confusion matrix
+        cm_plot_path = os.path.join(model_dir, "plots", "test_confusion_matrix.png")
+        plot_confusion_matrix(y_true, y_pred, class_names, cm_plot_path)
+
+    # Statistical Analysis
+    print("\n" + "=" * 50)
+    print("Statistical Analysis of CNN Model Performance")
+    print("=" * 50)
+
+    # Convert to numpy arrays
+    accuracies = np.array(all_results['accuracies'])
+    f1_scores = np.array(all_results['f1_scores'])
+    precisions = np.array(all_results['precisions'])
+    recalls = np.array(all_results['recalls'])
+
+    # Calculate statistics
+    stats_results = {
+        'accuracy': {
+            'mean': np.mean(accuracies),
+            'std': np.std(accuracies),
+            'min': np.min(accuracies),
+            'max': np.max(accuracies),
+            'median': np.median(accuracies)
+        },
+        'f1_score': {
+            'mean': np.mean(f1_scores),
+            'std': np.std(f1_scores),
+            'min': np.min(f1_scores),
+            'max': np.max(f1_scores),
+            'median': np.median(f1_scores)
+        },
+        'precision': {
+            'mean': np.mean(precisions),
+            'std': np.std(precisions),
+            'min': np.min(precisions),
+            'max': np.max(precisions),
+            'median': np.median(precisions)
+        },
+        'recall': {
+            'mean': np.mean(recalls),
+            'std': np.std(recalls),
+            'min': np.min(recalls),
+            'max': np.max(recalls),
+            'median': np.median(recalls)
+        }
+    }
+
+    # Calculate 95% confidence intervals
+    for metric_name, values in [('accuracy', accuracies), ('f1_score', f1_scores),
+                                ('precision', precisions), ('recall', recalls)]:
+        ci = stats.t.interval(0.95, len(values) - 1, loc=np.mean(values),
+                              scale=stats.sem(values))
+        stats_results[metric_name]['95_ci'] = ci
+
+    # Save statistical results
+    stats_path = os.path.join(result_dir, "statistical_analysis.txt")
+    with open(stats_path, "w") as f:
+        f.write("Statistical Analysis of Multiple Final CNN Models\n")
+        f.write("=" * 50 + "\n\n")
+        f.write(f"Number of models: {len(trained_models)}\n\n")
+
+        for metric_name, metric_stats in stats_results.items():
+            f.write(f"{metric_name.upper()}:\n")
+            f.write(f"  Mean ± Std: {metric_stats['mean']:.4f} ± {metric_stats['std']:.4f}\n")
+            f.write(f"  Median: {metric_stats['median']:.4f}\n")
+            f.write(f"  Min/Max: {metric_stats['min']:.4f} / {metric_stats['max']:.4f}\n")
+            f.write(f"  95% CI: [{metric_stats['95_ci'][0]:.4f}, {metric_stats['95_ci'][1]:.4f}]\n\n")
+
+    # Create DataFrames
+    df_results = pd.DataFrame(all_results['model_metrics'])
+    df_summary = df_results[['model_idx', 'accuracy', 'macro_avg_precision',
+                             'macro_avg_recall', 'macro_avg_f1']]
+
+    # Save as CSV
+    csv_path = os.path.join(result_dir, "model_performance_summary.csv")
+    df_summary.to_csv(csv_path, index=False)
+
+    # Save per-class metrics
+    df_class_metrics = None
+    class_stats = {}
+
+    if all_results['class_metrics']:
+        df_class_metrics = pd.DataFrame(all_results['class_metrics'])
+        class_csv_path = os.path.join(result_dir, "per_class_metrics.csv")
+        df_class_metrics.to_csv(class_csv_path, index=False)
+
+        # Calculate per-class statistics
+        for class_idx in df_class_metrics['class_idx'].unique():
+            class_data = df_class_metrics[df_class_metrics['class_idx'] == class_idx]
+            class_name = class_data['class_name'].iloc[0]
+
+            class_stats[class_name] = {
+                'f1_score': {
+                    'mean': class_data['f1_score'].mean(),
+                    'std': class_data['f1_score'].std(),
+                    'min': class_data['f1_score'].min(),
+                    'max': class_data['f1_score'].max()
+                },
+                'precision': {
+                    'mean': class_data['precision'].mean(),
+                    'std': class_data['precision'].std()
+                },
+                'recall': {
+                    'mean': class_data['recall'].mean(),
+                    'std': class_data['recall'].std()
+                }
+            }
+
+        # Save per-class statistics
+        class_stats_path = os.path.join(result_dir, "per_class_statistics.txt")
+        with open(class_stats_path, "w") as f:
+            f.write("Per-Class Performance Statistics\n")
+            f.write("=" * 50 + "\n\n")
+
+            for class_name, stats in class_stats.items():
+                f.write(f"{class_name}:\n")
+                f.write(f"  F1-Score: {stats['f1_score']['mean']:.4f} ± {stats['f1_score']['std']:.4f}\n")
+                f.write(f"  Precision: {stats['precision']['mean']:.4f} ± {stats['precision']['std']:.4f}\n")
+                f.write(f"  Recall: {stats['recall']['mean']:.4f} ± {stats['recall']['std']:.4f}\n")
+                f.write(f"  Range: [{stats['f1_score']['min']:.4f}, {stats['f1_score']['max']:.4f}]\n\n")
+
+    # Plot box plots of metrics
+    raw_metrics = {
+        'accuracy': accuracies,
+        'f1_score': f1_scores,
+        'precision': precisions,
+        'recall': recalls
+    }
+    plot_metric_distributions(stats_results, result_dir, raw_metrics)
+
+    print("\nStatistical Summary:")
+    print(f"Accuracy: {stats_results['accuracy']['mean']:.4f} ± {stats_results['accuracy']['std']:.4f}")
+    print(f"F1-Score: {stats_results['f1_score']['mean']:.4f} ± {stats_results['f1_score']['std']:.4f}")
+    print(
+        f"95% CI for Accuracy: [{stats_results['accuracy']['95_ci'][0]:.4f}, {stats_results['accuracy']['95_ci'][1]:.4f}]")
+    print(
+        f"95% CI for F1-Score: [{stats_results['f1_score']['95_ci'][0]:.4f}, {stats_results['f1_score']['95_ci'][1]:.4f}]")
+
+    # Return comprehensive results
+    return {
+        'all_results': all_results,
+        'statistics': stats_results,
+        'summary_df': df_summary,
+        'class_metrics_df': df_class_metrics,
+        'class_statistics': class_stats
+    }
+
+
 def run_cnn_classifier_pipeline(train_files_path, val_files_path, test_files_path,
-                                run_kfold=False, class_names=None):
+                                run_kfold=False, class_names=None, skip_training=False):
     """
     Run the CNN classifier pipeline.
 
@@ -904,6 +1341,43 @@ def run_cnn_classifier_pipeline(train_files_path, val_files_path, test_files_pat
 
     results = {}
 
+    if skip_training:
+        print("\nStarting training of multiple final CNN models...")
+        result_dir = create_result_directories()
+        all_data_paths = np.concatenate([train_paths, val_paths])
+        all_data_labels = np.concatenate([train_labels, val_labels])
+        hyperparameters = {
+            'model_name': CNN_MODEL,
+            'batch_size': BATCH_SIZE,
+            'fine_tuning': USE_FINE_TUNING,
+            'fine_tuning_at_layer': FINE_TUNING_AT_LAYER.get(CNN_MODEL),
+            'use_augmentation': USE_DATA_AUGMENTATION,
+            'use_graphic_preprocessing': USE_GRAPHIC_PREPROCESSING,
+            'use_hair_removal': USE_HAIR_REMOVAL,
+            'use_image_segmentation': USE_IMAGE_SEGMENTATION,
+            'use_enhanced_contrast': USE_ENHANCED_CONTRAST
+        }
+        trained_models, final_models_dir = train_multiple_final_cnn_models(
+            all_data_paths=all_data_paths,
+            all_data_labels=all_data_labels,
+            best_hyperparameters=hyperparameters,
+            result_dir=result_dir,
+            class_names=class_names,
+            num_models=NUM_FINAL_MODELS
+        )
+        print(f"All {NUM_FINAL_MODELS} final CNN models trained and saved in: {final_models_dir}")
+
+        # Evaluate all final models on test set
+        print("\nEvaluating multiple final CNN models on test set...")
+
+        eval_results = evaluate_multiple_final_cnn_models(
+            trained_models=trained_models,
+            test_paths=test_paths,
+            test_labels=test_labels,
+            result_dir=final_models_dir,
+            class_names=class_names
+        )
+        return
     if run_kfold:
         # Combine training and validation sets for cross-validation
         all_data_paths = np.concatenate([train_paths, val_paths])
@@ -919,38 +1393,109 @@ def run_cnn_classifier_pipeline(train_files_path, val_files_path, test_files_pat
         results['k_fold'] = cv_results['fold_results']
         results['best_model_info'] = cv_results['best_model_info']
 
-        # Train final model with all training data using best hyperparameters
-        final_model, final_model_dir = train_final_model_cnn(
-            all_data_paths=all_data_paths,
-            all_data_labels=all_data_labels,
-            best_hyperparameters=cv_results['best_hyperparameters'],
+        # Save detailed fold results
+        save_fold_results(
+            fold_results=cv_results['fold_results'],
             result_dir=cv_results['result_dir'],
-            class_names=class_names
+            classifier_name='CNN'
         )
 
-        # Evaluate final model on test set
-        print("\nEvaluating final model on test set...")
-        test_results = evaluate_model(
-            model=final_model,
-            test_paths=test_paths,
-            test_labels=test_labels,
-            result_dir=final_model_dir,
-            class_names=class_names
-        )
+        # Train multiple final models with all training data using best hyperparameters
+        try:
+            print("\nStarting training of multiple final CNN models...")
 
-        results['final_model_test_results'] = test_results
-    else:
-        # Train and evaluate on fixed splits
-        model, test_results = train_and_evaluate(
-            train_paths=train_paths,
-            train_labels=train_labels,
-            val_paths=val_paths,
-            val_labels=val_labels,
-            test_paths=test_paths,
-            test_labels=test_labels,
-            class_names=class_names
-        )
+            trained_models, final_models_dir = train_multiple_final_cnn_models(
+                all_data_paths=all_data_paths,
+                all_data_labels=all_data_labels,
+                best_hyperparameters=cv_results['best_hyperparameters'],
+                result_dir=cv_results['result_dir'],
+                class_names=class_names,
+                num_models=NUM_FINAL_MODELS
+            )
+            print(f"All {NUM_FINAL_MODELS} final CNN models trained and saved in: {final_models_dir}")
 
-        results['test_evaluation'] = test_results
+            # Evaluate all final models on test set
+            print("\nEvaluating multiple final CNN models on test set...")
 
-    return results
+            eval_results = evaluate_multiple_final_cnn_models(
+                trained_models=trained_models,
+                test_paths=test_paths,
+                test_labels=test_labels,
+                result_dir=final_models_dir,
+                class_names=class_names
+            )
+
+            # Store comprehensive results
+            results['final_models'] = trained_models
+            results['final_models_evaluation'] = eval_results
+            results['statistical_analysis'] = eval_results['statistics']
+            results['class_statistics'] = eval_results.get('class_statistics', None)
+
+            # Save comprehensive summary
+            summary_path = os.path.join(cv_results['result_dir'], "complete_experiment_summary.txt")
+            with open(summary_path, "w") as f:
+                f.write("Complete CNN Experiment Summary\n")
+                f.write("=" * 60 + "\n\n")
+                f.write(f"CNN Model: {CNN_MODEL}\n")
+                f.write(f"Use Fine-tuning: {USE_FINE_TUNING}\n")
+                f.write(f"Use Data Augmentation: {USE_DATA_AUGMENTATION}\n")
+                f.write(f"Use Preprocessing: {USE_GRAPHIC_PREPROCESSING}\n")
+                if USE_GRAPHIC_PREPROCESSING:
+                    f.write(f"  Hair Removal: {USE_HAIR_REMOVAL}\n")
+                    f.write(f"  Contrast Enhancement: {USE_ENHANCED_CONTRAST}\n")
+                    f.write(f"  Image Segmentation: {USE_IMAGE_SEGMENTATION}\n")
+                f.write(f"\nCross-validation:\n")
+                f.write(f"  Iterations: {NUM_ITERATIONS}\n")
+                f.write(f"  Folds per iteration: {NUM_KFOLDS}\n")
+                f.write(f"  Total folds evaluated: {len(cv_results['fold_results'])}\n")
+                f.write(f"\nFinal Models:\n")
+                f.write(f"  Number of final models: {NUM_FINAL_MODELS}\n")
+                f.write(f"  Models trained: {len(trained_models)}\n")
+
+                if 'statistical_analysis' in results:
+                    f.write(f"\nFinal Models Test Performance (Mean ± Std):\n")
+                    stats = results['statistical_analysis']
+                    f.write(f"  Accuracy: {stats['accuracy']['mean']:.4f} ± {stats['accuracy']['std']:.4f}\n")
+                    f.write(f"  F1-Score: {stats['f1_score']['mean']:.4f} ± {stats['f1_score']['std']:.4f}\n")
+                    f.write(f"  Precision: {stats['precision']['mean']:.4f} ± {stats['precision']['std']:.4f}\n")
+                    f.write(f"  Recall: {stats['recall']['mean']:.4f} ± {stats['recall']['std']:.4f}\n")
+                    f.write(f"\n95% Confidence Intervals:\n")
+                    f.write(f"  Accuracy: [{stats['accuracy']['95_ci'][0]:.4f}, {stats['accuracy']['95_ci'][1]:.4f}]\n")
+                    f.write(f"  F1-Score: [{stats['f1_score']['95_ci'][0]:.4f}, {stats['f1_score']['95_ci'][1]:.4f}]\n")
+
+                if 'class_statistics' in results and results['class_statistics']:
+                    f.write(f"\nPer-Class Performance Summary (Mean ± Std):\n")
+                    for class_name, class_stats in results['class_statistics'].items():
+                        f.write(f"\n{class_name}:\n")
+                        f.write(
+                            f"  F1-Score: {class_stats['f1_score']['mean']:.4f} ± {class_stats['f1_score']['std']:.4f}\n")
+                        f.write(
+                            f"  Precision: {class_stats['precision']['mean']:.4f} ± {class_stats['precision']['std']:.4f}\n")
+                        f.write(f"  Recall: {class_stats['recall']['mean']:.4f} ± {class_stats['recall']['std']:.4f}\n")
+
+        except Exception as e:
+            import traceback
+            print(f"ERROR in training multiple final CNN models: {e}")
+            traceback.print_exc()
+
+            # Fallback to single final model
+            print("\nFalling back to single final model training...")
+            final_model, final_model_dir = train_final_model_cnn(
+                all_data_paths=all_data_paths,
+                all_data_labels=all_data_labels,
+                best_hyperparameters=cv_results['best_hyperparameters'],
+                result_dir=cv_results['result_dir'],
+                class_names=class_names
+            )
+
+            # Evaluate final model on test set
+            print("\nEvaluating final model on test set...")
+            test_results = evaluate_model(
+                model=final_model,
+                test_paths=test_paths,
+                test_labels=test_labels,
+                result_dir=final_model_dir,
+                class_names=class_names
+            )
+
+            results['final_model_test_results'] = test_results

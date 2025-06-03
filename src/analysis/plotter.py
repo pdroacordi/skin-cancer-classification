@@ -51,10 +51,12 @@ class Plotter:
     # ---------------------------------------------------------------------
     # constructor & public helpers
     # ---------------------------------------------------------------------
-    def __init__(self, train_df: pd.DataFrame, test_df: pd.DataFrame, per_class_df: pd.DataFrame, out_dir: Path = OUTPUT_DIR):
+    def __init__(self, train_df: pd.DataFrame, test_df: pd.DataFrame, per_class_df: pd.DataFrame,
+                 iter_df: pd.DataFrame, out_dir: Path = OUTPUT_DIR):
         self.train = train_df.copy()
         self.test = test_df.copy()
         self.per_class = per_class_df.copy()
+        self.iter = iter_df.copy()
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -79,6 +81,8 @@ class Plotter:
         self._fig_06_heatmap_f1()
         self._fig_07_boxplot_cv()
         self._fig_08_f1_per_class_heatmap()
+        self._fig_09_cnn_metric_bars()
+        self._fig_10_mean_f1_iterations()
 
     # ------------------------------------------------------------------
     # Figure 1 – Geral CNN + Ensembles
@@ -111,11 +115,12 @@ class Plotter:
             ax.bar(positions, scores, width=bar_width, label=lbl, color=color, edgecolor="black")
 
         ax.set_xticks(x_pos)
-        ax.set_xticklabels(CNN_MODELS)
-        ax.set_ylabel("F1‑Score (Teste)")
-        ax.set_title("Comparativo Geral – CNN end‑to‑end vs +Ensembles")
-        ax.legend(title="Arquitetura")
+        ax.set_xticklabels(CNN_MODELS, size=16)
+        ax.set_ylabel("F1-Score", size=10)
+        ax.set_title("CNN end-to-end vs Ensembles")
+        ax.legend(title="Arquitetura", fontsize=8, title_fontsize=9)
         ax.set_ylim(0, max(max(b) for b in bars) * 1.15)
+        ax.tick_params(labelsize=14)
 
         self._annotate_bars(ax)
         self._save(fig, "01_cnn_vs_ensembles.png")
@@ -185,7 +190,7 @@ class Plotter:
             cnn_used.append(best_row["network"])
 
         bars = ax.bar(ML_CLASSIFIERS, best_scores, color=[COLOR_PALETTE[c] for c in ML_CLASSIFIERS], edgecolor="black")
-        ax.set_ylabel("F1‑Score (Teste)")
+        ax.set_ylabel("F1‑Score")
         ax.set_title("Melhor Desempenho por Algoritmo Ensemble")
         ax.set_ylim(0, max(best_scores) * 1.15)
         self._annotate_bars(ax)
@@ -197,10 +202,10 @@ class Plotter:
         self._save(fig, "03_best_ensemble_per_algo.png")
 
     # ------------------------------------------------------------------
-    # Figure 4 – Radar metrics (Accuracy, Precision, Recall, F1) per CNN
+    # Figure 4 – Radar metrics (Precision, Recall, F1) per CNN
     # ------------------------------------------------------------------
     def _fig_04_metrics_cnn_radar(self) -> None:
-        metrics = ["accuracy", "precision", "recall", "f1_score"]
+        metrics = ["precision", "recall", "f1_score"]
         angles = [n / float(len(metrics)) * 2 * 3.14159265359 for n in range(len(metrics))]
         angles += angles[:1]  # close loop
 
@@ -214,7 +219,7 @@ class Plotter:
 
         ax.set_xticks(angles[:-1])
         ax.set_xticklabels([m.capitalize() for m in metrics])
-        ax.set_title("Métricas CNN end‑to‑end (Teste)")
+        ax.set_title("Métricas CNN end‑to‑end")
         ax.set_rlabel_position(0)
         ax.set_ylim(0, 1.0)
         ax.legend(loc="upper right", bbox_to_anchor=(1.3, 1.1))
@@ -225,7 +230,7 @@ class Plotter:
     # Figure 5 – Radar metrics for ensembles per CNN
     # ------------------------------------------------------------------
     def _fig_05_metrics_ensemble_per_cnn(self) -> None:
-        metrics = ["accuracy", "precision", "recall", "f1_score"]
+        metrics = ["precision", "recall", "f1_score"]
         angles = [n / float(len(metrics)) * 2 * 3.14159265359 for n in range(len(metrics))]
         angles += angles[:1]
 
@@ -239,7 +244,7 @@ class Plotter:
 
             ax.set_xticks(angles[:-1])
             ax.set_xticklabels([m.capitalize() for m in metrics])
-            ax.set_title(f"{net} – Métricas Ensemble (Teste)")
+            ax.set_title(f"{net} – Métricas Ensemble")
             ax.set_rlabel_position(0)
             ax.set_ylim(0, 1.0)
             ax.legend(loc="upper right", bbox_to_anchor=(1.3, 1.1))
@@ -256,9 +261,9 @@ class Plotter:
 
         fig, ax = plt.subplots(figsize=(10, 6))
         sns.heatmap(pivot, annot=True, fmt=".3f", cmap="YlGnBu", cbar_kws={"label": "F1‑Score"}, ax=ax, linewidths=0.5)
-        ax.set_title("Heatmap – F1‑Score (CNN extractora x Algoritmo Ensemble)")
+        ax.set_title("F1‑Score (CNN extratora x Algoritmo Ensemble)")
         ax.set_xlabel("Algoritmo Ensemble")
-        ax.set_ylabel("CNN Extractora")
+        ax.set_ylabel("CNN Extratora")
         self._save(fig, "06_heatmap_f1.png")
 
     # ------------------------------------------------------------------
@@ -329,13 +334,132 @@ class Plotter:
         fig_h = max(6, 0.35 * len(pivot))
         fig, ax = plt.subplots(figsize=(14, fig_h))
         sns.heatmap(pivot,
-                    annot=True, fmt=".2f",
-                    cmap=HEATMAP_CMAP, vmin=0, vmax=1,
-                    linewidths=.5, cbar_kws={"label": "F1-Score"}, ax=ax)
-        ax.set_title("F1-Score por Classe – Todas as Combinações")
+                    annot=True,
+                    fmt=".2f",
+                    cmap=HEATMAP_CMAP,
+                    vmin=0,
+                    vmax=1,
+                    linewidths=0.5,
+                    cbar_kws={"label": "F1-Score"},
+                    annot_kws={"size": 12},
+                    ax=ax)
+        ax.set_title("F1-Score por Classe")
+        ax.set_xticklabels(ax.get_xticklabels(), fontsize=12)
+        ax.set_yticklabels(ax.get_yticklabels(), fontsize=12)
         ax.set_xlabel("Classe (sigla)")
         ax.set_ylabel("Combinação CNN + Classificador")
         self._save(fig, "08_f1_class_heatmap.png")
+
+
+    def _fig_09_cnn_metric_bars(self) -> None:
+        cnn_df = self.test[self.test["classifier"] == "CNN"].copy()
+        if cnn_df.empty:
+            print("⚠️  Nenhum dado de CNN pura encontrado – Fig. 09 pulada.")
+            return
+
+        metrics_cols = ["precision", "recall", "f1_score"]
+        cnn_df = cnn_df[["network", *metrics_cols]]
+
+        df_melt = cnn_df.melt(
+            id_vars="network",
+            value_vars=metrics_cols,
+            var_name="metric",
+            value_name="value",
+        )
+
+        df_melt["metric"] = df_melt["metric"].map({
+            "precision": "Precisão",
+            "recall": "Recall",
+            "f1_score": "F1-Score"
+        })
+
+        palette = sns.color_palette("Set2", n_colors=len(metrics_cols))
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sns.barplot(
+            data=df_melt,
+            x="network",
+            y="value",
+            hue="metric",
+            palette=palette,
+            ax=ax,
+        )
+
+        for patch in ax.patches:
+            height = patch.get_height()
+            if pd.notna(height):
+                ax.annotate(f"{height:.2f}",
+                            xy=(patch.get_x() + patch.get_width() / 2, height),
+                            xytext=(0, 3),  # desloca 3 pt p/ cima
+                            textcoords="offset points",
+                            ha="center", va="bottom", fontsize=8)
+
+        ax.set_ylim(0, 1.05)
+        ax.set_ylabel("Score")
+        ax.set_xlabel("CNN")
+        ax.set_title("Comparação das métricas das CNNs puras")
+        ax.legend(title="Métrica")
+
+        self._save(fig, "09_cnn_metrics_comparison.png")
+
+    # ------------------------------------------------------------------
+    #  FIGURA 10 – F1 médio (± std) das 5 combinações por CNN
+    # ------------------------------------------------------------------
+    def _fig_10_mean_f1_iterations(self) -> None:
+        if self.iter.empty:
+            print("⚠️  Nenhum dado de iteração – Fig. 10 pulada.")
+            return
+
+        # ► Combina possíveis repetições do mesmo label (várias pastas iteration_*)
+        df = (self.iter
+              .groupby(["label", "network", "classifier"], as_index=False)
+              .agg(f1_mean=("f1_mean", "mean"),
+                   f1_std=("f1_std", "mean")))   # média do desvio ~ aproxima
+
+        # ordem dos grupos (CNN + seus 4 ensembles)
+        label_order = [*CNN_MODELS] + [
+            f"{net}+{clf}" for net in CNN_MODELS for clf in ML_CLASSIFIERS
+        ]
+        df["label"] = pd.Categorical(df["label"],
+                                     categories=label_order,
+                                     ordered=True)
+        df.sort_values("label", inplace=True)
+
+        # separa coluna “grupo” (nome da CNN) p/ barras agrupadas
+        df["group"] = df["network"]
+
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sns.barplot(
+            data=df,
+            x="group", y="f1_mean", hue="classifier",
+            palette="Set2", ax=ax, errorbar=None
+        )
+
+        # barras = patches na ordem do DataFrame
+        for bar, (_, row) in zip(ax.patches, df.iterrows()):
+            # erro padrão
+            ax.errorbar(
+                x=bar.get_x() + bar.get_width() / 2,
+                y=row["f1_mean"],
+                yerr=row["f1_std"],
+                fmt="none", ecolor="black", capsize=3, lw=1,
+            )
+            # valor numérico
+            ax.annotate(f"{row['f1_mean']:.2f}",
+                        xy=(bar.get_x() + bar.get_width() / 2, row["f1_mean"]),
+                        xytext=(0, 3),
+                        textcoords="offset points",
+                        ha="center", va="bottom", fontsize=8)
+
+        ax.set_ylim(0, 1.05)
+        ax.set_xlabel("CNN (grupo)")
+        ax.set_ylabel("F1-Score médio")
+        ax.set_title("Figura 10 – F1 médio nas iterações (± desvio-padrão)")
+        ax.legend(title="Classificador")
+
+        self._save(fig, "10_f1_mean_iterations.png")
 
     # ------------------------------------------------------------------
     # helpers
@@ -363,7 +487,7 @@ class Plotter:
                 f"{height:.3f}",
                 ha="center",
                 va="bottom",
-                fontsize=8,
+                fontsize=12,
                 fontweight="bold",
             )
 

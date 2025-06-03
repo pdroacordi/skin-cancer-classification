@@ -32,7 +32,10 @@ from config import (
     CLASSIFIER_APPROACH,
     USE_HAIR_REMOVAL,
     USE_IMAGE_SEGMENTATION,
-    USE_ENHANCED_CONTRAST, NUM_ITERATIONS
+    USE_ENHANCED_CONTRAST,
+    NUM_ITERATIONS,
+    USE_FEATURE_AUGMENTATION,
+    NUM_FINAL_MODELS
 )
 
 from utils.data_loaders import load_paths_labels, resize_image
@@ -40,6 +43,7 @@ from utils.graphic_preprocessing import apply_graphic_preprocessing
 from models.cnn_models import get_feature_extractor_model, get_feature_extractor_from_cnn
 from models.classical_models import create_ml_pipeline, tune_hyperparameters, get_default_param_grid, save_model
 from utils.data_preprocessing import apply_data_preprocessing
+from utils.fold_utils import save_fold_results, plot_metric_distributions
 
 
 def setup_gpu_memory():
@@ -78,10 +82,11 @@ def create_feature_extraction_directories(base_dir=RESULTS_DIR, cnn_model_name=C
     str_graphic = f"{str_segmented}{str_contrast}{str_hair}" if USE_GRAPHIC_PREPROCESSING else ""
     str_augment = "use_augmentation_" if USE_DATA_AUGMENTATION else ""
     str_preprocess = f"use_data_preprocess_{CLASSIFIER_APPROACH}" if USE_DATA_PREPROCESSING else ""
+    str_feature = f"use_feature_augmentation_" if USE_FEATURE_AUGMENTATION else ""
 
     # Create main result directory path
     result_dir = os.path.join(base_dir,
-                              f"feature_extraction_{cnn_model_name}_{str_graphic}{str_augment}{str_preprocess}")
+                              f"feature_extraction_{cnn_model_name}_{str_graphic}{str_augment}{str_feature}{str_preprocess}")
 
     # Create base directory
     os.makedirs(result_dir, exist_ok=True)
@@ -328,7 +333,6 @@ def plot_roc_curves(model, X, y, class_names=None, save_path=None):
 
     plt.close()
 
-
 def extract_features(feature_extractor, images, batch_size=32):
     """
     Extract features from images using a feature extractor model.
@@ -364,7 +368,7 @@ def extract_features(feature_extractor, images, batch_size=32):
 
 def extract_and_save_features(feature_extractor, paths, labels=None,
                               preprocess_fn=None, model_name=CNN_MODEL,
-                              features_save_path=None, apply_augmentation=USE_DATA_AUGMENTATION):
+                              features_save_path=None, apply_augmentation=USE_FEATURE_AUGMENTATION):
     """
     Extract features and save them to disk with augmentation metadata.
 
@@ -381,6 +385,7 @@ def extract_and_save_features(feature_extractor, paths, labels=None,
         tuple: (features, labels) if labels is provided, otherwise just features.
     """
     print(f"Extracting features from {len(paths)} images...")
+    print(f"Feature augmentation: {'ENABLED' if apply_augmentation else 'DISABLED'}")
 
     try:
         # Extract features
@@ -445,14 +450,16 @@ def extract_and_save_features(feature_extractor, paths, labels=None,
                         features=features,
                         labels=labels_out,
                         augmentation_enabled=apply_augmentation,
-                        augmentation_factor=augmentation_factor if augmentation_factor is not None else 1
+                        augmentation_factor=augmentation_factor if augmentation_factor is not None else 1,
+                        feature_augmentation_flag='USE_FEATURE_AUGMENTATION'  # Track which flag was used
                     )
                 else:
                     np.savez(
                         features_save_path,
                         features=features,
                         augmentation_enabled=apply_augmentation,
-                        augmentation_factor=augmentation_factor if augmentation_factor is not None else 1
+                        augmentation_factor=augmentation_factor if augmentation_factor is not None else 1,
+                        feature_augmentation_flag='USE_FEATURE_AUGMENTATION'
                     )
             else:
                 # Default to .npy if extension is not specified
@@ -478,7 +485,7 @@ def extract_and_save_features(feature_extractor, paths, labels=None,
 
 def extract_features_from_paths(feature_extractor, paths, labels=None,
                                 preprocess_fn=None, model_name=CNN_MODEL,
-                                batch_size=BATCH_SIZE, apply_augmentation=USE_DATA_AUGMENTATION):
+                                batch_size=BATCH_SIZE, apply_augmentation=USE_FEATURE_AUGMENTATION):
     """
     Extract features from image paths using a feature extractor model.
     Memory-efficient version to avoid GPU OOM errors.
@@ -494,8 +501,8 @@ def extract_features_from_paths(feature_extractor, paths, labels=None,
     Returns:
         tuple: (features, labels) if labels is provided, otherwise just features.
     """
-    # Load and preprocess images
     print(f"Loading and preprocessing {len(paths)} images with batch_size={batch_size}...")
+    print(f"Feature augmentation: {'ENABLED' if apply_augmentation else 'DISABLED'}")
 
     # Create a preprocessing function for each image
     def process_image(path, augment=False, aug_index=None):
@@ -540,10 +547,10 @@ def extract_features_from_paths(feature_extractor, paths, labels=None,
         from utils.augmentation import AugmentationFactory
         augmentation_pipelines = AugmentationFactory.get_feature_extraction_augmentation()
         num_augmentations = len(augmentation_pipelines)
-        print(f"Using {num_augmentations} augmentation pipelines.")
+        print(f"Using {num_augmentations} augmentation pipelines for feature extraction.")
     else:
         num_augmentations = 1
-        print("No augmentation applied.")
+        print("No augmentation applied during feature extraction.")
 
     # Set up a smaller mini-batch size for prediction to avoid OOM errors
     mini_batch_size = min(4, batch_size)  # Use mini-batches of at most 4 images
@@ -552,7 +559,7 @@ def extract_features_from_paths(feature_extractor, paths, labels=None,
         start_idx = i * batch_size
         end_idx = min((i + 1) * batch_size, num_samples)
 
-        print(f"Processing batch {i+1}/{num_batches} (images {start_idx+1}-{end_idx} of {num_samples})")
+        print(f"Processing batch {i + 1}/{num_batches} (images {start_idx + 1}-{end_idx} of {num_samples})")
 
         batch_paths = paths[start_idx:end_idx]
 
@@ -580,7 +587,7 @@ def extract_features_from_paths(feature_extractor, paths, labels=None,
                 continue
 
         if not batch_images:
-            print(f"No valid images in batch {i+1}, skipping.")
+            print(f"No valid images in batch {i + 1}, skipping.")
             continue
 
         # Process images in mini-batches to avoid OOM
@@ -606,7 +613,7 @@ def extract_features_from_paths(feature_extractor, paths, labels=None,
                 tf.keras.backend.clear_session()
 
             except tf.errors.ResourceExhaustedError:
-                print(f"OOM error in mini-batch {k+1}. Trying with single images...")
+                print(f"OOM error in mini-batch {k + 1}. Trying with single images...")
 
                 # If mini-batch fails, try with individual images
                 for idx, img in enumerate(mini_images):
@@ -621,11 +628,11 @@ def extract_features_from_paths(feature_extractor, paths, labels=None,
                         tf.keras.backend.clear_session()
 
                     except Exception as e2:
-                        print(f"    Error processing single image {mini_start+idx}: {e2}")
+                        print(f"    Error processing single image {mini_start + idx}: {e2}")
                         continue
 
             except Exception as e:
-                print(f"  Error in mini-batch {k+1}: {e}")
+                print(f"  Error in mini-batch {k + 1}: {e}")
                 continue
 
         # Combine mini-batch features if any were successfully extracted
@@ -656,7 +663,7 @@ def extract_features_from_paths(feature_extractor, paths, labels=None,
                 gc.collect()
 
             except Exception as e:
-                print(f"Error combining features from batch {i+1}: {e}")
+                print(f"Error combining features from batch {i + 1}: {e}")
                 # Just skip this batch if combining fails
                 continue
 
@@ -685,19 +692,17 @@ def extract_features_from_paths(feature_extractor, paths, labels=None,
             return features
         except Exception as e:
             print(f"Error concatenating features: {e}")
-            # Return empty arrays if concatenation fails
             empty_shape = feature_extractor.output_shape[1:]
             return np.array([]).reshape((0, *empty_shape)), np.array([]) if labels is not None else np.array([])
     else:
         print("No features were successfully extracted.")
-        # Return empty arrays
         empty_shape = feature_extractor.output_shape[1:]
         return np.array([]).reshape((0, *empty_shape)), np.array([]) if labels is not None else np.array([])
 
 
 def load_or_extract_features(feature_extractor, paths, labels=None,
                              preprocess_fn=None, model_name=CNN_MODEL,
-                             features_save_path=None, apply_augmentation=USE_DATA_AUGMENTATION):
+                             features_save_path=None, apply_augmentation=USE_FEATURE_AUGMENTATION):
     """
     Load cached features or extract new ones with improved handling of augmented data.
 
@@ -713,7 +718,6 @@ def load_or_extract_features(feature_extractor, paths, labels=None,
     Returns:
         tuple: (features, labels) if labels is provided, otherwise just features.
     """
-    # Extract features if no path is provided
     if features_save_path is None:
         print(f"Extracting features from {len(paths)} images...")
         return extract_features_from_paths(
@@ -725,7 +729,7 @@ def load_or_extract_features(feature_extractor, paths, labels=None,
             apply_augmentation=apply_augmentation
         )
 
-    # Try to load cached features if file exists
+        # Try to load cached features if file exists
     if os.path.exists(features_save_path):
         print(f"Loading cached features from: {features_save_path}")
         try:
@@ -764,6 +768,15 @@ def load_or_extract_features(feature_extractor, paths, labels=None,
                             features_save_path, apply_augmentation
                         )
 
+                    # Check if augmentation settings match
+                    if cached_augmentation is not None and cached_augmentation != apply_augmentation:
+                        print(f"Augmentation mismatch: cached={cached_augmentation}, requested={apply_augmentation}")
+                        print("Re-extracting features with correct augmentation settings...")
+                        return extract_and_save_features(
+                            feature_extractor, paths, labels, preprocess_fn, model_name,
+                            features_save_path, apply_augmentation
+                        )
+
                     # Check if labels match (if provided)
                     if labels is not None and saved_labels is not None:
                         if len(labels) != len(saved_labels):
@@ -775,36 +788,7 @@ def load_or_extract_features(feature_extractor, paths, labels=None,
                                 # Determine if this matches our current augmentation settings
                                 if apply_augmentation:
                                     print(f"Current settings use augmentation, consistent with cached features.")
-
-                                    # Options for handling label mismatch due to augmentation:
-
-                                    # Option 1: If cached labels are already correctly structured for augmentation,
-                                    # we can use them directly
-                                    if cached_aug_factor is not None and cached_aug_factor == detected_aug_factor:
-                                        print("Using cached features and labels with augmentation.")
-                                        return features, saved_labels
-
-                                    # Option 2: Use cached features but with current labels
-                                    # This option works when the model only needs the augmented features during training,
-                                    # but uses original labels for metrics
-                                    print("Using cached features with current labels.")
-                                    # Ensure feature count is a multiple of label count
-                                    feature_count = len(features)
-                                    expected_count = len(labels) * detected_aug_factor
-                                    if feature_count != expected_count:
-                                        print(f"Warning: Feature count {feature_count} doesn't match expected {expected_count}")
-                                        if feature_count > expected_count:
-                                            # Truncate extra features
-                                            features = features[:expected_count]
-                                        else:
-                                            # We have fewer features than expected, re-extract
-                                            print("Inconsistent feature count. Re-extracting...")
-                                            return extract_and_save_features(
-                                                feature_extractor, paths, labels, preprocess_fn,
-                                                model_name, features_save_path, apply_augmentation
-                                            )
-
-                                    return features, labels
+                                    return features, saved_labels
                                 else:
                                     print("Current settings don't use augmentation, but cached features do.")
                                     print("Re-extracting features to match current settings...")
@@ -813,53 +797,15 @@ def load_or_extract_features(feature_extractor, paths, labels=None,
                                         model_name, features_save_path, apply_augmentation
                                     )
                             else:
-                                print(f"Label count mismatch not due to regular augmentation: Current={len(labels)}, Cached={len(saved_labels)}")
+                                print(f"Label count mismatch: Current={len(labels)}, Cached={len(saved_labels)}")
                                 print("Re-extracting features...")
                                 return extract_and_save_features(
                                     feature_extractor, paths, labels, preprocess_fn,
                                     model_name, features_save_path, apply_augmentation
                                 )
                         elif not np.array_equal(labels, saved_labels):
-                            # Print detailed diagnostics
-                            print("Labels differ but have same length. Analyzing differences...")
-
-                            # Find and display the first few differences
-                            diff_indices = np.where(labels != saved_labels)[0]
-                            if len(diff_indices) > 0:
-                                print(f"Found {len(diff_indices)} differences out of {len(labels)} labels ({len(diff_indices)/len(labels)*100:.2f}%)")
-                                print(f"First 5 differences:")
-                                for i in range(min(5, len(diff_indices))):
-                                    idx = diff_indices[i]
-                                    print(f"  Index {idx}: Current={labels[idx]}, Cached={saved_labels[idx]}")
-
-                                # Determine if it's just a shuffle or actual class distribution difference
-                                unique_current = np.unique(labels)
-                                unique_saved = np.unique(saved_labels)
-
-                                if set(unique_current) != set(unique_saved):
-                                    print(f"Different classes present! Current: {unique_current}, Cached: {unique_saved}")
-                                else:
-                                    # Check class distribution
-                                    current_counts = np.bincount(labels)
-                                    saved_counts = np.bincount(saved_labels)
-
-                                    if len(current_counts) != len(saved_counts):
-                                        print(f"Different class count ranges: Current={len(current_counts)}, Cached={len(saved_counts)}")
-                                    elif np.array_equal(current_counts, saved_counts):
-                                        print("Label distributions match exactly! This appears to be just a different ordering/shuffling.")
-
-                                        # Use cached features with current labels if distributions match
-                                        print("Using cached features with current labels.")
-                                        return features, labels
-                                    else:
-                                        print("Label distributions differ! Here's the comparison:")
-                                        for i in range(len(current_counts)):
-                                            current_count = current_counts[i] if i < len(current_counts) else 0
-                                            saved_count = saved_counts[i] if i < len(saved_counts) else 0
-                                            if current_count != saved_count:
-                                                print(f"  Class {i}: Current={current_count}, Cached={saved_count}, Diff={current_count-saved_count}")
-
-                            print("Re-extracting features due to label mismatch...")
+                            # Labels differ - check if it's just ordering or actual difference
+                            print("Labels differ. Re-extracting features...")
                             return extract_and_save_features(
                                 feature_extractor, paths, labels, preprocess_fn,
                                 model_name, features_save_path, apply_augmentation
@@ -899,23 +845,24 @@ def load_or_extract_features(feature_extractor, paths, labels=None,
                         model_name, features_save_path, apply_augmentation
                     )
 
-                # If there are no labels in the file, return features only or pair (features, labels)
+                # Cannot check augmentation settings with .npy files
+                print("Warning: .npy files don't store augmentation metadata. Consider using .npz format.")
+
                 if labels is not None:
                     if len(features) != len(labels) and apply_augmentation and len(features) > len(labels):
-                        # Check if this is due to augmentation
                         if len(features) % len(labels) == 0:
                             augmentation_factor = len(features) // len(labels)
                             print(f"Detected augmentation factor in .npy file: {augmentation_factor}x")
                             print("Using cached features with current labels.")
                             return features, labels
                         else:
-                            print(f"Warning: Number of cached features ({len(features)}) doesn't match number of labels ({len(labels)}) and isn't a multiple. Re-extracting...")
+                            print(f"Warning: Feature/label count mismatch. Re-extracting...")
                             return extract_and_save_features(
                                 feature_extractor, paths, labels, preprocess_fn,
                                 model_name, features_save_path, apply_augmentation
                             )
                     elif len(features) != len(labels):
-                        print(f"Warning: Number of cached features ({len(features)}) doesn't match number of labels ({len(labels)}). Re-extracting...")
+                        print(f"Warning: Feature/label count mismatch. Re-extracting...")
                         return extract_and_save_features(
                             feature_extractor, paths, labels, preprocess_fn,
                             model_name, features_save_path, apply_augmentation
@@ -937,7 +884,7 @@ def load_or_extract_features(feature_extractor, paths, labels=None,
                 model_name, features_save_path, apply_augmentation
             )
 
-    # If we reach here, the file doesn't exist or there was a problem loading it
+        # If we reach here, the file doesn't exist
     print(f"No cached features found at {features_save_path}. Extracting...")
     return extract_and_save_features(
         feature_extractor, paths, labels, preprocess_fn,
@@ -1241,7 +1188,8 @@ def run_kfold_feature_extraction(all_paths, all_labels, dirs, class_names=None):
                 labels=train_labels,
                 preprocess_fn=preprocess_fn,
                 model_name=CNN_MODEL,
-                features_save_path=train_features_path
+                features_save_path=train_features_path,
+                apply_augmentation=USE_FEATURE_AUGMENTATION
             )
 
             val_features, val_labels_out = load_or_extract_features(
@@ -1250,7 +1198,7 @@ def run_kfold_feature_extraction(all_paths, all_labels, dirs, class_names=None):
                 labels=val_labels,
                 preprocess_fn=preprocess_fn,
                 model_name=CNN_MODEL,
-                features_save_path=val_features_path
+                features_save_path=val_features_path,
             )
 
             # Store fold information
@@ -2146,6 +2094,450 @@ def train_final_feature_extraction_model(all_features, all_labels, best_hyperpar
 
     return final_model, final_model_dir
 
+
+def train_multiple_final_models(all_features, all_labels, best_hyperparameters,
+                                result_dir, class_names=None, feature_extractor=None,
+                                all_paths=None, all_labels_orig=None, preprocess_fn=None,
+                                num_models=10):
+    """
+    Train multiple final classical ML models on all training data using the best hyperparameters.
+    This allows for statistical testing of model performance.
+
+    Args:
+        all_features: Combined training and validation features (can be None if paths provided)
+        all_labels: Combined training and validation labels (can be None if paths provided)
+        best_hyperparameters: Best hyperparameters found during cross-validation
+        result_dir: Directory to save results
+        class_names: List of class names
+        feature_extractor: Feature extractor model (required if all_features is None)
+        all_paths: Combined training and validation paths (required if all_features is None)
+        all_labels_orig: Original labels for paths (required if all_features is None)
+        preprocess_fn: Image preprocessing function
+        num_models: Number of models to train (default: 10)
+
+    Returns:
+        List of trained models and their directories
+    """
+    print("\n" + "=" * 60)
+    print(f"Training {num_models} Final Classical ML Models on All Training Data")
+    print("=" * 60)
+
+    # Create final models directory
+    final_models_dir = os.path.join(result_dir, CLASSICAL_CLASSIFIER_MODEL.lower(), "final_models")
+    os.makedirs(final_models_dir, exist_ok=True)
+
+    # Extract hyperparameters
+    classifier_name = best_hyperparameters['classifier_name']
+    use_pca = best_hyperparameters['use_pca']
+    n_components = best_hyperparameters['n_components']
+    initial_class_weights = best_hyperparameters.get('class_weights', None)
+
+    # If features are not provided, extract them
+    if all_features is None:
+        if feature_extractor is None or all_paths is None or all_labels_orig is None:
+            raise ValueError("Must provide either all_features and all_labels OR "
+                             "feature_extractor, all_paths, and all_labels_orig")
+
+        # Path for combined features
+        combined_features_path = os.path.join(
+            result_dir,
+            "features",
+            "training_features.npz"
+        )
+
+        # Extract features from all data
+        print("Extracting features for final model training...")
+        all_features, all_labels = load_or_extract_features(
+            feature_extractor=feature_extractor,
+            paths=all_paths,
+            labels=all_labels_orig,
+            preprocess_fn=preprocess_fn,
+            model_name=CNN_MODEL,
+            features_save_path=combined_features_path,
+            apply_augmentation=USE_FEATURE_AUGMENTATION
+        )
+
+    # Ensure features are the right type
+    all_features = all_features.astype(np.float32)
+
+    trained_models = []
+    model_results = []
+
+    # Train multiple models
+    for model_idx in range(num_models):
+        print(f"\n{'=' * 50}")
+        print(f"Training Model {model_idx + 1}/{num_models}")
+        print(f"{'=' * 50}")
+
+        # Create model-specific directory
+        model_dir = os.path.join(final_models_dir, f"model_{model_idx + 1}")
+        os.makedirs(model_dir, exist_ok=True)
+        os.makedirs(os.path.join(model_dir, "plots"), exist_ok=True)
+
+        # Model save path
+        model_path = os.path.join(model_dir, "final_ml_model.joblib")
+
+        # Apply data preprocessing if it was used in the best model
+        class_weights = initial_class_weights
+        if best_hyperparameters['preprocessing_approach'] is not None:
+            print(f"Applying {best_hyperparameters['preprocessing_approach']} preprocessing to all training data...")
+
+            # Use different random state for each model
+            random_state = 42 + model_idx
+
+            preprocessed_features, preprocessed_labels, new_class_weights = apply_data_preprocessing(
+                features=all_features,
+                labels=all_labels,
+                method=best_hyperparameters['preprocessing_approach'],
+                random_state=random_state
+            )
+
+            if best_hyperparameters['preprocessing_approach'] == "class_weight":
+                class_weights = new_class_weights
+        else:
+            preprocessed_features = all_features
+            preprocessed_labels = all_labels
+
+        # Create ML pipeline with best configuration
+        pipeline = create_ml_pipeline(
+            classifier_name=classifier_name,
+            use_pca=use_pca,
+            n_components=n_components,
+            random_state=42 + model_idx  # Different random state for each model
+        )
+
+        # If we have the model_params, try to set them directly
+        if 'model_params' in best_hyperparameters and best_hyperparameters['model_params']:
+            try:
+                # Set parameters for the classifier in the pipeline
+                if hasattr(pipeline, 'named_steps') and 'classifier' in pipeline.named_steps:
+                    classifier = pipeline.named_steps['classifier']
+                    relevant_params = {k.replace('classifier__', ''): v for k, v in
+                                       best_hyperparameters['model_params'].items()
+                                       if k.startswith('classifier__')}
+                    # Update random state for the classifier
+                    relevant_params['random_state'] = 42 + model_idx
+                    classifier.set_params(**relevant_params)
+            except Exception as e:
+                print(f"Warning: Could not set all model parameters: {e}")
+
+        # Train the model on all data
+        print(f"Training model {model_idx + 1} on all {len(preprocessed_features)} samples...")
+
+        # Handle class weights if they were used
+        if class_weights is not None:
+            # Check if the classifier supports sample weights
+            if hasattr(pipeline, 'named_steps') and 'classifier' in pipeline.named_steps:
+                classifier = pipeline.named_steps['classifier']
+
+                # Train the preprocessing steps
+                if hasattr(pipeline, "steps") and len(pipeline.steps) > 1:
+                    for name, transform in pipeline.steps[:-1]:  # All steps except classifier
+                        if hasattr(transform, "fit"):
+                            preprocessed_features = transform.fit_transform(preprocessed_features, preprocessed_labels)
+
+                # Check if classifier supports sample weights
+                if hasattr(classifier, 'fit') and 'sample_weight' in classifier.fit.__code__.co_varnames:
+                    # Create sample weights from class weights
+                    sample_weights = np.array([class_weights[label] for label in preprocessed_labels])
+                    classifier.fit(preprocessed_features, preprocessed_labels, sample_weight=sample_weights)
+                    print("Training with sample weights based on class imbalance")
+                else:
+                    # If sample_weight not supported, try to set class_weight attribute
+                    if hasattr(classifier, 'class_weight'):
+                        classifier.class_weight = class_weights
+                        print("Setting class_weight parameter")
+                    classifier.fit(preprocessed_features, preprocessed_labels)
+
+                final_model = pipeline
+            else:
+                # Fall back to regular pipeline fit
+                pipeline.fit(preprocessed_features, preprocessed_labels)
+                final_model = pipeline
+        else:
+            # Train normally
+            pipeline.fit(preprocessed_features, preprocessed_labels)
+            final_model = pipeline
+
+        # Save the model
+        save_model(final_model, model_path)
+        print(f"Model {model_idx + 1} trained and saved to: {model_path}")
+
+        # If possible, plot feature importance
+        if hasattr(final_model, 'named_steps') and 'classifier' in final_model.named_steps:
+            classifier = final_model.named_steps['classifier']
+            if hasattr(classifier, 'feature_importances_'):
+                fi_plot_path = os.path.join(model_dir, "plots", "feature_importance.png")
+
+                # Get feature names or indices
+                if hasattr(final_model, 'named_steps') and 'pca' in final_model.named_steps:
+                    # For PCA, feature names are PCA components
+                    feature_names = [f"PC{i + 1}" for i in range(len(classifier.feature_importances_))]
+                else:
+                    # Otherwise, use feature indices
+                    feature_names = [f"Feature {i + 1}" for i in range(len(classifier.feature_importances_))]
+
+                plot_feature_importance(classifier, feature_names, save_path=fi_plot_path)
+
+        trained_models.append({
+            'model': final_model,
+            'model_path': model_path,
+            'model_dir': model_dir,
+            'model_idx': model_idx + 1
+        })
+
+    print(f"\nAll {num_models} models trained successfully!")
+
+    # Save training summary
+    summary_path = os.path.join(final_models_dir, "training_summary.txt")
+    with open(summary_path, "w") as f:
+        f.write(f"Multiple Final Models Training Summary\n")
+        f.write(f"{'=' * 50}\n\n")
+        f.write(f"Number of models trained: {num_models}\n")
+        f.write(f"Feature Extractor: {CNN_MODEL}\n")
+        f.write(f"Classifier: {classifier_name}\n")
+        f.write(f"Use PCA: {use_pca}\n")
+        f.write(f"PCA Components: {n_components}\n")
+        f.write(f"Preprocessing approach: {best_hyperparameters['preprocessing_approach']}\n\n")
+        f.write(f"Models saved in: {final_models_dir}\n")
+
+    return trained_models, final_models_dir
+
+
+def evaluate_multiple_final_models(trained_models, test_features, test_labels,
+                                   result_dir, class_names=None):
+    """
+    Evaluate multiple final models on the test set and perform statistical analysis.
+
+    Args:
+        trained_models: List of trained model dictionaries
+        test_features: Test feature matrix
+        test_labels: Test labels
+        result_dir: Directory to save results
+        class_names: List of class names
+
+    Returns:
+        Dictionary with evaluation results and statistical analysis
+    """
+    from scipy import stats
+    import pandas as pd
+
+    print("\n" + "=" * 60)
+    print("Evaluating Multiple Final Models on Test Set")
+    print("=" * 60)
+
+    # Results storage
+    all_results = {
+        'model_metrics': [],
+        'predictions': [],
+        'accuracies': [],
+        'f1_scores': [],
+        'precisions': [],
+        'recalls': [],
+        'class_metrics': []  # NEW: Store per-class metrics
+    }
+
+    # Evaluate each model
+    for model_info in trained_models:
+        model = model_info['model']
+        model_idx = model_info['model_idx']
+        model_dir = model_info['model_dir']
+
+        print(f"\nEvaluating Model {model_idx}/{len(trained_models)}...")
+
+        # Get predictions
+        test_pred = model.predict(test_features)
+
+        # Calculate metrics
+        test_report = classification_report(test_labels, test_pred, output_dict=True)
+
+        # Store predictions and metrics
+        all_results['predictions'].append(test_pred)
+        all_results['accuracies'].append(test_report['accuracy'])
+        all_results['f1_scores'].append(test_report['macro avg']['f1-score'])
+        all_results['precisions'].append(test_report['macro avg']['precision'])
+        all_results['recalls'].append(test_report['macro avg']['recall'])
+
+        # Store detailed metrics
+        all_results['model_metrics'].append({
+            'model_idx': model_idx,
+            'accuracy': test_report['accuracy'],
+            'macro_avg_precision': test_report['macro avg']['precision'],
+            'macro_avg_recall': test_report['macro avg']['recall'],
+            'macro_avg_f1': test_report['macro avg']['f1-score'],
+            'class_report': test_report
+        })
+
+        # Store per-class metrics
+        for class_idx in range(len(class_names) if class_names else len(np.unique(test_labels))):
+            class_key = str(class_idx)
+            if class_key in test_report:
+                class_name = class_names[class_idx] if class_names else f"Class {class_idx}"
+                all_results['class_metrics'].append({
+                    'model_idx': model_idx,
+                    'class_idx': class_idx,
+                    'class_name': class_name,
+                    'precision': test_report[class_key]['precision'],
+                    'recall': test_report[class_key]['recall'],
+                    'f1_score': test_report[class_key]['f1-score'],
+                    'support': test_report[class_key]['support']
+                })
+
+        # Save individual model results
+        with open(os.path.join(model_dir, "test_results.txt"), "w") as f:
+            f.write(f"Model {model_idx} Test Results\n")
+            f.write(f"{'=' * 30}\n\n")
+            f.write("Classification Report:\n")
+            f.write(classification_report(test_labels, test_pred))
+            f.write("\nConfusion Matrix:\n")
+            f.write(str(confusion_matrix(test_labels, test_pred)))
+
+        # Plot confusion matrix
+        cm_plot_path = os.path.join(model_dir, "plots", "test_confusion_matrix.png")
+        plot_confusion_matrix(test_labels, test_pred, class_names, cm_plot_path)
+
+    # Statistical Analysis
+    print("\n" + "=" * 50)
+    print("Statistical Analysis of Model Performance")
+    print("=" * 50)
+
+    # Convert to numpy arrays for easier computation
+    accuracies = np.array(all_results['accuracies'])
+    f1_scores = np.array(all_results['f1_scores'])
+    precisions = np.array(all_results['precisions'])
+    recalls = np.array(all_results['recalls'])
+
+    # Calculate statistics
+    stats_results = {
+        'accuracy': {
+            'mean': np.mean(accuracies),
+            'std': np.std(accuracies),
+            'min': np.min(accuracies),
+            'max': np.max(accuracies),
+            'median': np.median(accuracies)
+        },
+        'f1_score': {
+            'mean': np.mean(f1_scores),
+            'std': np.std(f1_scores),
+            'min': np.min(f1_scores),
+            'max': np.max(f1_scores),
+            'median': np.median(f1_scores)
+        },
+        'precision': {
+            'mean': np.mean(precisions),
+            'std': np.std(precisions),
+            'min': np.min(precisions),
+            'max': np.max(precisions),
+            'median': np.median(precisions)
+        },
+        'recall': {
+            'mean': np.mean(recalls),
+            'std': np.std(recalls),
+            'min': np.min(recalls),
+            'max': np.max(recalls),
+            'median': np.median(recalls)
+        }
+    }
+
+    # Calculate 95% confidence intervals
+    for metric_name, values in [('accuracy', accuracies), ('f1_score', f1_scores),
+                                ('precision', precisions), ('recall', recalls)]:
+        ci = stats.t.interval(0.95, len(values) - 1, loc=np.mean(values),
+                              scale=stats.sem(values))
+        stats_results[metric_name]['95_ci'] = ci
+
+    # Save statistical results
+    stats_path = os.path.join(result_dir, "statistical_analysis.txt")
+    with open(stats_path, "w") as f:
+        f.write("Statistical Analysis of Multiple Final Models\n")
+        f.write("=" * 50 + "\n\n")
+        f.write(f"Number of models: {len(trained_models)}\n\n")
+
+        for metric_name, metric_stats in stats_results.items():
+            f.write(f"{metric_name.upper()}:\n")
+            f.write(f"  Mean ± Std: {metric_stats['mean']:.4f} ± {metric_stats['std']:.4f}\n")
+            f.write(f"  Median: {metric_stats['median']:.4f}\n")
+            f.write(f"  Min/Max: {metric_stats['min']:.4f} / {metric_stats['max']:.4f}\n")
+            f.write(f"  95% CI: [{metric_stats['95_ci'][0]:.4f}, {metric_stats['95_ci'][1]:.4f}]\n\n")
+
+    # Create a summary DataFrame
+    df_results = pd.DataFrame(all_results['model_metrics'])
+    df_summary = df_results[['model_idx', 'accuracy', 'macro_avg_precision',
+                             'macro_avg_recall', 'macro_avg_f1']]
+
+    # Save as CSV
+    csv_path = os.path.join(result_dir, "model_performance_summary.csv")
+    df_summary.to_csv(csv_path, index=False)
+
+    # NEW: Save per-class metrics
+    if all_results['class_metrics']:
+        df_class_metrics = pd.DataFrame(all_results['class_metrics'])
+        class_csv_path = os.path.join(result_dir, "per_class_metrics.csv")
+        df_class_metrics.to_csv(class_csv_path, index=False)
+
+        # Calculate per-class statistics
+        class_stats = {}
+        for class_idx in df_class_metrics['class_idx'].unique():
+            class_data = df_class_metrics[df_class_metrics['class_idx'] == class_idx]
+            class_name = class_data['class_name'].iloc[0]
+
+            class_stats[class_name] = {
+                'f1_score': {
+                    'mean': class_data['f1_score'].mean(),
+                    'std': class_data['f1_score'].std(),
+                    'min': class_data['f1_score'].min(),
+                    'max': class_data['f1_score'].max()
+                },
+                'precision': {
+                    'mean': class_data['precision'].mean(),
+                    'std': class_data['precision'].std()
+                },
+                'recall': {
+                    'mean': class_data['recall'].mean(),
+                    'std': class_data['recall'].std()
+                }
+            }
+
+        # Save per-class statistics
+        class_stats_path = os.path.join(result_dir, "per_class_statistics.txt")
+        with open(class_stats_path, "w") as f:
+            f.write("Per-Class Performance Statistics\n")
+            f.write("=" * 50 + "\n\n")
+
+            for class_name, stats in class_stats.items():
+                f.write(f"{class_name}:\n")
+                f.write(f"  F1-Score: {stats['f1_score']['mean']:.4f} ± {stats['f1_score']['std']:.4f}\n")
+                f.write(f"  Precision: {stats['precision']['mean']:.4f} ± {stats['precision']['std']:.4f}\n")
+                f.write(f"  Recall: {stats['recall']['mean']:.4f} ± {stats['recall']['std']:.4f}\n")
+                f.write(f"  Range: [{stats['f1_score']['min']:.4f}, {stats['f1_score']['max']:.4f}]\n\n")
+
+    # Plot box plots of metrics
+    raw_metrics = {
+        'accuracy': accuracies,
+        'f1_score': f1_scores,
+        'precision': precisions,
+        'recall': recalls
+    }
+    plot_metric_distributions(stats_results, result_dir, raw_metrics)
+
+    print("\nStatistical Summary:")
+    print(f"Accuracy: {stats_results['accuracy']['mean']:.4f} ± {stats_results['accuracy']['std']:.4f}")
+    print(f"F1-Score: {stats_results['f1_score']['mean']:.4f} ± {stats_results['f1_score']['std']:.4f}")
+    print(
+        f"95% CI for Accuracy: [{stats_results['accuracy']['95_ci'][0]:.4f}, {stats_results['accuracy']['95_ci'][1]:.4f}]")
+    print(
+        f"95% CI for F1-Score: [{stats_results['f1_score']['95_ci'][0]:.4f}, {stats_results['f1_score']['95_ci'][1]:.4f}]")
+
+    # Return comprehensive results
+    return {
+        'all_results': all_results,
+        'statistics': stats_results,
+        'summary_df': df_summary,
+        'class_metrics_df': df_class_metrics if all_results['class_metrics'] else None,
+        'class_statistics': class_stats if all_results['class_metrics'] else None
+    }
+
+
 def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files_path,
                                     use_kfold=False, fine_tune_extractor=True,
                                     balance_features=True, tune_hyperparams=True,
@@ -2200,7 +2592,6 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
     # Get feature extractor model
     feature_extractor, from_pretrained = get_feature_extractor_from_cnn(extractor_path)
 
-    # Diferentes métodos dependendo se estamos usando validação cruzada
     if use_kfold:
         # Combina treino e validação para validação cruzada
         all_paths = np.concatenate([train_paths, val_paths])
@@ -2224,10 +2615,18 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
             class_names=class_names
         )
 
-        # Treina modelo final com todos os dados usando os melhores hiperparâmetros
+        # Save detailed fold results
+        save_fold_results(
+            fold_results=cv_results['fold_results'],
+            result_dir=dirs['classifiers'][CLASSICAL_CLASSIFIER_MODEL]['base'],
+            classifier_name=CLASSICAL_CLASSIFIER_MODEL
+        )
+
+        # Train multiple final models with all training data using best hyperparameters
         try:
-            print("Iniciando treinamento do modelo final...")
-            final_model, final_model_dir = train_final_feature_extraction_model(
+            print("\nStarting training of multiple final models...")
+
+            trained_models, final_models_dir = train_multiple_final_models(
                 all_features=None,
                 all_labels=None,
                 best_hyperparameters=cv_results['best_hyperparameters'],
@@ -2236,14 +2635,19 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
                 feature_extractor=feature_extractor,
                 all_paths=all_paths,
                 all_labels_orig=all_labels,
-                preprocess_fn=preprocess_fn
+                preprocess_fn=preprocess_fn,
+                num_models=NUM_FINAL_MODELS
             )
-            print(f"Modelo final treinado e salvo em: {final_model_dir}")
+            print(f"All {NUM_FINAL_MODELS} final models trained and saved in: {final_models_dir}")
+
         except Exception as e:
             import traceback
-            print(f"ERRO no treinamento do modelo final: {e}")
+            print(f"ERROR in training multiple final models: {e}")
             traceback.print_exc()
+            trained_models = []
+            final_models_dir = None
 
+        # Extract test features for evaluation
         test_features_path = dirs['test_features']
 
         test_features, test_labels_out = load_or_extract_features(
@@ -2252,63 +2656,101 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
             labels=test_labels,
             preprocess_fn=preprocess_fn,
             model_name=CNN_MODEL,
-            features_save_path=test_features_path
+            features_save_path=test_features_path,
+            apply_augmentation=False
         )
 
         test_features = test_features.astype(np.float32)
 
-        # Avalia no conjunto de teste
-        print("\nEvaluating final model on test set...")
-        test_pred = final_model.predict(test_features)
+        # Evaluate all final models on test set
+        if trained_models:
+            print("\nEvaluating multiple final models on test set...")
 
-        # Calcula métricas
-        test_report = classification_report(test_labels_out, test_pred, output_dict=True)
+            eval_results = evaluate_multiple_final_models(
+                trained_models=trained_models,
+                test_features=test_features,
+                test_labels=test_labels_out,
+                result_dir=final_models_dir,
+                class_names=class_names
+            )
 
-        # Imprime relatório de classificação
-        print("\nTest Set Classification Report (Final Model):")
-        print(classification_report(test_labels_out, test_pred))
+            # Store comprehensive results
+            results = {
+                'k_fold': cv_results['fold_results'],
+                'best_model_info': cv_results['best_model_info'],
+                'final_models': trained_models,
+                'final_models_evaluation': eval_results,
+                'statistical_analysis': eval_results['statistics'],
+                'fold_statistics': cv_results.get('fold_statistics', None)
+            }
 
-        # Get final model directory from classifier structure
-        classifier_dirs = dirs['classifiers'][CLASSICAL_CLASSIFIER_MODEL]
-        final_model_dir = classifier_dirs['final_model']
+            # Save comprehensive summary
+            summary_path = os.path.join(dirs['base'], "complete_experiment_summary.txt")
+            with open(summary_path, "w") as f:
+                f.write("Complete Experiment Summary\n")
+                f.write("=" * 60 + "\n\n")
+                f.write(f"Feature Extractor: {CNN_MODEL}\n")
+                f.write(f"Classifier: {CLASSICAL_CLASSIFIER_MODEL}\n")
+                f.write(f"Use CNN Data Augmentation: {USE_DATA_AUGMENTATION}\n")
+                f.write(f"Use Feature Augmentation: {USE_FEATURE_AUGMENTATION}\n")
+                f.write(f"Use Fine-tuning: {USE_FINE_TUNING}\n")
+                f.write(f"Use Preprocessing: {USE_GRAPHIC_PREPROCESSING}\n")
+                f.write(f"Use PCA: {NUM_PCA_COMPONENTS is not None}\n")
+                f.write(f"PCA Components: {NUM_PCA_COMPONENTS}\n")
+                f.write(f"Use Data Preprocessing: {USE_DATA_PREPROCESSING}\n")
+                if USE_DATA_PREPROCESSING:
+                    f.write(f"Preprocessing Method: {CLASSIFIER_APPROACH}\n")
+                f.write(f"\nCross-validation:\n")
+                f.write(f"  Iterations: {NUM_ITERATIONS}\n")
+                f.write(f"  Folds per iteration: {NUM_KFOLDS}\n")
+                f.write(f"  Total folds evaluated: {len(cv_results['fold_results'])}\n")
+                f.write(f"\nFinal Models:\n")
+                f.write(f"  Number of final models: {NUM_FINAL_MODELS}\n")
+                f.write(f"  Models trained: {len(trained_models)}\n")
 
-        # Plot confusion matrix
-        cm_plot_path = os.path.join(final_model_dir, "plots", "final_model_test_confusion_matrix.png")
-        plot_confusion_matrix(test_labels_out, test_pred, class_names, cm_plot_path)
+                if 'statistical_analysis' in results:
+                    f.write(f"\nFinal Models Test Performance (Mean ± Std):\n")
+                    stats = results['statistical_analysis']
+                    f.write(f"  Accuracy: {stats['accuracy']['mean']:.4f} ± {stats['accuracy']['std']:.4f}\n")
+                    f.write(f"  F1-Score: {stats['f1_score']['mean']:.4f} ± {stats['f1_score']['std']:.4f}\n")
+                    f.write(f"  Precision: {stats['precision']['mean']:.4f} ± {stats['precision']['std']:.4f}\n")
+                    f.write(f"  Recall: {stats['recall']['mean']:.4f} ± {stats['recall']['std']:.4f}\n")
+                    f.write(f"\n95% Confidence Intervals:\n")
+                    f.write(f"  Accuracy: [{stats['accuracy']['95_ci'][0]:.4f}, {stats['accuracy']['95_ci'][1]:.4f}]\n")
+                    f.write(f"  F1-Score: [{stats['f1_score']['95_ci'][0]:.4f}, {stats['f1_score']['95_ci'][1]:.4f}]\n")
 
-        # Armazena resultados de teste
-        test_results = {
-            "accuracy": test_report["accuracy"],
-            "macro_avg_precision": test_report["macro avg"]["precision"],
-            "macro_avg_recall": test_report["macro avg"]["recall"],
-            "macro_avg_f1": test_report["macro avg"]["f1-score"],
-            "class_report": test_report
-        }
+        else:
+            print("No final models were trained. Falling back to best model from cross-validation...")
 
-        # Salva resultados em arquivo texto
-        with open(os.path.join(final_model_dir, "final_model_test_results.txt"), "w") as f:
-            f.write(f"Feature Extractor: {CNN_MODEL}\n")
-            f.write(f"Classifier: {CLASSICAL_CLASSIFIER_MODEL}\n")
-            f.write(f"Use Fine-tuning: {USE_FINE_TUNING}\n")
-            f.write(f"Use Preprocessing: {USE_GRAPHIC_PREPROCESSING}\n")
-            f.write(f"Use PCA: {NUM_PCA_COMPONENTS is not None}\n")
-            f.write(f"PCA Components: {NUM_PCA_COMPONENTS}\n\n")
-            f.write(f"Use Data Preprocessing: {USE_DATA_PREPROCESSING}\n")
-            if USE_DATA_PREPROCESSING:
-                f.write(f"Preprocessing Method: {CLASSIFIER_APPROACH}\n\n")
+            # Fall back to evaluating the best model from cross-validation
+            best_model_path = cv_results['best_model_info']['model_path']
+            if os.path.exists(best_model_path):
+                from models.classical_models import load_model
+                best_model = load_model(best_model_path)
 
-            f.write("Test Set Classification Report:\n")
-            f.write(classification_report(test_labels_out, test_pred))
+                # Evaluate on test set
+                test_pred = best_model.predict(test_features)
+                test_report = classification_report(test_labels_out, test_pred, output_dict=True)
 
-            f.write("\nConfusion Matrix:\n")
-            f.write(str(confusion_matrix(test_labels_out, test_pred)))
+                print("\nTest Set Classification Report (Best CV Model):")
+                print(classification_report(test_labels_out, test_pred))
 
-        results = {
-            'k_fold': cv_results['fold_results'],
-            'best_model_info': cv_results['best_model_info'],
-            'final_model_test_results': test_results
-        }
+                # Plot confusion matrix
+                cm_plot_path = os.path.join(dirs['classifiers'][CLASSICAL_CLASSIFIER_MODEL]['base'],
+                                            "best_model_test_confusion_matrix.png")
+                plot_confusion_matrix(test_labels_out, test_pred, class_names, cm_plot_path)
 
+                results = {
+                    'k_fold': cv_results['fold_results'],
+                    'best_model_info': cv_results['best_model_info'],
+                    'test_results': {
+                        "accuracy": test_report["accuracy"],
+                        "macro_avg_precision": test_report["macro avg"]["precision"],
+                        "macro_avg_recall": test_report["macro avg"]["recall"],
+                        "macro_avg_f1": test_report["macro avg"]["f1-score"],
+                        "class_report": test_report
+                    }
+                }
     else:
         # Extração direta de features sem validação cruzada
         print("Extracting features without cross-validation...")
