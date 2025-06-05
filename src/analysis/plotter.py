@@ -82,21 +82,51 @@ class Plotter:
             raise ValueError(f"Error loading CSV files: {e}")
 
     def _load_stat_tests(self):
-        """Load statistical tests CSV data."""
+        """Carrega o CSV de testes estatísticos, aceitando formatos antigo e novo."""
         try:
-            self.stat_tests_df = pd.read_csv(self.stat_tests_csv_path)
-            self.stat_tests_df.columns = self.stat_tests_df.columns.str.strip()
+            df = pd.read_csv(self.stat_tests_csv_path)
 
-            # Convert string booleans to actual booleans
-            self.stat_tests_df['significant'] = self.stat_tests_df['significant'].map({
-                'True': True, 'true': True, True: True,
-                'False': False, 'false': False, False: False
-            })
+            # normaliza cabeçalhos
+            df.columns = df.columns.str.strip().str.lower()
 
-            print(f"Loaded statistical tests data: {len(self.stat_tests_df)} rows")
+            # mapeia nomes alternativos ➜ nomes esperados
+            rename_map = {
+                "model_1": "model_a",
+                "model_2": "model_b",
+                "model_x": "model_a",
+                "model_y": "model_b",
+                "p_value": "p",
+                "p_adj": "p",
+                "p_corrected": "p",
+            }
+            df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns},
+                      inplace=True)
 
-        except Exception as e:
-            print(f"Warning: Could not load statistical tests: {e}")
+            # garante colunas mínimas
+            required = {"metric", "model_a", "model_b", "p"}
+            missing = required - set(df.columns)
+            if missing:
+                raise ValueError(f"Stat-tests CSV sem colunas obrigatórias: {missing}")
+
+            # se não existir, cria coluna `significant` (α = 0.05)
+            if "significant" not in df.columns:
+                df["significant"] = df["p"] < 0.05
+
+            # força booleano (lida com strings)
+            df["significant"] = (
+                df["significant"]
+                .astype(str)
+                .str.lower()
+                .map({"true": True, "false": False})
+                .fillna(False)
+                .astype(bool)
+            )
+
+            self.stat_tests_df = df
+            print(f"✅  Loaded statistical tests: {len(df)} rows")
+
+        except Exception as err:
+            print(f"⚠️  Could not load statistical tests: {err}")
             self.stat_tests_df = pd.DataFrame()
 
     def _process_data(self):
@@ -132,114 +162,101 @@ class Plotter:
         self.per_class_stats = self.per_class_stats.reset_index()
 
     def _process_stat_tests(self):
-        """Process statistical tests data and calculate wins/losses."""
+        """Gera quadro de vitórias/derrotas a partir do CSV, robusto a formatos novos."""
         if self.stat_tests_df.empty:
-            self.stat_wins = pd.DataFrame()
-            return
-
-        # Filter significant tests only
-        significant_tests = self.stat_tests_df[self.stat_tests_df['significant'] == True].copy()
-
-        if significant_tests.empty:
-            self.stat_wins = pd.DataFrame()
-            return
-
-        # For each comparison, determine the winner based on which model performed better
-        # We need to cross-reference with the general performance data
-        wins_data = []
-
-        for _, test_row in significant_tests.iterrows():
-            model_a = test_row['model_a']
-            model_b = test_row['model_b']
-            metric = test_row['metric']
-
-            # Map metric names to our column names
-            metric_map = {
-                'precision': 'macro_avg_precision',
-                'recall': 'macro_avg_recall',
-                'f1_score': 'macro_avg_f1'
-            }
-
-            if metric in metric_map:
-                metric_col = metric_map[metric]
-
-                # Get performance values (we'll use means from our processed data)
-                # Convert model names to our format
-                model_a_id = self._convert_model_name(model_a)
-                model_b_id = self._convert_model_name(model_b)
-
-                if model_a_id in self.general_stats.index and model_b_id in self.general_stats.index:
-                    perf_a = self.general_stats.loc[model_a_id, f'{metric_col}_mean']
-                    perf_b = self.general_stats.loc[model_b_id, f'{metric_col}_mean']
-
-                    # Determine winner (higher value wins)
-                    if perf_a > perf_b:
-                        winner = model_a_id
-                        loser = model_b_id
-                    else:
-                        winner = model_b_id
-                        loser = model_a_id
-
-                    wins_data.append({
-                        'metric': metric,
-                        'winner': winner,
-                        'loser': loser,
-                        'p_value': test_row['p'],
-                        'winner_score': max(perf_a, perf_b),
-                        'loser_score': min(perf_a, perf_b)
-                    })
-
-        # Create wins DataFrame
-        self.wins_df = pd.DataFrame(wins_data)
-
-        # Calculate win statistics
-        if not self.wins_df.empty:
-            self.stat_wins = self.wins_df.groupby(['winner', 'metric']).size().reset_index(name='wins')
-            self.stat_losses = self.wins_df.groupby(['loser', 'metric']).size().reset_index(name='losses')
-            self.stat_losses.rename(columns={'loser': 'model'}, inplace=True)
-            self.stat_wins.rename(columns={'winner': 'model'}, inplace=True)
-
-            # Merge wins and losses
-            all_models = list(set(self.stat_wins['model'].tolist() + self.stat_losses['model'].tolist()))
-            all_metrics = self.wins_df['metric'].unique()
-
-            # Create complete summary
-            summary_data = []
-            for model in all_models:
-                for metric in all_metrics:
-                    wins = self.stat_wins[(self.stat_wins['model'] == model) &
-                                          (self.stat_wins['metric'] == metric)]['wins'].sum()
-                    losses = self.stat_losses[(self.stat_losses['model'] == model) &
-                                              (self.stat_losses['metric'] == metric)]['losses'].sum()
-
-                    summary_data.append({
-                        'model': model,
-                        'metric': metric,
-                        'wins': wins,
-                        'losses': losses,
-                        'net_wins': wins - losses
-                    })
-
-            self.stat_summary = pd.DataFrame(summary_data)
-        else:
             self.stat_summary = pd.DataFrame()
+            return
+
+        sig = self.stat_tests_df[self.stat_tests_df["significant"]]
+        if sig.empty:
+            self.stat_summary = pd.DataFrame()
+            return
+
+        # mapeia dinamicamente métrica ➜ coluna de desempenho
+        metric_to_col = {
+            "precision": "macro_avg_precision",
+            "recall": "macro_avg_recall",
+            "f1_score": "macro_avg_f1",
+            "f1": "macro_avg_f1",
+            "accuracy": "accuracy",
+        }
+
+        wins = []
+        for _, row in sig.iterrows():
+            metric_key = str(row["metric"]).lower()
+            metric_col = metric_to_col.get(metric_key)
+            if metric_col is None or f"{metric_col}_mean" not in self.general_stats.columns:
+                continue  # métrica que não conhecemos
+
+            a_id = self._convert_model_name(row["model_a"])
+            b_id = self._convert_model_name(row["model_b"])
+
+            if a_id not in self.general_stats.index or b_id not in self.general_stats.index:
+                continue  # ignora se algum modelo não existe nas médias
+
+            score_a = self.general_stats.loc[a_id, f"{metric_col}_mean"]
+            score_b = self.general_stats.loc[b_id, f"{metric_col}_mean"]
+
+            winner, loser = (a_id, b_id) if score_a > score_b else (b_id, a_id)
+            wins.append(
+                dict(
+                    metric=metric_key,
+                    winner=winner,
+                    loser=loser,
+                    p_value=row["p"],
+                    winner_score=max(score_a, score_b),
+                    loser_score=min(score_a, score_b),
+                )
+            )
+
+        self.wins_df = pd.DataFrame(wins)
+        if self.wins_df.empty:
+            self.stat_summary = pd.DataFrame()
+            return
+
+        # agrega vitórias / derrotas
+        w = self.wins_df.groupby(["winner", "metric"]).size().reset_index(name="wins")
+        l = self.wins_df.groupby(["loser", "metric"]).size().reset_index(name="losses")
+        w.rename(columns={"winner": "model"}, inplace=True)
+        l.rename(columns={"loser": "model"}, inplace=True)
+
+        # tabela final
+        models = set(w["model"]).union(l["model"])
+        metrics = self.wins_df["metric"].unique()
+        summary = []
+        for m in models:
+            for met in metrics:
+                wins_ = w.query("model == @m and metric == @met")["wins"].sum()
+                losses_ = l.query("model == @m and metric == @met")["losses"].sum()
+                summary.append(
+                    dict(model=m, metric=met, wins=wins_, losses=losses_, net_wins=wins_ - losses_)
+                )
+        self.stat_summary = pd.DataFrame(summary)
 
     @staticmethod
     def _convert_model_name(model_name: str) -> str:
-        """Convert model name from statistical tests format to our internal format."""
-        # Handle the conversion from stat tests format to our format
-        if 'feature_extractor' in model_name:
-            parts = model_name.split('_')
-            if len(parts) >= 3:
-                net = parts[0]
-                algorithm = parts[-1]  # Last part is the algorithm
-                return f"{net}_feature_extractor_{algorithm}"
-        elif 'classifier' in model_name:
-            parts = model_name.split('_')
-            if len(parts) >= 2:
-                net = parts[0]
-                return f"{net}_classifier_none"
+        """
+        Converte o nome de modelo vindo do CSV para o formato canônico usado no código,
+        lidando tanto com ‘classifier’ quanto com ‘classifier_none’, e com
+        ‘feature_extractor_algoritmo’.
+        """
+        # já está no formato canônico?
+        if model_name.endswith("_none") or "_feature_extractor_" in model_name:
+            return model_name
 
+        # formato legado: "<Net>_classifier"
+        if model_name.endswith("_classifier"):
+            net = model_name.split("_")[0]
+            return f"{net}_classifier_none"
+
+        # formato legado: "<Net>_feature_extractor_<algo>"
+        if "feature_extractor" in model_name:
+            parts = model_name.split("_")
+            if len(parts) >= 3:
+                net, _, alg = parts[0], parts[1], parts[-1]
+                return f"{net}_feature_extractor_{alg}"
+
+        # fallback
         return model_name
 
     @staticmethod
