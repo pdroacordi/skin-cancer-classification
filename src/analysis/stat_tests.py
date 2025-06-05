@@ -201,6 +201,13 @@ def _generate_summary_stats(df: pd.DataFrame) -> pd.DataFrame:
             axis=1
         ).mean()
 
+        model_p_values = model_comparisons.apply(
+            lambda row: row['p'] if row['model_a'] == model or row['model_b'] == model else np.nan,
+            axis=1
+        ).dropna()
+
+        min_p = model_p_values.min() if not model_p_values.empty else np.nan
+
         summary_data.append({
             'model': model,
             'wins': wins,
@@ -208,10 +215,12 @@ def _generate_summary_stats(df: pd.DataFrame) -> pd.DataFrame:
             'net_wins': wins - losses,
             'total_comparisons': len(model_comparisons),
             'significant_comparisons': len(significant_df[
-                (significant_df['model_a'] == model) | (significant_df['model_b'] == model)
-            ]),
+                                               (significant_df['model_a'] == model) | (
+                                                           significant_df['model_b'] == model)
+                                               ]),
             'mean_f1_score': mean_f1,
-            'win_rate': wins / len(model_comparisons) if len(model_comparisons) > 0 else 0
+            'win_rate': wins / len(model_comparisons) if len(model_comparisons) > 0 else 0,
+            'min_p_value': min_p
         })
 
     summary_df = pd.DataFrame(summary_data)
