@@ -1,23 +1,14 @@
-"""Matplotlib wrappers that create every figure requested by the user.
-
-This **rewrites** the previous implementation adding seven new plots that match the
-latest specification without breaking backwards‑compatibility.  Existing helper
-methods were kept and extended so *cli.py* continues to work transparently.
-"""
-
 from __future__ import annotations
 
-import re
 from pathlib import Path
-from typing import List
+from typing import Tuple
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import seaborn as sns
 
 from .constants import (
-    CNN_MODELS,
-    ML_CLASSIFIERS,
     COLOR_PALETTE,
     DEFAULT_FIGSIZE,
     DEFAULT_DPI,
@@ -35,471 +26,699 @@ plt.rcParams.update({
 
 
 class Plotter:
-    """High‑level API that receives two pandas DataFrames (train, test) and writes
-    *all* required figures to *out_dir*.
+    """
+    Enhanced plotter that reads CSV data and calculates statistics across multiple model runs.
 
-    Parameters
-    ----------
-    train_df, test_df
-        DataFrames produced by :pyclass:`ResultsCollector`, **already** containing
-        one row per (kind, network, classifier) with *aggregated* metrics.
-    out_dir
-        Where PNGs will be saved.  Defaults to the constant *OUTPUT_DIR* but the
-        CLI wrapper allows overriding via command‑line.
+    This class reads from standardized CSV files containing model performance data
+    and generates plots with error bars showing mean ± standard deviation.
+    Now includes statistical testing analysis capabilities.
     """
 
-    # ---------------------------------------------------------------------
-    # constructor & public helpers
-    # ---------------------------------------------------------------------
-    def __init__(self, train_df: pd.DataFrame, test_df: pd.DataFrame, per_class_df: pd.DataFrame,
-                 iter_df: pd.DataFrame, out_dir: Path = OUTPUT_DIR):
-        self.train = train_df.copy()
-        self.test = test_df.copy()
-        self.per_class = per_class_df.copy()
-        self.iter = iter_df.copy()
+    def __init__(self, general_csv_path: str, per_class_csv_path: str,
+                 stat_tests_csv_path: str = None, out_dir: Path = OUTPUT_DIR):
+        """
+        Initialize the plotter with CSV file paths.
+
+        Parameters
+        ----------
+        general_csv_path : str
+            Path to the CSV file containing general model metrics
+        per_class_csv_path : str
+            Path to the CSV file containing per-class model metrics
+        stat_tests_csv_path : str, optional
+            Path to the CSV file containing statistical test results
+        out_dir : Path
+            Directory where plots will be saved
+        """
+        self.general_csv_path = general_csv_path
+        self.per_class_csv_path = per_class_csv_path
+        self.stat_tests_csv_path = stat_tests_csv_path
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
-        # derived – stores a single df for convenience
-        self._combined = pd.concat([
-            self.train.assign(split="train"),
-            self.test.assign(split="test"),
-        ], ignore_index=True)
+        # Load and process the data
+        self._load_data()
+        self._process_data()
 
-    # The entry‑point used by *cli.py* – make sure to keep backwards compat.
-    def make_all_figures(self) -> None:  # noqa: C901 (many small private methods)
-        """Generate **every** chart needed for the *Results & Discussion* section.
+        # Load statistical tests if provided
+        if stat_tests_csv_path:
+            self._load_stat_tests()
+            self._process_stat_tests()
 
-        New figures were added at the *top* so legacy numbering stays intact and
-        collaborators using the old file names won't be affected.
-        """
+    def _load_data(self):
+        """Load CSV data into pandas DataFrames."""
+        try:
+            self.general_df = pd.read_csv(self.general_csv_path)
+            self.per_class_df = pd.read_csv(self.per_class_csv_path)
+
+            # Clean column names
+            self.general_df.columns = self.general_df.columns.str.strip()
+            self.per_class_df.columns = self.per_class_df.columns.str.strip()
+
+            print(f"Loaded general data: {len(self.general_df)} rows")
+            print(f"Loaded per-class data: {len(self.per_class_df)} rows")
+
+        except Exception as e:
+            raise ValueError(f"Error loading CSV files: {e}")
+
+    def _load_stat_tests(self):
+        """Load statistical tests CSV data."""
+        try:
+            self.stat_tests_df = pd.read_csv(self.stat_tests_csv_path)
+            self.stat_tests_df.columns = self.stat_tests_df.columns.str.strip()
+
+            # Convert string booleans to actual booleans
+            self.stat_tests_df['significant'] = self.stat_tests_df['significant'].map({
+                'True': True, 'true': True, True: True,
+                'False': False, 'false': False, False: False
+            })
+
+            print(f"Loaded statistical tests data: {len(self.stat_tests_df)} rows")
+
+        except Exception as e:
+            print(f"Warning: Could not load statistical tests: {e}")
+            self.stat_tests_df = pd.DataFrame()
+
+    def _process_data(self):
+        """Process the loaded data and calculate statistics."""
+        # Create model identifiers
+        self.general_df['model_id'] = self.general_df.apply(
+            lambda row: self._create_model_id(row), axis=1
+        )
+        self.per_class_df['model_id'] = self.per_class_df.apply(
+            lambda row: self._create_model_id(row), axis=1
+        )
+
+        # Calculate statistics for general metrics
+        self.general_stats = self.general_df.groupby('model_id').agg({
+            'accuracy': ['mean', 'std', 'count'],
+            'macro_avg_precision': ['mean', 'std', 'count'],
+            'macro_avg_recall': ['mean', 'std', 'count'],
+            'macro_avg_f1': ['mean', 'std', 'count']
+        }).round(4)
+
+        # Flatten column names
+        self.general_stats.columns = [f'{col[0]}_{col[1]}' for col in self.general_stats.columns]
+
+        # Calculate statistics for per-class metrics
+        self.per_class_stats = self.per_class_df.groupby(['model_id', 'class_name']).agg({
+            'precision': ['mean', 'std', 'count'],
+            'recall': ['mean', 'std', 'count'],
+            'f1_score': ['mean', 'std', 'count']
+        }).round(4)
+
+        # Flatten column names for per-class stats
+        self.per_class_stats.columns = [f'{col[0]}_{col[1]}' for col in self.per_class_stats.columns]
+        self.per_class_stats = self.per_class_stats.reset_index()
+
+    def _process_stat_tests(self):
+        """Process statistical tests data and calculate wins/losses."""
+        if self.stat_tests_df.empty:
+            self.stat_wins = pd.DataFrame()
+            return
+
+        # Filter significant tests only
+        significant_tests = self.stat_tests_df[self.stat_tests_df['significant'] == True].copy()
+
+        if significant_tests.empty:
+            self.stat_wins = pd.DataFrame()
+            return
+
+        # For each comparison, determine the winner based on which model performed better
+        # We need to cross-reference with the general performance data
+        wins_data = []
+
+        for _, test_row in significant_tests.iterrows():
+            model_a = test_row['model_a']
+            model_b = test_row['model_b']
+            metric = test_row['metric']
+
+            # Map metric names to our column names
+            metric_map = {
+                'precision': 'macro_avg_precision',
+                'recall': 'macro_avg_recall',
+                'f1_score': 'macro_avg_f1'
+            }
+
+            if metric in metric_map:
+                metric_col = metric_map[metric]
+
+                # Get performance values (we'll use means from our processed data)
+                # Convert model names to our format
+                model_a_id = self._convert_model_name(model_a)
+                model_b_id = self._convert_model_name(model_b)
+
+                if model_a_id in self.general_stats.index and model_b_id in self.general_stats.index:
+                    perf_a = self.general_stats.loc[model_a_id, f'{metric_col}_mean']
+                    perf_b = self.general_stats.loc[model_b_id, f'{metric_col}_mean']
+
+                    # Determine winner (higher value wins)
+                    if perf_a > perf_b:
+                        winner = model_a_id
+                        loser = model_b_id
+                    else:
+                        winner = model_b_id
+                        loser = model_a_id
+
+                    wins_data.append({
+                        'metric': metric,
+                        'winner': winner,
+                        'loser': loser,
+                        'p_value': test_row['p'],
+                        'winner_score': max(perf_a, perf_b),
+                        'loser_score': min(perf_a, perf_b)
+                    })
+
+        # Create wins DataFrame
+        self.wins_df = pd.DataFrame(wins_data)
+
+        # Calculate win statistics
+        if not self.wins_df.empty:
+            self.stat_wins = self.wins_df.groupby(['winner', 'metric']).size().reset_index(name='wins')
+            self.stat_losses = self.wins_df.groupby(['loser', 'metric']).size().reset_index(name='losses')
+            self.stat_losses.rename(columns={'loser': 'model'}, inplace=True)
+            self.stat_wins.rename(columns={'winner': 'model'}, inplace=True)
+
+            # Merge wins and losses
+            all_models = list(set(self.stat_wins['model'].tolist() + self.stat_losses['model'].tolist()))
+            all_metrics = self.wins_df['metric'].unique()
+
+            # Create complete summary
+            summary_data = []
+            for model in all_models:
+                for metric in all_metrics:
+                    wins = self.stat_wins[(self.stat_wins['model'] == model) &
+                                          (self.stat_wins['metric'] == metric)]['wins'].sum()
+                    losses = self.stat_losses[(self.stat_losses['model'] == model) &
+                                              (self.stat_losses['metric'] == metric)]['losses'].sum()
+
+                    summary_data.append({
+                        'model': model,
+                        'metric': metric,
+                        'wins': wins,
+                        'losses': losses,
+                        'net_wins': wins - losses
+                    })
+
+            self.stat_summary = pd.DataFrame(summary_data)
+        else:
+            self.stat_summary = pd.DataFrame()
+
+    @staticmethod
+    def _convert_model_name(model_name: str) -> str:
+        """Convert model name from statistical tests format to our internal format."""
+        # Handle the conversion from stat tests format to our format
+        if 'feature_extractor' in model_name:
+            parts = model_name.split('_')
+            if len(parts) >= 3:
+                net = parts[0]
+                algorithm = parts[-1]  # Last part is the algorithm
+                return f"{net}_feature_extractor_{algorithm}"
+        elif 'classifier' in model_name:
+            parts = model_name.split('_')
+            if len(parts) >= 2:
+                net = parts[0]
+                return f"{net}_classifier_none"
+
+        return model_name
+
+    @staticmethod
+    def _create_model_id(row) -> str:
+        """Create a unique model identifier from row data."""
+        net = str(row['net']).strip()
+        kind = str(row['kind']).strip()
+        algorithm = str(row.get('algorithm', '')).strip()
+
+        # Handle null/nan values properly
+        if algorithm and algorithm.lower() not in ['nan', '', 'null']:
+            return f"{net}_{kind}_{algorithm}"
+        else:
+            return f"{net}_{kind}_none"
+
+    def _extract_model_metadata(self):
+        """Extract model metadata for easier plotting."""
+        self.cnn_models = {}
+        self.ensemble_models = {}
+
+        for model_id in self.general_stats.index:
+            parts = model_id.split('_')
+            net = parts[0]
+            kind = parts[1]
+
+            if kind == 'classifier':
+                self.cnn_models[net] = model_id
+            elif kind == 'feature' and len(parts) >= 4:  # feature_extractor_algorithm
+                algorithm = parts[3]  # Now it's the 4th part
+                if net not in self.ensemble_models:
+                    self.ensemble_models[net] = {}
+                self.ensemble_models[net][algorithm] = model_id
+
+    def make_all_figures(self):
+        """Generate all plots with enhanced statistics."""
+        print("Generating enhanced plots with statistics...")
+
         self._fig_01_cnn_vs_ensembles()
-        self._fig_02_train_vs_test_split()
-        self._fig_03_best_per_ensemble()
-        self._fig_04_metrics_cnn_radar()
-        self._fig_05_metrics_ensemble_per_cnn()
-        self._fig_06_heatmap_f1()
-        self._fig_07_boxplot_cv()
-        self._fig_08_f1_per_class_heatmap()
-        self._fig_09_cnn_metric_bars()
-        self._fig_10_mean_f1_iterations()
+        self._fig_02_best_per_ensemble()
+        self._fig_03_f1_per_class_heatmap()
+        self._fig_04_cnn_metric_bars()
 
-    # ------------------------------------------------------------------
-    # Figure 1 – Geral CNN + Ensembles
-    # ------------------------------------------------------------------
-    def _fig_01_cnn_vs_ensembles(self) -> None:
-        """Grouped bar chart (F1‑Score Test) – each CNN plus four ensembles."""
+        if hasattr(self, 'stat_summary') and not self.stat_summary.empty:
+            print("Generating statistical analysis plots...")
+            self._fig_05_statistical_wins_bars()
+            self._generate_latex_table()
+
+        print("All enhanced plots generated successfully!")
+
+    def _get_metric_stats(self, model_id: str, metric: str) -> Tuple[float, float]:
+        """Get mean and std for a metric of a specific model."""
+        if model_id in self.general_stats.index:
+            mean = self.general_stats.loc[model_id, f'{metric}_mean']
+            std = self.general_stats.loc[model_id, f'{metric}_std']
+            return mean, std
+        return 0.0, 0.0
+
+    def _fig_01_cnn_vs_ensembles(self):
+        """Enhanced CNN vs Ensembles comparison with error bars."""
         fig, ax = plt.subplots(figsize=DEFAULT_FIGSIZE)
 
+        # Prepare data - match exact CSV structure
+        networks = ['Inception', 'Resnet', 'Vgg19', 'Xception']  # Match CSV naming
+        algorithms = ['adaboost', 'extratrees', 'randomforest', 'xgboost']
+
         bar_width = 0.15
-        x_pos = list(range(len(CNN_MODELS)))
+        x_pos = np.arange(len(networks))
 
-        bars: List[list[float]] = []
-        labels = ["CNN"] + ML_CLASSIFIERS
-        for lbl in labels:
-            scores = []
-            for net in CNN_MODELS:
-                if lbl == "CNN":
-                    scores.append(self._get_metric(net, "CNN", train=False, metric="f1_score"))
-                else:
-                    scores.append(self._get_metric(net, lbl, train=False, metric="f1_score"))
-            bars.append(scores)
+        # CNN scores (classifier + none algorithm)
+        cnn_means = []
+        cnn_stds = []
+        for net in networks:
+            model_id = f"{net}_classifier_none"  # Match the actual data structure
+            mean, std = self._get_metric_stats(model_id, 'macro_avg_f1')
+            cnn_means.append(mean)
+            cnn_stds.append(std)
 
-        # plot
-        for i, (lbl, scores) in enumerate(zip(labels, bars)):
-            positions = [p + (i - 2) * bar_width for p in x_pos]  # centre around group
-            color = COLOR_PALETTE.get(lbl if lbl != "CNN" else CNN_MODELS[i % len(CNN_MODELS)], "#666666")
-            # override colours for clarity
-            if lbl == "CNN":
-                color = "#4C72B0"
-            ax.bar(positions, scores, width=bar_width, label=lbl, color=color, edgecolor="black")
+        # Ensemble scores (feature_extractor + specific algorithm)
+        ensemble_data = {}
+        for alg in algorithms:
+            means = []
+            stds = []
+            for net in networks:
+                model_id = f"{net}_feature_extractor_{alg}"  # Match the actual data structure
+                mean, std = self._get_metric_stats(model_id, 'macro_avg_f1')
+                means.append(mean)
+                stds.append(std)
+            ensemble_data[alg] = (means, stds)
+
+        # Define colors matching your original constants
+        colors = ['#4C72B0']  # Blue for CNN
+        for alg in algorithms:
+            if alg == 'randomforest':
+                colors.append(COLOR_PALETTE.get('RandomForest', '#17becf'))
+            elif alg == 'xgboost':
+                colors.append(COLOR_PALETTE.get('XGBoost', '#bcbd22'))
+            elif alg == 'adaboost':
+                colors.append(COLOR_PALETTE.get('AdaBoost', '#ff9500'))
+            elif alg == 'extratrees':
+                colors.append(COLOR_PALETTE.get('ExtraTrees', '#e377c2'))
+            else:
+                colors.append('#666666')
+
+        labels = ['CNN', 'RandomForest', 'XGBoost', 'AdaBoost', 'ExtraTrees']
+
+        # Plot bars with error bars
+        for i, (label, color) in enumerate(zip(labels, colors)):
+            positions = x_pos + (i - 2) * bar_width
+
+            if i == 0:  # CNN
+                bars = ax.bar(positions, cnn_means, width=bar_width, label=label,
+                              color=color, edgecolor='black', alpha=0.8,
+                              yerr=cnn_stds, capsize=3)
+                # Add value labels
+                for bar, mean in zip(bars, cnn_means):
+                    height = bar.get_height()
+                    ax.text(bar.get_x() + bar.get_width() / 2., height + 0.01,
+                            f'{mean:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold')
+            else:
+                alg = algorithms[i - 1]
+                means, stds = ensemble_data[alg]
+                bars = ax.bar(positions, means, width=bar_width, label=label,
+                              color=color, edgecolor='black', alpha=0.8,
+                              yerr=stds, capsize=3)
+                # Add value labels
+                for bar, mean in zip(bars, means):
+                    height = bar.get_height()
+                    ax.text(bar.get_x() + bar.get_width() / 2., height + 0.01,
+                            f'{mean:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold')
 
         ax.set_xticks(x_pos)
-        ax.set_xticklabels(CNN_MODELS, size=16)
+        ax.set_xticklabels([net.replace('Resnet', 'ResNet').replace('Vgg19', 'VGG19')
+                            for net in networks], size=16)
         ax.set_ylabel("F1-Score", size=10)
         ax.set_title("CNN end-to-end vs Ensembles")
         ax.legend(title="Arquitetura", fontsize=8, title_fontsize=9)
-        ax.set_ylim(0, max(max(b) for b in bars) * 1.15)
+
+        # Calculate proper y-limit
+        all_values = cnn_means + [val for means, _ in ensemble_data.values() for val in means]
+        ax.set_ylim(0, max(all_values) * 1.15)
         ax.tick_params(labelsize=14)
 
-        self._annotate_bars(ax)
-        self._save(fig, "01_cnn_vs_ensembles.png")
+        self._save(fig, "01_cnn_vs_ensembles_enhanced.png")
 
-    # ------------------------------------------------------------------
-    # Figure 2 – Train vs Test split (CNNs *and* Ensembles)
-    # ------------------------------------------------------------------
-    def _fig_02_train_vs_test_split(self) -> None:
-        """Two side‑by‑side grouped bar charts comparing F1 train vs test."""
-
-        fig, axes = plt.subplots(1, 2, figsize=(DEFAULT_FIGSIZE[0] * 1.2, DEFAULT_FIGSIZE[1]))
-
-        # --- (a) CNNs end‑to‑end ------------------------------------------------
-        width = 0.35
-        x = list(range(len(CNN_MODELS)))
-        train_scores = [self._get_metric(net, "CNN", train=True) for net in CNN_MODELS]
-        test_scores = [self._get_metric(net, "CNN", train=False) for net in CNN_MODELS]
-
-        axes[0].bar([i - width/2 for i in x], train_scores, width=width, label="Treino", color=COLOR_PALETTE["train"], alpha=0.7)
-        axes[0].bar([i + width/2 for i in x], test_scores,  width=width, label="Teste",  color=COLOR_PALETTE["test"],  alpha=0.9, edgecolor="black")
-        axes[0].set_xticks(x)
-        axes[0].set_xticklabels(CNN_MODELS, rotation=15)
-        axes[0].set_title("CNN – Treino vs Teste")
-        axes[0].set_ylabel("F1‑Score")
-        axes[0].set_ylim(0, max(train_scores + test_scores) * 1.15)
-        self._annotate_bars(axes[0])
-
-        # --- (b) FE + Ensembles -------------------------------------------------
-        all_labels = [f"{net}+{clf[:2]}" for net in CNN_MODELS for clf in ML_CLASSIFIERS]
-        bar_x = list(range(len(all_labels)))
-        ens_train = []
-        ens_test = []
-        for net in CNN_MODELS:
-            for clf in ML_CLASSIFIERS:
-                ens_train.append(self._get_metric(net, clf, train=True))
-                ens_test.append(self._get_metric(net, clf, train=False))
-        width_e = 0.4
-        axes[1].bar([i - width_e/2 for i in bar_x], ens_train, width=width_e, label="Treino", color=COLOR_PALETTE["train"], alpha=0.7)
-        axes[1].bar([i + width_e/2 for i in bar_x], ens_test,  width=width_e, label="Teste",  color=COLOR_PALETTE["test"],  alpha=0.9, edgecolor="black")
-        axes[1].set_xticks(bar_x)
-        axes[1].set_xticklabels(all_labels, rotation=90)
-        axes[1].set_title("FE+Ensemble – Treino vs Teste")
-        axes[1].set_ylim(0, max(ens_train + ens_test) * 1.15)
-        axes[1].legend()
-        self._annotate_bars(axes[1])
-
-        fig.suptitle("Comparação F1‑Score – Treino x Teste", fontsize=16)
-        fig.tight_layout(rect=[0, 0.03, 1, 0.95])
-        self._save(fig, "02_train_vs_test_split.png")
-
-    # ------------------------------------------------------------------
-    # Figure 3 – Melhor ensemble por algoritmo
-    # ------------------------------------------------------------------
-    def _fig_03_best_per_ensemble(self) -> None:
+    def _fig_02_best_per_ensemble(self):
+        """Best performing CNN for each ensemble algorithm."""
         fig, ax = plt.subplots(figsize=DEFAULT_FIGSIZE)
 
-        best_scores: List[float] = []
-        cnn_used: List[str] = []
-        for clf in ML_CLASSIFIERS:
-            subset = self.test[self.test["classifier"] == clf]
-            if subset.empty:
-                best_scores.append(0.0)
-                cnn_used.append("-")
-                continue
-            best_row = subset.loc[subset["f1_score"].idxmax()]
-            best_scores.append(best_row["f1_score"])
-            cnn_used.append(best_row["network"])
+        algorithms = ['adaboost', 'extratrees', 'randomforest', 'xgboost']
+        networks = ['Inception', 'Resnet', 'Vgg19', 'Xception']
 
-        bars = ax.bar(ML_CLASSIFIERS, best_scores, color=[COLOR_PALETTE[c] for c in ML_CLASSIFIERS], edgecolor="black")
-        ax.set_ylabel("F1‑Score")
+        best_scores = []
+        best_networks = []
+        best_stds = []
+
+        for alg in algorithms:
+            best_score = 0
+            best_net = ""
+            best_std = 0
+
+            for net in networks:
+                model_id = f"{net}_feature_extractor_{alg}"
+                mean, std = self._get_metric_stats(model_id, 'macro_avg_f1')
+                if mean > best_score:
+                    best_score = mean
+                    best_net = net
+                    best_std = std
+
+            best_scores.append(best_score)
+            best_networks.append(best_net)
+            best_stds.append(best_std)
+
+        # Map algorithm names to proper display names and colors
+        display_names = ['AdaBoost', 'ExtraTrees', 'RandomForest', 'XGBoost']
+        colors = [COLOR_PALETTE.get(name, '#666666') for name in display_names]
+
+        bars = ax.bar(range(len(algorithms)), best_scores,
+                      color=colors, edgecolor="black", alpha=0.8,
+                      yerr=best_stds, capsize=5)
+
+        ax.set_xticks(range(len(algorithms)))
+        ax.set_xticklabels(display_names)
+        ax.set_ylabel("F1-Score")
         ax.set_title("Melhor Desempenho por Algoritmo Ensemble")
         ax.set_ylim(0, max(best_scores) * 1.15)
-        self._annotate_bars(ax)
+        ax.grid(True, alpha=0.3)
 
-        # annotate CNN extractor beneath each bar
-        for bar, cnn in zip(bars, cnn_used):
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() * 0.05, cnn, ha="center", va="bottom", fontsize=10, color="#333333", rotation=90)
+        # Annotate with best CNN for each algorithm
+        for i, (bar, net, score, std) in enumerate(zip(bars, best_networks, best_scores, best_stds)):
+            # Network name below bar
+            ax.text(bar.get_x() + bar.get_width() / 2, 0.02,
+                    net.replace('Resnet', 'ResNet').replace('Vgg19', 'VGG19'),
+                    ha="center", va="bottom", fontsize=10, rotation=90, color='white', weight='bold')
+            # Score above bar
+            ax.text(bar.get_x() + bar.get_width() / 2, score + std + 0.01,
+                    f'{score:.3f}±{std:.3f}', ha="center", va="bottom", fontsize=10)
 
-        self._save(fig, "03_best_ensemble_per_algo.png")
+        self._save(fig, "02_best_ensemble_per_algo_enhanced.png")
 
-    # ------------------------------------------------------------------
-    # Figure 4 – Radar metrics (Precision, Recall, F1) per CNN
-    # ------------------------------------------------------------------
-    def _fig_04_metrics_cnn_radar(self) -> None:
-        metrics = ["precision", "recall", "f1_score"]
-        angles = [n / float(len(metrics)) * 2 * 3.14159265359 for n in range(len(metrics))]
-        angles += angles[:1]  # close loop
-
-        fig, ax = plt.subplots(subplot_kw={"projection": "polar"}, figsize=(8, 8))
-
-        for net in CNN_MODELS:
-            values = [self._get_metric(net, "CNN", train=False, metric=m) for m in metrics]
-            values += values[:1]
-            ax.plot(angles, values, label=net, linewidth=2)
-            ax.fill(angles, values, alpha=0.1)
-
-        ax.set_xticks(angles[:-1])
-        ax.set_xticklabels([m.capitalize() for m in metrics])
-        ax.set_title("Métricas CNN end‑to‑end")
-        ax.set_rlabel_position(0)
-        ax.set_ylim(0, 1.0)
-        ax.legend(loc="upper right", bbox_to_anchor=(1.3, 1.1))
-
-        self._save(fig, "04_cnn_radar_metrics.png")
-
-    # ------------------------------------------------------------------
-    # Figure 5 – Radar metrics for ensembles per CNN
-    # ------------------------------------------------------------------
-    def _fig_05_metrics_ensemble_per_cnn(self) -> None:
-        metrics = ["precision", "recall", "f1_score"]
-        angles = [n / float(len(metrics)) * 2 * 3.14159265359 for n in range(len(metrics))]
-        angles += angles[:1]
-
-        for net in CNN_MODELS:
-            fig, ax = plt.subplots(subplot_kw={"projection": "polar"}, figsize=(8, 8))
-            for clf in ML_CLASSIFIERS:
-                values = [self._get_metric(net, clf, train=False, metric=m) for m in metrics]
-                values += values[:1]
-                ax.plot(angles, values, label=clf, linewidth=2)
-                ax.fill(angles, values, alpha=0.1)
-
-            ax.set_xticks(angles[:-1])
-            ax.set_xticklabels([m.capitalize() for m in metrics])
-            ax.set_title(f"{net} – Métricas Ensemble")
-            ax.set_rlabel_position(0)
-            ax.set_ylim(0, 1.0)
-            ax.legend(loc="upper right", bbox_to_anchor=(1.3, 1.1))
-            self._save(fig, f"05_{net.lower()}_ensemble_radar.png")
-
-    # ------------------------------------------------------------------
-    # Figure 6 – Heatmap F1‑Score (CNN x Ensembles)
-    # ------------------------------------------------------------------
-    def _fig_06_heatmap_f1(self) -> None:
-        pivot = self.test[self.test["kind"] == "FE"].pivot_table(
-            index="network", columns="classifier", values="f1_score")
-        # ensure ordering & any missing values are shown as 0
-        pivot = pivot.reindex(index=CNN_MODELS, columns=ML_CLASSIFIERS).fillna(0)
-
-        fig, ax = plt.subplots(figsize=(10, 6))
-        sns.heatmap(pivot, annot=True, fmt=".3f", cmap="YlGnBu", cbar_kws={"label": "F1‑Score"}, ax=ax, linewidths=0.5)
-        ax.set_title("F1‑Score (CNN extratora x Algoritmo Ensemble)")
-        ax.set_xlabel("Algoritmo Ensemble")
-        ax.set_ylabel("CNN Extratora")
-        self._save(fig, "06_heatmap_f1.png")
-
-    # ------------------------------------------------------------------
-    # Figure 7 – Boxplot CV (10 runs – 5x2)
-    # ------------------------------------------------------------------
-    def _fig_07_boxplot_cv(self) -> None:
-        """Reads every *iteration_results.txt* under ./results and plots F1 distribution."""
-        cv_records = []
-        # naive but robust glob search – the files are light so speed is fine
-        pattern = r"F1[\s\-]Score:\s*([0-9]*\.?[0-9]+)"
-        f1_re = re.compile(pattern, flags=re.IGNORECASE)
-
-        for file in Path(self.out_dir).parent.glob("results/**/iteration_results.txt"):
-            try:
-                content = file.read_text(encoding="utf-8", errors="ignore")
-            except FileNotFoundError:
-                continue
-            # detect which network/cls this file refers to from its path
-            parts = file.parts
-            network = next((n for n in CNN_MODELS if n.lower() in " ".join(parts).lower()), "Unknown")
-            classifier = "CNN" if "cnn_classifier" in file.as_posix() else next((c for c in ML_CLASSIFIERS if c.lower() in " ".join(parts).lower()), "Unknown")
-            kind = "CNN" if classifier == "CNN" else "FE"
-
-            for match in f1_re.finditer(content):
-                try:
-                    f1_val = float(match.group(1))
-                except (ValueError, IndexError):
-                    continue
-                cv_records.append({
-                    "kind": kind,
-                    "network": network,
-                    "classifier": classifier,
-                    "f1": f1_val,
-                    "label": f"{network}+{classifier}" if classifier != "CNN" else network,
-                })
-
-        if not cv_records:  # safety guard
-            print("⚠️  Nenhum *iteration_results.txt* encontrado – Boxplot será pulado.")
+    def _fig_03_f1_per_class_heatmap(self):
+        """Heatmap of F1-scores per class with mean values."""
+        if self.per_class_stats.empty:
+            print("No per-class data available for heatmap.")
             return
 
-        cv_df = pd.DataFrame(cv_records)
-        # order labels consistently
-        label_order = [cnn for cnn in CNN_MODELS] + [f"{net}+{clf}" for net in CNN_MODELS for clf in ML_CLASSIFIERS]
-        cv_df["label"] = pd.Categorical(cv_df["label"], categories=label_order, ordered=True)
-
-        fig, ax = plt.subplots(figsize=(max(14, len(label_order) * 0.6), 8))
-        sns.boxplot(data=cv_df, x="label", y="f1", palette="Set3", ax=ax)
-        ax.set_title("Distribuição F1 – Validação Cruzada (5x2) 10 execuções")
-        ax.set_xlabel("Combinação CNN + Classificador")
-        ax.set_ylabel("F1‑Score")
-        ax.set_xticklabels(ax.get_xticklabels(), rotation=90)
-        self._save(fig, "07_boxplot_cv.png")
-
-    # ------------------------------------------------------------------
-    # Figure 08 – Heatmap F1-Score por classe
-    # ------------------------------------------------------------------
-    def _fig_08_f1_per_class_heatmap(self) -> None:
-        if self.per_class.empty:
-            print("⚠️  Nenhum dado de F1 por classe – Fig. 08 pulada.")
-            return
-
-        pivot = (self.per_class
-                 .pivot_table(index="label", columns="class", values="f1"))
-        # ordem consistente
-        label_order = [*CNN_MODELS] + [f"{net}+{clf}" for net in CNN_MODELS for clf in ML_CLASSIFIERS]
-        pivot = pivot.reindex(index=label_order).reindex(columns=CLASSES).fillna(0)
-
-        fig_h = max(6, 0.35 * len(pivot))
-        fig, ax = plt.subplots(figsize=(14, fig_h))
-        sns.heatmap(pivot,
-                    annot=True,
-                    fmt=".2f",
-                    cmap=HEATMAP_CMAP,
-                    vmin=0,
-                    vmax=1,
-                    linewidths=0.5,
-                    cbar_kws={"label": "F1-Score"},
-                    annot_kws={"size": 12},
-                    ax=ax)
-        ax.set_title("F1-Score por Classe")
-        ax.set_xticklabels(ax.get_xticklabels(), fontsize=12)
-        ax.set_yticklabels(ax.get_yticklabels(), fontsize=12)
-        ax.set_xlabel("Classe (sigla)")
-        ax.set_ylabel("Combinação CNN + Classificador")
-        self._save(fig, "08_f1_class_heatmap.png")
-
-
-    def _fig_09_cnn_metric_bars(self) -> None:
-        cnn_df = self.test[self.test["classifier"] == "CNN"].copy()
-        if cnn_df.empty:
-            print("⚠️  Nenhum dado de CNN pura encontrado – Fig. 09 pulada.")
-            return
-
-        metrics_cols = ["precision", "recall", "f1_score"]
-        cnn_df = cnn_df[["network", *metrics_cols]]
-
-        df_melt = cnn_df.melt(
-            id_vars="network",
-            value_vars=metrics_cols,
-            var_name="metric",
-            value_name="value",
+        # Create pivot table with mean F1 scores
+        pivot_data = self.per_class_stats.pivot_table(
+            index='model_id',
+            columns='class_name',
+            values='f1_score_mean',
+            fill_value=0
         )
 
-        df_melt["metric"] = df_melt["metric"].map({
-            "precision": "Precisão",
-            "recall": "Recall",
-            "f1_score": "F1-Score"
-        })
+        # Ensure all classes are present
+        for class_name in CLASSES:
+            if class_name not in pivot_data.columns:
+                pivot_data[class_name] = 0
 
-        palette = sns.color_palette("Set2", n_colors=len(metrics_cols))
-        fig, ax = plt.subplots(figsize=(10, 6))
-        sns.barplot(
-            data=df_melt,
-            x="network",
-            y="value",
-            hue="metric",
-            palette=palette,
-            ax=ax,
-        )
+        pivot_data = pivot_data[CLASSES]  # Reorder columns
 
-        for patch in ax.patches:
-            height = patch.get_height()
-            if pd.notna(height):
-                ax.annotate(f"{height:.2f}",
-                            xy=(patch.get_x() + patch.get_width() / 2, height),
-                            xytext=(0, 3),  # desloca 3 pt p/ cima
-                            textcoords="offset points",
-                            ha="center", va="bottom", fontsize=8)
+        fig, ax = plt.subplots(figsize=(14, max(8, len(pivot_data) * 0.4)))
+        sns.heatmap(pivot_data, annot=True, fmt=".3f", cmap=HEATMAP_CMAP,
+                    vmin=0, vmax=1, linewidths=0.5,
+                    cbar_kws={"label": "Mean F1-Score"}, ax=ax)
 
-        ax.set_ylim(0, 1.05)
-        ax.set_ylabel("Score")
-        ax.set_xlabel("CNN")
-        ax.set_title("Comparação das métricas das CNNs puras")
+        ax.set_title("Mean F1-Score per Class")
+        ax.set_xlabel("Class")
+        ax.set_ylabel("Model Configuration")
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=45)
+        ax.set_yticklabels(ax.get_yticklabels(), rotation=0)
+
+        self._save(fig, "03_f1_class_heatmap_enhanced.png")
+
+    def _fig_04_cnn_metric_bars(self):
+        """Enhanced CNN metrics comparison with error bars."""
+        networks = ['Inception', 'Resnet', 'Vgg19', 'Xception']
+        metrics = ['macro_avg_precision', 'macro_avg_recall', 'macro_avg_f1']
+        metric_labels = ['Precisão', 'Recall', 'F1-Score']
+
+        # Prepare data
+        data = {}
+        for metric in metrics:
+            means = []
+            stds = []
+            for net in networks:
+                model_id = f"{net}_classifier_none"
+                mean, std = self._get_metric_stats(model_id, metric)
+                means.append(mean)
+                stds.append(std)
+            data[metric] = (means, stds)
+
+        # Create grouped bar chart
+        x = np.arange(len(networks))
+        width = 0.25
+
+        fig, ax = plt.subplots(figsize=(12, 8))
+
+        colors = ['#1f77b4', '#ff7f0e', '#2ca02c']  # Different colors for each metric
+
+        for i, (metric, (means, stds)) in enumerate(data.items()):
+            offset = (i - 1) * width
+            bars = ax.bar(x + offset, means, width, label=metric_labels[i],
+                         color=colors[i], alpha=0.8, yerr=stds, capsize=3)
+
+            # Add value labels
+            for bar, mean, std in zip(bars, means, stds):
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height + std + 0.01,
+                       f'{mean:.3f}', ha='center', va='bottom', fontsize=9)
+
+        ax.set_xlabel('CNN')
+        ax.set_ylabel('Score')
+        ax.set_title('Comparação das métricas das CNNs puras')
+        ax.set_xticks(x)
+        ax.set_xticklabels([net.replace('Resnet', 'ResNet').replace('Vgg19', 'VGG19') for net in networks])
         ax.legend(title="Métrica")
+        ax.set_ylim(0, 1.05)
+        ax.grid(True, alpha=0.3)
+        self._save(fig, "04_cnn_metrics_comparison_enhanced.png")
 
-        self._save(fig, "09_cnn_metrics_comparison.png")
-
-    # ------------------------------------------------------------------
-    #  FIGURA 10 – F1 médio (± std) das 5 combinações por CNN
-    # ------------------------------------------------------------------
-    def _fig_10_mean_f1_iterations(self) -> None:
-        if self.iter.empty:
-            print("⚠️  Nenhum dado de iteração – Fig. 10 pulada.")
+    def _fig_05_statistical_wins_bars(self):
+        """Bar chart showing statistical wins per model."""
+        if not hasattr(self, 'stat_summary') or self.stat_summary.empty:
+            print("No statistical data available for wins chart.")
             return
 
-        # ► Combina possíveis repetições do mesmo label (várias pastas iteration_*)
-        df = (self.iter
-              .groupby(["label", "network", "classifier"], as_index=False)
-              .agg(f1_mean=("f1_mean", "mean"),
-                   f1_std=("f1_std", "mean")))   # média do desvio ~ aproxima
+        # Calculate total wins per model across all metrics
+        total_wins = self.stat_summary.groupby('model')['wins'].sum().sort_values(ascending=False)
+        total_losses = self.stat_summary.groupby('model')['losses'].sum()
+        total_net_wins = self.stat_summary.groupby('model')['net_wins'].sum().sort_values(ascending=False)
 
-        # ordem dos grupos (CNN + seus 4 ensembles)
-        label_order = [*CNN_MODELS] + [
-            f"{net}+{clf}" for net in CNN_MODELS for clf in ML_CLASSIFIERS
+        # Create figure with subplots
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
+
+        # Plot 1: Total wins
+        models = total_wins.index
+        wins = total_wins.values
+        losses_vals = [total_losses.get(model, 0) for model in models]
+
+        x_pos = np.arange(len(models))
+        width = 0.35
+
+        bars1 = ax1.bar(x_pos - width / 2, wins, width, label='Vitórias', color='green', alpha=0.7)
+        bars2 = ax1.bar(x_pos + width / 2, losses_vals, width, label='Derrotas', color='red', alpha=0.7)
+
+        ax1.set_xlabel('Modelo')
+        ax1.set_ylabel('Número de Comparações Significativas')
+        ax1.set_title('Vitórias vs Derrotas Estatisticamente Significativas')
+        ax1.set_xticks(x_pos)
+
+        # Format model names for display
+        display_names = [self._format_model_name_for_display(model) for model in models]
+        ax1.set_xticklabels(display_names, rotation=45, ha='right')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+
+        # Add value labels
+        for bars in [bars1, bars2]:
+            for bar in bars:
+                height = bar.get_height()
+                if height > 0:
+                    ax1.annotate(f'{int(height)}',
+                                 xy=(bar.get_x() + bar.get_width() / 2, height),
+                                 xytext=(0, 3),
+                                 textcoords="offset points",
+                                 ha='center', va='bottom', fontsize=9)
+
+        # Plot 2: Net wins (wins - losses)
+        models_net = total_net_wins.index
+        net_wins = total_net_wins.values
+        colors = ['green' if x >= 0 else 'red' for x in net_wins]
+
+        bars3 = ax2.bar(range(len(models_net)), net_wins, color=colors, alpha=0.7)
+        ax2.set_xlabel('Modelo')
+        ax2.set_ylabel('Vitórias Líquidas (Vitórias - Derrotas)')
+        ax2.set_title('Ranking por Vitórias Líquidas')
+        ax2.set_xticks(range(len(models_net)))
+
+        display_names_net = [self._format_model_name_for_display(model) for model in models_net]
+        ax2.set_xticklabels(display_names_net, rotation=45, ha='right')
+        ax2.grid(True, alpha=0.3)
+        ax2.axhline(y=0, color='black', linestyle='-', alpha=0.5)
+
+        # Add value labels
+        for bar in bars3:
+            height = bar.get_height()
+            ax2.annotate(f'{int(height)}',
+                         xy=(bar.get_x() + bar.get_width() / 2, height),
+                         xytext=(0, 3 if height >= 0 else -15),
+                         textcoords="offset points",
+                         ha='center', va='bottom' if height >= 0 else 'top', fontsize=9)
+
+        plt.tight_layout()
+        self._save(fig, "05_statistical_wins_bars.png")
+
+    def _generate_latex_table(self):
+        """Generate LaTeX table in SBC format for top performing models."""
+        if not hasattr(self, 'stat_summary') or self.stat_summary.empty:
+            print("No statistical data available for LaTeX table.")
+            return
+
+        # Calculate ranking based on total net wins
+        model_ranking = self.stat_summary.groupby('model').agg({
+            'wins': 'sum',
+            'losses': 'sum',
+            'net_wins': 'sum'
+        }).sort_values('net_wins', ascending=False)
+
+        top_models = model_ranking.head(10)
+
+        latex_content = [
+            "\\begin{table}[htb]",
+            "\\centering",
+            "\\caption{Ranking dos Modelos por Desempenho Estatístico}",
+            "\\label{tab:statistical_ranking}",
+            "\\begin{tabular}{|l|c|c|c|c|c|}",
+            "\\hline",
+            "\\textbf{Modelo} & \\textbf{Vitórias} & \\textbf{Derrotas} & \\textbf{Saldo} & \\textbf{F1-Score} & \\textbf{Acurácia} \\\\",
+            "\\hline"
         ]
-        df["label"] = pd.Categorical(df["label"],
-                                     categories=label_order,
-                                     ordered=True)
-        df.sort_values("label", inplace=True)
 
-        # separa coluna “grupo” (nome da CNN) p/ barras agrupadas
-        df["group"] = df["network"]
+        for idx, (model, stats) in enumerate(top_models.iterrows()):
+            # Format model name
+            display_name = self._format_model_name_for_display(model)
 
-        import matplotlib.pyplot as plt
-        import seaborn as sns
+            # Get performance metrics
+            if model in self.general_stats.index:
+                f1_mean = self.general_stats.loc[model, 'macro_avg_f1_mean']
+                f1_std = self.general_stats.loc[model, 'macro_avg_f1_std']
+                acc_mean = self.general_stats.loc[model, 'accuracy_mean']
+                acc_std = self.general_stats.loc[model, 'accuracy_std']
 
-        fig, ax = plt.subplots(figsize=(10, 6))
-        sns.barplot(
-            data=df,
-            x="group", y="f1_mean", hue="classifier",
-            palette="Set2", ax=ax, errorbar=None
-        )
+                f1_str = f"{f1_mean:.3f}±{f1_std:.3f}"
+                acc_str = f"{acc_mean:.3f}±{acc_std:.3f}"
+            else:
+                f1_str = "N/A"
+                acc_str = "N/A"
 
-        # barras = patches na ordem do DataFrame
-        for bar, (_, row) in zip(ax.patches, df.iterrows()):
-            # erro padrão
-            ax.errorbar(
-                x=bar.get_x() + bar.get_width() / 2,
-                y=row["f1_mean"],
-                yerr=row["f1_std"],
-                fmt="none", ecolor="black", capsize=3, lw=1,
+            latex_content.append(
+                f"{display_name} & {int(stats['wins'])} & {int(stats['losses'])} & "
+                f"{int(stats['net_wins'])} & {f1_str} & {acc_str} \\\\"
             )
-            # valor numérico
-            ax.annotate(f"{row['f1_mean']:.2f}",
-                        xy=(bar.get_x() + bar.get_width() / 2, row["f1_mean"]),
-                        xytext=(0, 3),
-                        textcoords="offset points",
-                        ha="center", va="bottom", fontsize=8)
 
-        ax.set_ylim(0, 1.05)
-        ax.set_xlabel("CNN (grupo)")
-        ax.set_ylabel("F1-Score médio")
-        ax.set_title("Figura 10 – F1 médio nas iterações (± desvio-padrão)")
-        ax.legend(title="Classificador")
+            if idx < len(top_models) - 1:
+                latex_content.append("\\hline")
 
-        self._save(fig, "10_f1_mean_iterations.png")
+        latex_content.append("\\hline")
+        latex_content.append("\\end{tabular}")
+        latex_content.append("\\end{table}")
 
-    # ------------------------------------------------------------------
-    # helpers
-    # ------------------------------------------------------------------
-    def _get_metric(self, network: str, classifier: str, *, train: bool, metric: str = "f1_score") -> float:
-        """Return *metric* (defaults to *f1_score*) for the given combination."""
-        df = self.train if train else self.test
-        row = df[(df["network"] == network) & (df["classifier"] == classifier)]
-        if row.empty:
-            return 0.0
-        value = float(row.iloc[0][metric])
-        # guard‑rail: metric should be between 0 and 1
-        return max(0.0, min(1.0, value))
+        # Save to file
+        latex_file = self.out_dir / "statistical_ranking_table.tex"
+        with open(latex_file, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(latex_content))
+
+        print(f"✅ LaTeX table saved: {latex_file}")
 
     @staticmethod
-    def _annotate_bars(ax: plt.Axes) -> None:
-        for bar in ax.patches:
-            if isinstance(bar.get_height(), (int, float)):
-                height = bar.get_height()
-            else:
-                continue
-            ax.text(
-                bar.get_x() + bar.get_width() / 2,
-                height + 0.01,
-                f"{height:.3f}",
-                ha="center",
-                va="bottom",
-                fontsize=12,
-                fontweight="bold",
-            )
+    def _format_model_name_for_display(model_name: str) -> str:
+        """Format model name for nice display in plots and tables."""
+        # Convert internal format to display format
+        parts = model_name.split('_')
 
-    def _save(self, fig: plt.Figure, filename: str) -> None:
-        out_path = (self.out_dir / filename).resolve()
-        out_path.parent.mkdir(parents=True, exist_ok=True)
+        if len(parts) >= 2:
+            net = parts[0]
+            kind = parts[1]
+
+            # Format network name
+            net_display = net.replace('Resnet', 'ResNet').replace('Vgg19', 'VGG19')
+
+            if kind == 'classifier' and len(parts) >= 3 and parts[2] == 'none':
+                return f"{net_display}"
+            elif kind == 'feature' and len(parts) >= 4:
+                algorithm = parts[3]
+                alg_display = {
+                    'randomforest': 'RandomForest',
+                    'xgboost': 'XGBoost',
+                    'adaboost': 'AdaBoost',
+                    'extratrees': 'ExtraTrees'
+                }.get(algorithm, algorithm.title())
+                return f"{net_display}+{alg_display}"
+
+        return model_name
+
+    def _save(self, fig: plt.Figure, filename: str):
+        """Save figure to output directory."""
+        output_path = self.out_dir / filename
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         fig.tight_layout()
-        fig.savefig(out_path)
+        fig.savefig(output_path, dpi=DEFAULT_DPI, bbox_inches='tight')
         plt.close(fig)
+        print(f"✅ figure saved: {filename}")
 
-        try:
-            printable = out_path.relative_to(Path.cwd())
-        except ValueError:
-            printable = out_path
-        print(f"✅ Figura salva em {printable}")
+
+# Usage example
+def create_plots(general_csv_path: str, per_class_csv_path: str,
+                 stat_tests_csv_path: str = None, output_dir: str = "../../figures"):
+    """
+    Create all enhanced plots from CSV files.
+
+    Parameters
+    ----------
+    general_csv_path : str
+        Path to all_models_general.csv
+    per_class_csv_path : str
+        Path to all_models_per_class.csv
+    stat_tests_csv_path : str
+        Path to stat_tests.csv
+    output_dir : str
+        Directory to save plots
+    """
+    plotter = Plotter(general_csv_path, per_class_csv_path, stat_tests_csv_path, Path(output_dir))
+    plotter.make_all_figures()
+    return plotter
+
+
+if __name__ == "__main__":
+    create_plots(
+        general_csv_path="D:\\PIBIC\\python\\skincancer\\skincancer\\res\\all_models_general.csv",
+        per_class_csv_path="D:\\PIBIC\\python\\skincancer\\skincancer\\res\\all_models_per_class.csv",
+        stat_tests_csv_path="D:\\PIBIC\\python\\skincancer\\skincancer\\res\\stat_tests_pairs.csv",
+    )
