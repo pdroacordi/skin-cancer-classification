@@ -1,0 +1,31 @@
+Complete Experiment Summary
+============================================================
+
+Feature Extractor: Inception
+Classifier: ExtraTrees
+Use CNN Data Augmentation: True
+Use Feature Augmentation: True
+Use Fine-tuning: True
+Use Preprocessing: False
+Use PCA: False
+PCA Components: None
+Use Data Preprocessing: False
+
+Cross-validation:
+  Iterations: 2
+  Folds per iteration: 5
+  Total folds evaluated: 10
+
+Final Models:
+  Number of final models: 10
+  Models trained: 10
+
+Final Models Test Performance (Mean ± Std):
+  Accuracy: 0.8309 ± 0.0019
+  F1-Score: 0.6985 ± 0.0050
+  Precision: 0.7039 ± 0.0036
+  Recall: 0.6966 ± 0.0063
+
+95% Confidence Intervals:
+  Accuracy: [0.8294, 0.8323]
+  F1-Score: [0.6948, 0.7023]

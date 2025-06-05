@@ -1,0 +1,36 @@
+Classifier: XGBoost
+Use PCA: False
+PCA Components: None
+Tune Hyperparameters: False
+Number of Folds: 5
+Iteration: 1
+Use Data Preprocessing: False
+Iteration 1 Average Metrics:
+Accuracy: 0.9853
+Precision: 0.9806
+Recall: 0.9731
+F1 Score: 0.9768
+
+Classification Report:
+              precision    recall  f1-score   support
+
+           0       0.97      0.96      0.96      2224
+           1       0.98      0.98      0.98      3496
+           2       0.97      0.97      0.97      7472
+           3       0.98      0.96      0.97       784
+           4       0.97      0.96      0.97      7568
+           5       0.99      0.99      0.99     45592
+           6       1.00      0.99      0.99       960
+
+    accuracy                           0.99     68096
+   macro avg       0.98      0.97      0.98     68096
+weighted avg       0.99      0.99      0.99     68096
+
+Confusion Matrix:
+[[ 2141     9    36     4    15    19     0]
+ [   12  3410    29     0    11    34     0]
+ [   34    19  7212     3    44   160     0]
+ [    3     1     9   756     2    13     0]
+ [   14    12    48     1  7281   212     0]
+ [   10    17    84     7   124 45349     1]
+ [    0     0     1     1     4     6   948]]

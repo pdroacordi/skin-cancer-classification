@@ -1,0 +1,35 @@
+Model: VGG19
+Use Fine-tuning: True
+Use Preprocessing: False
+Use Data Augmentation: True
+Number of Folds: 5
+
+Iteration 1 Average Metrics:
+Accuracy: 0.8373
+Precision: 0.7607
+Recall: 0.6675
+F1 Score: 0.6972
+
+Overall Classification Report:
+              precision    recall  f1-score   support
+
+           0       0.59      0.47      0.53       278
+           1       0.76      0.69      0.72       437
+           2       0.64      0.72      0.68       934
+           3       0.64      0.48      0.55        98
+           4       0.73      0.48      0.58       946
+           5       0.90      0.95      0.92      5699
+           6       0.91      0.88      0.90       120
+
+    accuracy                           0.84      8512
+   macro avg       0.74      0.67      0.70      8512
+weighted avg       0.83      0.84      0.83      8512
+
+Confusion Matrix:
+[[ 132   32   66    2   18   27    1]
+ [  32  301   41    8   10   42    3]
+ [  28   22  669    8   47  160    0]
+ [  12    3    8   47    2   26    0]
+ [  14    5  109    2  453  362    1]
+ [   5   29  147    6   88 5419    5]
+ [   0    3    1    0    3    7  106]]

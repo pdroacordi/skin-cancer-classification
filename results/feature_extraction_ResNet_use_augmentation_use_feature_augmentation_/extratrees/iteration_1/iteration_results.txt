@@ -1,0 +1,36 @@
+Classifier: ExtraTrees
+Use PCA: False
+PCA Components: None
+Tune Hyperparameters: False
+Number of Folds: 5
+Iteration: 0
+Use Data Preprocessing: False
+Iteration 0 Average Metrics:
+Accuracy: 0.9978
+Precision: 0.9982
+Recall: 0.9953
+F1 Score: 0.9967
+
+Classification Report:
+              precision    recall  f1-score   support
+
+           0       1.00      0.99      0.99      2224
+           1       1.00      1.00      1.00      3496
+           2       1.00      1.00      1.00      7472
+           3       1.00      0.99      1.00       784
+           4       1.00      0.99      0.99      7568
+           5       1.00      1.00      1.00     45592
+           6       1.00      1.00      1.00       960
+
+    accuracy                           1.00     68096
+   macro avg       1.00      1.00      1.00     68096
+weighted avg       1.00      1.00      1.00     68096
+
+Confusion Matrix:
+[[ 2205     1    12     0     3     3     0]
+ [    1  3484     2     0     1     8     0]
+ [    5     1  7437     0     4    25     0]
+ [    0     0     0   780     0     4     0]
+ [    2     0     2     0  7520    44     0]
+ [    0     0     6     0    20 45566     0]
+ [    0     0     0     0     1     3   956]]

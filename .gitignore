@@ -3,6 +3,9 @@
 /results/**/logs/
 /results/**/features_by_fold/
 /results/**/final_model/
+/results/**/final_models/
+!results/**/final_models/*.csv
+
 
 # Ignorar arquivos compilados do Python
 __pycache__/
