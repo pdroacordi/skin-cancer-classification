@@ -1,158 +1,202 @@
-"""Executa testes estatísticos entre modelos.
+"""Pipeline estatística completa
+================================
+* Entrada:
+    - ``all_models_general.csv``   (não usado aqui ‑ testes precisam de repetições)
+    - ``all_models_per_class.csv`` (7 classes = 7 repetições por modelo)
+* Saída:
+    - ``results/stat_tests_global.csv``   → 1 linha por métrica, 2 testes globais (ANOVA‑RM & Friedman)
+    - ``results/stat_tests_pairs.csv``    → todas as combinações de modelos, p‑values corrigidos (Holm)
 
-Fluxo:
-1. Carrega `all_models_aggregated.csv` gerado por `aggregate_results.py`.
-2. Para cada métrica numérica (ex.: accuracy, f1, recall, ...):
-   • Constrói um DataFrame "wide" (index = amostras; colunas = modelos).
-     A amostra é definida por:
-         - se a linha tem `class_label` → usa cada classe como repetição;
-         - caso contrário, descarta (não há replicação suficiente).
-   • Teste global para ≥3 modelos:
-        - **Normalidade**: Shapiro–Wilk em cada coluna  (α = 0.05).
-        - **Homogeneidade**: Levene (α = 0.05).
-        - Se ambos os requisitos OK → **ANOVA de medidas repetidas (AnovaRM)**.
-        - Caso contrário → **Friedman** (não‑paramétrico, repetidas).
-   • Se só existirem 2 modelos →
-        - Mesma checagem de premissas.
-        - Se normal + homocedástico → **t‑teste pareado**.
-        - Senão → **Wilcoxon signed‑rank**.
-   • Pós‑hoc (se modelos ≥3 & p_global < 0.05):
-        - Se ANOVA → t‑teste pareado com correção Holm.
-        - Se Friedman → Wilcoxon pareado com correção Holm.
-3. Os resultados são gravados em `results/model_stats.csv` com duas seções:
-     A. Linhas `test = global` → estatística e p‑value do teste global por métrica.
-     B. Linhas `test = pairwise` → comparação modelo A × B.
+Testes implementados
+--------------------
+1. **AnovaRM** (paramétrico) – se todos os grupos passarem Shapiro (p>0.05)
+2. **Friedman** (não‑param) – sempre calculado (robusto)
+3. **Post‑hoc**
+   * Se dados normais → *t‑test pareado* + Holm
+   * Caso contrário   → *Wilcoxon signed‑rank* + Holm
+
+Detalhes extras:
+---------------
+* Model ID = ``f"{net}_{kind}_{algorithm or 'none'}"``  – garante unicidade.
+* Se qualquer grupo tiver variação zero, devolvemos estat=0, p=1 (sem falhar).
+* Arquivos criados em ``<repo_root>/results``.
+* Pode ser executado de qualquer pasta: ``python -m analysis.stat_tests``.
 """
+from __future__ import annotations
 
-from pathlib import Path
 import itertools
-import pandas as pd
-import numpy as np
-from scipy.stats import shapiro, levene, friedmanchisquare, wilcoxon, ttest_rel
-from statsmodels.stats.multitest import multipletests
-from statsmodels.stats.anova import AnovaRM
+import warnings
+from pathlib import Path
+from typing import List
 
-BASE = Path(__file__).resolve().parents[1]
-CSV_PATH = BASE / "results" / "all_models_aggregated.csv"
-OUTPUT_PATH = BASE / "results" / "model_stats.csv"
+import numpy as np
+import pandas as pd
+import scipy.stats as st
+import statsmodels.api as sm
+import statsmodels.stats.multicomp as mc
+import statsmodels.stats.multitest as smm
+import scikit_posthocs as sp
+
+# ---------------------------------------------------------------------------
+# CONFIG
+# ---------------------------------------------------------------------------
+ROOT = Path(__file__).resolve().parents[2]
+CSV_PER_CLASS = ROOT / "res" / "all_models_per_class.csv"
+OUT_DIR = ROOT / "results"
+OUT_GLOBAL = OUT_DIR / "stat_tests_global.csv"
+OUT_PAIRS = OUT_DIR / "stat_tests_pairs.csv"
 ALPHA = 0.05
 
-META_COLS = [
-    "experiment",
-    "net",
-    "kind",  # classifier | feature_extractor
-    "class_label",  # NaN se métrica geral
-    "data_augmentation",
-    "feature_augmentation",
-    "hair_removal",
-    "segmentation",
-]
+# ---------------------------------------------------------------------------
+# HELPERS
+# ---------------------------------------------------------------------------
 
-def load_wide(df: pd.DataFrame, metric: str) -> pd.DataFrame:
-    """Retorna DF wide com linhas=amostras, colunas=modelos para a métrica."""
-    subset = (
-        df[df["class_label"].notna()]  # só métricas por classe ⇒ repetição suficiente
-        .pivot_table(
-            index="class_label",
-            columns=["net", "kind"],  # coluna multi‑índice para unicidade
-            values=metric,
-        )
+def _numeric_metrics(df: pd.DataFrame) -> List[str]:
+    """Return metric columns (float/int) excluding known metadata."""
+    meta_cols = {
+        "experiment",
+        "net",
+        "kind",
+        "algorithm",
+        "class",
+        "scope",
+    }
+    return [c for c, dt in df.dtypes.items() if dt != "object" and c not in meta_cols]
+
+
+def _build_model_id(row: pd.Series) -> str:
+    alg = row.get("algorithm", "none") or "none"
+    return f"{row['net']}_{row['kind']}_{alg}"
+
+
+def _pivot(df: pd.DataFrame, metric: str) -> pd.DataFrame:
+    """Pivot seguro: média em caso de (classe, modelo) duplicado."""
+    long = (
+        df.assign(model_id=df.apply(_build_model_id, axis=1))[["class", "model_id", metric]]
+        .dropna(subset=[metric])
+        .astype({"class": str})
     )
-    # drop models com NaN em qualquer classe (amostra faltante)
-    subset = subset.dropna(axis=1, how="any")
-    return subset
 
-def check_normality(df_wide: pd.DataFrame) -> bool:
-    """True se TODAS colunas passam Shapiro (p>α)."""
-    return all(shapiro(col).pvalue > ALPHA for col in df_wide.T.values)
+    # ── agrega duplicates ──────────────────────────────────────────
+    long = (
+        long.groupby(["class", "model_id"], as_index=False)
+            .mean(numeric_only=True)
+    )
 
-def check_homoscedastic(df_wide: pd.DataFrame) -> bool:
-    """True se passa Levene (p>α)."""
-    stat, p = levene(*[df_wide[c].values for c in df_wide.columns])
-    return p > ALPHA
+    pivot = long.pivot(index="class", columns="model_id", values=metric)
 
-def run_global_test(df_wide: pd.DataFrame, normal: bool, homo: bool):
-    n_models = df_wide.shape[1]
-    # Friedman / ANOVA / t‑test / Wilcoxon
-    if n_models == 2:
-        a, b = df_wide.columns
-        if normal and homo:
-            stat, p = ttest_rel(df_wide[a], df_wide[b])
-            test_name = "paired_t"
-        else:
-            stat, p = wilcoxon(df_wide[a], df_wide[b])
-            test_name = "wilcoxon"
-        return test_name, stat, p
+    # remove colunas sem variação
+    pivot = pivot.loc[:, pivot.apply(lambda c: c.nunique() > 1)]
+    return pivot
+
+
+# ---------------------------------------------------------------------------
+# CORE TESTS
+# ---------------------------------------------------------------------------
+
+def _shapiro_ok(arrays: List[np.ndarray]) -> bool:
+    """True se *todos* grupos passaram Shapiro (p>0.05)."""
+    for a in arrays:
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", "Input data has range zero")
+            _, p = st.shapiro(a)
+        if p <= 0.05:
+            return False
+    return True
+
+
+def _anova_rm(pivot: pd.DataFrame, metric: str):
+    """Repeated‑measures ANOVA via statsmodels. Pode falhar se data singular."""
+    df_long = (
+        pivot.reset_index()
+        .melt(id_vars="class", var_name="model", value_name=metric)
+        .rename(columns={"class": "subject"})
+    )
+    try:
+        aov = sm.stats.AnovaRM(df_long, depvar=metric, subject="subject", within=["model"]).fit()
+        f_val = aov.anova_table["F Value"][0]
+        p_val = aov.anova_table["Pr > F"][0]
+    except Exception:  # singular matrix, etc.
+        f_val, p_val = 0.0, 1.0
+    return f_val, p_val
+
+
+def _global_and_pairs(pivot: pd.DataFrame, metric: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Retorna (global_df, pairs_df) para uma métrica."""
+    models = list(pivot.columns)
+    arrays = [pivot[m].values for m in models]
+
+    # ---------------- GLOBAL ----------------
+    if _shapiro_ok(arrays):
+        stat, p_anova = _anova_rm(pivot, metric)
+        norm = True
     else:
-        if normal and homo:
-            # Repeated‑measures ANOVA
-            long = df_wide.melt(ignore_index=False, var_name=["net", "kind"], value_name="val").reset_index()
-            long["subject"] = long["class_label"]  # repeated factor
-            aov = AnovaRM(long, depvar="val", subject="subject", within=["net", "kind"]).fit()
-            stat = aov.anova_table.loc["net:kind", "F Value"]
-            p = aov.anova_table.loc["net:kind", "Pr > F"]
-            test_name = "rm_anova"
-        else:
-            stat, p = friedmanchisquare(*[df_wide[c] for c in df_wide.columns])
-            test_name = "friedman"
-        return test_name, stat, p
+        stat, p_anova = st.friedmanchisquare(*arrays)
+        norm = False
 
-def pairwise(df_wide: pd.DataFrame, normal: bool):
-    """Pairwise comparação com correção Holm; retorna list(dict)."""
-    comps = []
-    combos = list(itertools.combinations(df_wide.columns, 2))
-    stats = []
-    pvals = []
-    for a, b in combos:
-        if normal:
-            stat, p = ttest_rel(df_wide[a], df_wide[b])
-            test = "paired_t"
-        else:
-            stat, p = wilcoxon(df_wide[a], df_wide[b])
-            test = "wilcoxon"
-        stats.append(stat)
-        pvals.append(p)
-        comps.append((a, b, test))
-    # Holm correction
-    reject, p_corr, _, _ = multipletests(pvals, method="holm", alpha=ALPHA)
-    results = []
-    for (a, b, test), stat, p_raw, p_adj, rej in zip(comps, stats, pvals, p_corr, reject):
-        results.append({
-            "test": "pairwise",
-            "metric": current_metric,
-            "model_a": "_".join(a),
-            "model_b": "_".join(b),
-            "test_name": test,
-            "statistic": stat,
-            "p_value": p_raw,
-            "p_adj": p_adj,
-            "significant": rej,
-        })
-    return results
+    global_row = {
+        "metric": metric,
+        "test": "anova_rm" if norm else "friedman",
+        "stat": stat,
+        "p": p_anova,
+    }
+    global_df = pd.DataFrame([global_row])
+
+    # ---------------- PAIRS ------------------
+    records = []
+    if p_anova <= ALPHA:  # só faz pós‑hoc se há diferença global
+        combos = itertools.combinations(models, 2)
+        for a, b in combos:
+            if norm:
+                stat_pair, p_pair = st.ttest_rel(pivot[a], pivot[b])
+                test_name = "t_paired"
+            else:
+                stat_pair, p_pair = st.wilcoxon(pivot[a], pivot[b])
+                test_name = "wilcoxon"
+            records.append({
+                "metric": metric,
+                "test": test_name,
+                "stat": stat_pair,
+                "p_raw": p_pair,
+                "model_a": a,
+                "model_b": b,
+            })
+        if records:
+            p_vals = [r["p_raw"] for r in records]
+            _, p_adj, _, _ = smm.multipletests(p_vals, method="holm")
+            for r, adj in zip(records, p_adj):
+                r["p"] = adj
+                r["significant"] = adj <= ALPHA
+    pairs_df = pd.DataFrame(records)
+    return global_df, pairs_df
+
+
+# ---------------------------------------------------------------------------
+# MAIN
+# ---------------------------------------------------------------------------
 
 def main():
-    df = pd.read_csv(CSV_PATH)
-    num_cols = [c for c in df.columns if c not in META_COLS]
-    all_rows = []
-    global current_metric
-    for current_metric in num_cols:
-        df_wide = load_wide(df, current_metric)
-        if df_wide.empty or df_wide.shape[1] < 2:
-            continue
-        normal = check_normality(df_wide)
-        homo = check_homoscedastic(df_wide) if df_wide.shape[1] > 2 else True
-        test_name, stat, p = run_global_test(df_wide, normal, homo)
-        all_rows.append({
-            "test": "global",
-            "metric": current_metric,
-            "test_name": test_name,
-            "statistic": stat,
-            "p_value": p,
-        })
-        # Pairwise (se >=3 modelos ou 2 com global significativo?) — vamos sempre gerar
-        all_rows.extend(pairwise(df_wide, normal and homo))
-    pd.DataFrame(all_rows).to_csv(OUTPUT_PATH, index=False)
-    print(f"[stat_tests] saved → {OUTPUT_PATH.relative_to(BASE)}")
+    OUT_DIR.mkdir(exist_ok=True)
+
+    df = pd.read_csv(CSV_PER_CLASS)
+    numeric_metrics = _numeric_metrics(df)
+
+    globals_, pairs_ = [], []
+    for m in numeric_metrics:
+        pivot = _pivot(df, m)
+        if pivot.shape[1] < 2:
+            continue  # não há 2 modelos com variação
+        g, p = _global_and_pairs(pivot, m)
+        globals_.append(g)
+        pairs_.append(p)
+
+    pd.concat(globals_, ignore_index=True).to_csv(OUT_GLOBAL, index=False)
+    pd.concat(pairs_, ignore_index=True).to_csv(OUT_PAIRS, index=False)
+    print(
+        f"✅ Estatísticas salvas: {OUT_GLOBAL.name} ({len(globals_)} métricas) | "
+        f"{OUT_PAIRS.name} ({sum(len(x) for x in pairs_)} pares)"
+    )
+
 
 if __name__ == "__main__":
     main()

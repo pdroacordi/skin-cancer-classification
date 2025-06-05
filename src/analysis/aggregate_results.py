@@ -32,8 +32,8 @@ import pandas as pd
 # CONFIGURAÇÕES
 # ---------------------------------------------------------------------------
 BASE = Path(__file__).resolve().parents[2]  # <repo_root>
-OUT_GENERAL_CSV = BASE / "all_models_general.csv"
-OUT_PER_CLASS_CSV = BASE / "all_models_per_class.csv"
+OUT_GENERAL_CSV = BASE / "res" / "all_models_general.csv"
+OUT_PER_CLASS_CSV = BASE / "res" / "all_models_per_class.csv"
 METADATA_FLAGS = [
     "feature_augmentation",
     "data_augmentation",
