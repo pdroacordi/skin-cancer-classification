@@ -3,8 +3,8 @@
 from importlib import metadata
 __all__ = [
     "constants",
-    "metrics_parser",
-    "results_collector",
+    "aggregate_results",
+    "stat_tests",
     "plotter",
 ]
 

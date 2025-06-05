@@ -9,9 +9,7 @@ import math
 import os
 import sys
 
-import matplotlib.pyplot as plt
 import numpy as np
-import seaborn as sns
 import tensorflow as tf
 from sklearn.metrics import classification_report, confusion_matrix
 from tensorflow.keras.backend import clear_session
@@ -40,7 +38,7 @@ from utils.data_loaders import load_paths_labels, MemoryEfficientDataGenerator
 from utils.graphic_preprocessing import apply_graphic_preprocessing
 from utils.augmentation import AugmentationFactory
 from models.cnn_models import load_or_create_cnn, get_callbacks, create_model_name
-from utils.fold_utils import save_fold_results, plot_metric_distributions
+from utils.fold_utils import save_fold_results
 
 
 def setup_gpu_memory():
@@ -69,85 +67,9 @@ def create_result_directories(base_dir=RESULTS_DIR):
     # Create subdirectories
     os.makedirs(result_dir, exist_ok=True)
     os.makedirs(os.path.join(result_dir, "models"), exist_ok=True)
-    os.makedirs(os.path.join(result_dir, "plots"), exist_ok=True)
-    os.makedirs(os.path.join(result_dir, "logs"), exist_ok=True)
 
     return result_dir
 
-
-def plot_training_history(history, save_path=None):
-    """
-    Plot training history metrics.
-
-    Args:
-        history: Keras history object.
-        save_path (str, optional): Path to save the plot.
-    """
-    plt.figure(figsize=(12, 8))
-
-    # Plot accuracy
-    plt.subplot(2, 1, 1)
-    plt.plot(history.history['accuracy'], label='Training Accuracy')
-    plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
-    plt.title('Model Accuracy')
-    plt.ylabel('Accuracy')
-    plt.xlabel('Epoch')
-    plt.legend(loc='lower right')
-    plt.grid(True)
-
-    # Plot loss
-    plt.subplot(2, 1, 2)
-    plt.plot(history.history['loss'], label='Training Loss')
-    plt.plot(history.history['val_loss'], label='Validation Loss')
-    plt.title('Model Loss')
-    plt.ylabel('Loss')
-    plt.xlabel('Epoch')
-    plt.legend(loc='upper right')
-    plt.grid(True)
-
-    plt.tight_layout()
-
-    if save_path:
-        plt.savefig(save_path)
-        print(f"Training history plot saved to: {save_path}")
-
-    plt.close()
-
-
-def plot_confusion_matrix(y_true, y_pred, class_names=None, save_path=None):
-    """
-    Plot confusion matrix.
-
-    Args:
-        y_true (numpy.array): True labels.
-        y_pred (numpy.array): Predicted labels.
-        class_names (list, optional): List of class names.
-        save_path (str, optional): Path to save the plot.
-    """
-    cm = confusion_matrix(y_true, y_pred)
-
-    plt.figure(figsize=(10, 8))
-
-    # Get the number of classes from the confusion matrix
-    num_classes = cm.shape[0]
-
-    # If class_names is not provided, use numeric indices
-    if class_names is None:
-        class_names = [str(i) for i in range(num_classes)]
-
-    # Now create the heatmap with the class names
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-                xticklabels=class_names, yticklabels=class_names)
-
-    plt.title('Confusion Matrix')
-    plt.ylabel('True Label')
-    plt.xlabel('Predicted Label')
-
-    if save_path:
-        plt.savefig(save_path)
-        print(f"Confusion matrix plot saved to: {save_path}")
-
-    plt.close()
 
 
 def run_single_fold_training(train_paths, train_labels, val_paths, val_labels,
@@ -237,10 +159,6 @@ def run_single_fold_training(train_paths, train_labels, val_paths, val_labels,
             verbose=1
         )
 
-        # Plot training history
-        history_plot_path = os.path.join(result_dir, "plots", "training_history.png")
-        plot_training_history(history, history_plot_path)
-
         return model, history
     else:
         print(f"Using pre-trained model from: {model_save_path}")
@@ -320,10 +238,6 @@ def evaluate_model(model, test_paths, test_labels, result_dir, class_names=None)
     # Print classification report
     print("\nTest Set Classification Report:")
     print(classification_report(y_true, y_pred))
-
-    # Plot confusion matrix
-    cm_plot_path = os.path.join(result_dir, "plots", "confusion_matrix.png")
-    plot_confusion_matrix(y_true, y_pred, class_names, cm_plot_path)
 
     # Save evaluation results
     results = {
@@ -535,10 +449,6 @@ def run_kfold_cross_validation(all_paths, all_labels, result_dir, class_names=No
                         'hyperparameters': hyperparameters
                     }
 
-                # Plot confusion matrix
-                cm_plot_path = os.path.join(fold_dir, "plots", "confusion_matrix.png")
-                plot_confusion_matrix(y_true, y_pred, class_names, cm_plot_path)
-
                 # Store fold results
                 fold_result = {
                     'iteration': iteration + 1,
@@ -567,10 +477,6 @@ def run_kfold_cross_validation(all_paths, all_labels, result_dir, class_names=No
         print(f"\nOverall Iteration {iteration + 1} Results:")
         print(classification_report(iteration_y_true, iteration_y_pred))
 
-        # Plot overall confusion matrix for this iteration
-        cm_plot_path = os.path.join(iter_dir, "plots", "overall_confusion_matrix.png")
-        plot_confusion_matrix(iteration_y_true, iteration_y_pred, class_names, cm_plot_path)
-
         # Store iteration results
         all_iterations_results['fold_results'].extend(fold_results)
         all_iterations_results['all_y_true'].extend(iteration_y_true)
@@ -588,26 +494,6 @@ def run_kfold_cross_validation(all_paths, all_labels, result_dir, class_names=No
         print(f"Recall: {avg_recall:.4f}")
         print(f"F1 Score: {avg_f1:.4f}")
 
-        # Save results to a text file
-        with open(os.path.join(iter_dir, "iteration_results.txt"), "w") as f:
-            f.write(f"Model: {CNN_MODEL}\n")
-            f.write(f"Use Fine-tuning: {USE_FINE_TUNING}\n")
-            f.write(f"Use Preprocessing: {USE_GRAPHIC_PREPROCESSING}\n")
-            f.write(f"Use Data Augmentation: {USE_DATA_AUGMENTATION}\n")
-            f.write(f"Number of Folds: {NUM_KFOLDS}\n\n")
-
-            f.write(f"Iteration {iteration + 1} Average Metrics:\n")
-            f.write(f"Accuracy: {avg_accuracy:.4f}\n")
-            f.write(f"Precision: {avg_precision:.4f}\n")
-            f.write(f"Recall: {avg_recall:.4f}\n")
-            f.write(f"F1 Score: {avg_f1:.4f}\n\n")
-
-            f.write("Overall Classification Report:\n")
-            f.write(classification_report(iteration_y_true, iteration_y_pred))
-
-            f.write("\nConfusion Matrix:\n")
-            f.write(str(confusion_matrix(iteration_y_true, iteration_y_pred)))
-
     # Calculate overall metrics across all iterations
     all_y_true = np.array(all_iterations_results['all_y_true'])
     all_y_pred = np.array(all_iterations_results['all_y_pred'])
@@ -615,10 +501,6 @@ def run_kfold_cross_validation(all_paths, all_labels, result_dir, class_names=No
     # Print overall classification report
     print("\nOverall Results (All Iterations):")
     print(classification_report(all_y_true, all_y_pred))
-
-    # Plot overall confusion matrix
-    cm_plot_path = os.path.join(result_dir, "plots", "overall_confusion_matrix.png")
-    plot_confusion_matrix(all_y_true, all_y_pred, class_names, cm_plot_path)
 
     # Calculate average metrics across all iterations
     iteration_metrics = []
@@ -792,10 +674,6 @@ def train_final_model_cnn(all_data_paths, all_data_labels, best_hyperparameters,
         callbacks=callbacks,
         verbose=1
     )
-
-    # Plot training history
-    history_plot_path = os.path.join(final_model_dir, "plots", "final_model_training_history.png")
-    plot_training_history(history, history_plot_path)
 
     print(f"Final CNN model trained and saved to: {final_model_path}")
 
@@ -1002,10 +880,6 @@ def train_multiple_final_cnn_models(all_data_paths, all_data_labels, best_hyperp
             verbose=1
         )
 
-        # Plot training history
-        history_plot_path = os.path.join(model_dir, "plots", "training_history.png")
-        plot_training_history(history, history_plot_path)
-
         trained_models.append({
             'model': model,
             'model_path': model_path,
@@ -1019,20 +893,6 @@ def train_multiple_final_cnn_models(all_data_paths, all_data_labels, best_hyperp
         gc.collect()
 
     print(f"\nAll {num_models} CNN models trained successfully!")
-
-    # Save training summary
-    summary_path = os.path.join(final_models_dir, "training_summary.txt")
-    with open(summary_path, "w") as f:
-        f.write(f"Multiple Final CNN Models Training Summary\n")
-        f.write(f"{'=' * 50}\n\n")
-        f.write(f"Number of models trained: {num_models}\n")
-        f.write(f"CNN Model: {best_hyperparameters['model_name']}\n")
-        f.write(f"Use Fine-tuning: {best_hyperparameters.get('fine_tuning', USE_FINE_TUNING)}\n")
-        f.write(f"Use Augmentation: {best_hyperparameters.get('use_augmentation', USE_DATA_AUGMENTATION)}\n")
-        f.write(
-            f"Use Preprocessing: {best_hyperparameters.get('use_graphic_preprocessing', USE_GRAPHIC_PREPROCESSING)}\n")
-        f.write(f"Batch Size: {best_hyperparameters.get('batch_size', BATCH_SIZE)}\n")
-        f.write(f"Models saved in: {final_models_dir}\n")
 
     return trained_models, final_models_dir
 
@@ -1171,10 +1031,6 @@ def evaluate_multiple_final_cnn_models(trained_models, test_paths, test_labels,
             f.write("\nConfusion Matrix:\n")
             f.write(str(confusion_matrix(y_true, y_pred)))
 
-        # Plot confusion matrix
-        cm_plot_path = os.path.join(model_dir, "plots", "test_confusion_matrix.png")
-        plot_confusion_matrix(y_true, y_pred, class_names, cm_plot_path)
-
     # Statistical Analysis
     print("\n" + "=" * 50)
     print("Statistical Analysis of CNN Model Performance")
@@ -1299,7 +1155,6 @@ def evaluate_multiple_final_cnn_models(trained_models, test_paths, test_labels,
         'precision': precisions,
         'recall': recalls
     }
-    plot_metric_distributions(stats_results, result_dir, raw_metrics)
 
     print("\nStatistical Summary:")
     print(f"Accuracy: {stats_results['accuracy']['mean']:.4f} ± {stats_results['accuracy']['std']:.4f}")
@@ -1317,7 +1172,6 @@ def evaluate_multiple_final_cnn_models(trained_models, test_paths, test_labels,
         'class_metrics_df': df_class_metrics,
         'class_statistics': class_stats
     }
-
 
 def run_cnn_classifier_pipeline(train_files_path, val_files_path, test_files_path,
                                 run_kfold=False, class_names=None, skip_training=False):

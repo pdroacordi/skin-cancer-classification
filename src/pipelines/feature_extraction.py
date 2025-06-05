@@ -7,9 +7,7 @@ import gc
 import os
 import sys
 
-import matplotlib.pyplot as plt
 import numpy as np
-import seaborn as sns
 import tensorflow as tf
 from sklearn.metrics import classification_report, confusion_matrix, roc_curve, auc, roc_auc_score
 from sklearn.preprocessing import label_binarize
@@ -43,7 +41,7 @@ from utils.graphic_preprocessing import apply_graphic_preprocessing
 from models.cnn_models import get_feature_extractor_model, get_feature_extractor_from_cnn
 from models.classical_models import create_ml_pipeline, tune_hyperparameters, get_default_param_grid, save_model
 from utils.data_preprocessing import apply_data_preprocessing
-from utils.fold_utils import save_fold_results, plot_metric_distributions
+from utils.fold_utils import save_fold_results
 
 
 def setup_gpu_memory():
@@ -128,21 +126,15 @@ def create_feature_extraction_directories(base_dir=RESULTS_DIR, cnn_model_name=C
         'final_model': os.path.join(classifier_dir, "final_model")
     }
 
-    # Create final_model directory and its plots subdirectory
-    os.makedirs(classifier_dirs['final_model'], exist_ok=True)
-    os.makedirs(os.path.join(classifier_dirs['final_model'], "plots"), exist_ok=True)
-
     # Create iteration and fold directories
     for iteration in range(1, num_iterations + 1):
         iteration_dir = os.path.join(classifier_dir, f"iteration_{iteration}")
         os.makedirs(iteration_dir, exist_ok=True)
-        os.makedirs(os.path.join(iteration_dir, "plots"), exist_ok=True)
         os.makedirs(os.path.join(iteration_dir, "models"), exist_ok=True)
 
         # Store iteration paths
         iteration_dirs = {
             'base': iteration_dir,
-            'plots': os.path.join(iteration_dir, "plots"),
             'models': os.path.join(iteration_dir, "models"),
             'folds': {}
         }
@@ -155,18 +147,15 @@ def create_feature_extraction_directories(base_dir=RESULTS_DIR, cnn_model_name=C
             # Create fold subdirectories
             fold_features_dir = os.path.join(fold_dir, "features")
             fold_models_dir = os.path.join(fold_dir, "models")
-            fold_plots_dir = os.path.join(fold_dir, "plots")
 
             os.makedirs(fold_features_dir, exist_ok=True)
             os.makedirs(fold_models_dir, exist_ok=True)
-            os.makedirs(fold_plots_dir, exist_ok=True)
 
             # Store fold paths
             fold_dirs = {
                 'base': fold_dir,
                 'features': fold_features_dir,
-                'models': fold_models_dir,
-                'plots': fold_plots_dir
+                'models': fold_models_dir
             }
 
             # Add fold to iteration
@@ -184,154 +173,6 @@ def create_feature_extraction_directories(base_dir=RESULTS_DIR, cnn_model_name=C
         os.makedirs(iter_features_dir, exist_ok=True)
 
     return dirs
-
-def plot_confusion_matrix(y_true, y_pred, class_names=None, save_path=None):
-    """
-    Plot confusion matrix.
-
-    Args:
-        y_true (numpy.array): True labels.
-        y_pred (numpy.array): Predicted labels.
-        class_names (list, optional): List of class names.
-        save_path (str, optional): Path to save the plot.
-    """
-    cm = confusion_matrix(y_true, y_pred)
-
-    plt.figure(figsize=(10, 8))
-
-    # Get the number of classes from the confusion matrix
-    num_classes = cm.shape[0]
-
-    # If class_names is not provided, use numeric indices
-    if class_names is None:
-        class_names = [str(i) for i in range(num_classes)]
-
-    # Now create the heatmap with the class names
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-                xticklabels=class_names, yticklabels=class_names)
-
-    plt.title('Confusion Matrix')
-    plt.ylabel('True Label')
-    plt.xlabel('Predicted Label')
-
-    if save_path:
-        plt.savefig(save_path)
-        print(f"Confusion matrix plot saved to: {save_path}")
-
-    plt.close()
-
-
-def plot_feature_importance(model, feature_names=None, top_n=20, save_path=None):
-    """
-    Plot feature importance for tree-based models.
-
-    Args:
-        model: Trained ML model with feature_importances_ attribute.
-        feature_names (list, optional): List of feature names.
-        top_n (int): Number of top features to show.
-        save_path (str, optional): Path to save the plot.
-    """
-    # Check if model has feature_importances_ attribute
-    if not hasattr(model, 'feature_importances_'):
-        print("Model does not have feature_importances_ attribute. Skipping feature importance plot.")
-        return
-
-    # Get feature importances
-    importances = model.feature_importances_
-
-    # Use indices as feature names if not provided
-    if feature_names is None:
-        feature_names = [f"Feature {i}" for i in range(len(importances))]
-
-    # Sort by importance
-    indices = np.argsort(importances)[::-1]
-
-    # Limit to top_n features
-    if top_n is not None and top_n < len(indices):
-        indices = indices[:top_n]
-
-    plt.figure(figsize=(12, 8))
-    plt.barh(range(len(indices)), importances[indices], align="center")
-    plt.yticks(range(len(indices)), [feature_names[i] for i in indices])
-    plt.xlabel("Feature Importance")
-    plt.ylabel("Feature")
-    plt.title(f"Top {len(indices)} Feature Importances")
-    plt.tight_layout()
-
-    if save_path:
-        plt.savefig(save_path)
-        print(f"Feature importance plot saved to: {save_path}")
-
-    plt.close()
-
-
-def plot_roc_curves(model, X, y, class_names=None, save_path=None):
-    """
-    Plot ROC curves for each class in a multi-class problem.
-
-    Args:
-        model: Trained classifier with predict_proba method.
-        X (numpy.array): Feature matrix.
-        y (numpy.array): Target labels.
-        class_names (list, optional): List of class names.
-        save_path (str, optional): Path to save the plot.
-    """
-    if not hasattr(model, 'predict_proba'):
-        print("Model does not support predict_proba. Skipping ROC curve plot.")
-        return
-
-    # Get unique classes
-    unique_classes = np.unique(y)
-    n_classes = len(unique_classes)
-
-    # Use class names if provided
-    if class_names is None:
-        class_names = [f'Class {i}' for i in unique_classes]
-    elif len(class_names) < n_classes:
-        class_names = [f'Class {i}' for i in unique_classes]
-
-    # Binarize the labels for multi-class ROC
-    y_bin = label_binarize(y, classes=unique_classes)
-
-    # Predict probabilities
-    y_score = model.predict_proba(X)
-
-    # Compute ROC curve and ROC area for each class
-    fpr = {}
-    tpr = {}
-    roc_auc = {}
-
-    plt.figure(figsize=(12, 8))
-
-    for i in range(n_classes):
-        fpr[i], tpr[i], _ = roc_curve(y_bin[:, i], y_score[:, i])
-        roc_auc[i] = auc(fpr[i], tpr[i])
-
-        plt.plot(
-            fpr[i], tpr[i],
-            lw=2,
-            label=f'{class_names[i]} (AUC = {roc_auc[i]:.2f})'
-        )
-
-    # Plot the random guess line
-    plt.plot([0, 1], [0, 1], 'k--', lw=2)
-
-    # Set plot details
-    plt.xlim([0.0, 1.0])
-    plt.ylim([0.0, 1.05])
-    plt.xlabel('False Positive Rate')
-    plt.ylabel('True Positive Rate')
-    plt.title('Receiver Operating Characteristic (ROC) Curves')
-    plt.legend(loc="lower right")
-
-    # Save or show
-    if save_path:
-        plt.savefig(save_path)
-        print(f"ROC curve plot saved to: {save_path}")
-    else:
-        plt.show()
-
-    plt.close()
 
 def extract_features(feature_extractor, images, batch_size=32):
     """
@@ -1071,10 +912,6 @@ def train_and_evaluate_classical_model(train_features, train_labels,
 
     # Plot confusion matrix if result directory is provided
     if result_dir:
-        cm_plot_path = os.path.join(result_dir, "plots", "confusion_matrix.png")
-        plot_confusion_matrix(val_labels, val_pred, save_path=cm_plot_path)
-
-        # Plot feature importance if model supports it
         if hasattr(model, 'named_steps') and 'classifier' in model.named_steps:
             classifier = model.named_steps['classifier']
             if hasattr(classifier, 'feature_importances_'):
@@ -1087,8 +924,6 @@ def train_and_evaluate_classical_model(train_features, train_labels,
                 else:
                     # Otherwise, use feature indices
                     feature_names = [f"Feature {i + 1}" for i in range(len(classifier.feature_importances_))]
-
-                plot_feature_importance(classifier, feature_names, save_path=fi_plot_path)
 
     # Evaluation results
     evaluation_results = {
@@ -1437,10 +1272,6 @@ def run_model_training_by_fold(fold_features, result_dir, tune_hyperparams=True,
         print(f"\nOverall Iteration {iteration} Results:")
         print(classification_report(iteration_y_true, iteration_y_pred))
 
-        # Plot overall confusion matrix for this iteration
-        cm_plot_path = os.path.join(iter_dir, "plots", "overall_confusion_matrix.png")
-        plot_confusion_matrix(iteration_y_true, iteration_y_pred, class_names, cm_plot_path)
-
         # Store iteration results
         all_results['fold_results'].extend(fold_results)
         all_results['all_y_true'].extend(iteration_y_true)
@@ -1458,30 +1289,6 @@ def run_model_training_by_fold(fold_features, result_dir, tune_hyperparams=True,
             print(f"Precision: {avg_precision:.4f}")
             print(f"Recall: {avg_recall:.4f}")
             print(f"F1 Score: {avg_f1:.4f}")
-
-            # Save iteration results to a text file
-            with open(os.path.join(iter_dir, "iteration_results.txt"), "w") as f:
-                f.write(f"Classifier: {CLASSICAL_CLASSIFIER_MODEL}\n")
-                f.write(f"Use PCA: {NUM_PCA_COMPONENTS is not None}\n")
-                f.write(f"PCA Components: {NUM_PCA_COMPONENTS}\n")
-                f.write(f"Tune Hyperparameters: {tune_hyperparams}\n")
-                f.write(f"Number of Folds: {NUM_KFOLDS}\n")
-                f.write(f"Iteration: {iteration}\n")
-                f.write(f"Use Data Preprocessing: {USE_DATA_PREPROCESSING}\n")
-                if USE_DATA_PREPROCESSING:
-                    f.write(f"Preprocessing Method: {CLASSIFIER_APPROACH}\n\n")
-
-                f.write(f"Iteration {iteration} Average Metrics:\n")
-                f.write(f"Accuracy: {avg_accuracy:.4f}\n")
-                f.write(f"Precision: {avg_precision:.4f}\n")
-                f.write(f"Recall: {avg_recall:.4f}\n")
-                f.write(f"F1 Score: {avg_f1:.4f}\n\n")
-
-                f.write("Classification Report:\n")
-                f.write(classification_report(iteration_y_true, iteration_y_pred))
-
-                f.write("\nConfusion Matrix:\n")
-                f.write(str(confusion_matrix(iteration_y_true, iteration_y_pred)))
 
     # Calculate overall metrics across all iterations
     all_y_true = np.array(all_results['all_y_true'])
@@ -1770,11 +1577,6 @@ def run_kfold_cross_validation(all_features, all_labels,
                         'hyperparameters': hyperparameters
                     }
 
-                # Plot confusion matrix if result directory is provided
-                if fold_dir:
-                    cm_plot_path = os.path.join(fold_dir, "plots", "confusion_matrix.png")
-                    plot_confusion_matrix(val_labels, val_pred, save_path=cm_plot_path)
-
                 # Store fold results
                 fold_result = {
                     "iteration": iteration + 1,
@@ -1800,11 +1602,6 @@ def run_kfold_cross_validation(all_features, all_labels,
         print(f"\nOverall Iteration {iteration + 1} Results:")
         print(classification_report(iteration_y_true, iteration_y_pred))
 
-        # Plot overall confusion matrix for this iteration
-        if iter_dir:
-            cm_plot_path = os.path.join(iter_dir, "plots", "overall_confusion_matrix.png")
-            plot_confusion_matrix(iteration_y_true, iteration_y_pred, save_path=cm_plot_path)
-
         # Store iteration results
         all_iterations_results['fold_results'].extend(fold_results)
         all_iterations_results['all_y_true'].extend(iteration_y_true)
@@ -1822,31 +1619,6 @@ def run_kfold_cross_validation(all_features, all_labels,
         print(f"Recall: {avg_recall:.4f}")
         print(f"F1 Score: {avg_f1:.4f}")
 
-        # Save iteration results to a text file
-        if iter_dir:
-            with open(os.path.join(iter_dir, "iteration_results.txt"), "w") as f:
-                f.write(f"Classifier: {classifier_name}\n")
-                f.write(f"Use PCA: {use_pca}\n")
-                f.write(f"PCA Components: {n_components}\n")
-                f.write(f"Tune Hyperparameters: {tune_hyperparams}\n")
-                f.write(f"Number of Folds: {NUM_KFOLDS}\n")
-                f.write(f"Iteration: {iteration + 1}/{NUM_ITERATIONS}\n")
-                f.write(f"Use Data Preprocessing: {USE_DATA_PREPROCESSING}\n")
-                if USE_DATA_PREPROCESSING:
-                    f.write(f"Preprocessing Method: {CLASSIFIER_APPROACH}\n\n")
-
-                f.write(f"Iteration {iteration + 1} Average Metrics:\n")
-                f.write(f"Accuracy: {avg_accuracy:.4f}\n")
-                f.write(f"Precision: {avg_precision:.4f}\n")
-                f.write(f"Recall: {avg_recall:.4f}\n")
-                f.write(f"F1 Score: {avg_f1:.4f}\n\n")
-
-                f.write("Classification Report:\n")
-                f.write(classification_report(iteration_y_true, iteration_y_pred))
-
-                f.write("\nConfusion Matrix:\n")
-                f.write(str(confusion_matrix(iteration_y_true, iteration_y_pred)))
-
     # Calculate overall metrics across all iterations
     all_y_true = np.array(all_iterations_results['all_y_true'])
     all_y_pred = np.array(all_iterations_results['all_y_pred'])
@@ -1854,11 +1626,6 @@ def run_kfold_cross_validation(all_features, all_labels,
     # Print overall classification report
     print("\nOverall Results (All Iterations):")
     print(classification_report(all_y_true, all_y_pred))
-
-    # Plot overall confusion matrix
-    if result_dir:
-        cm_plot_path = os.path.join(result_dir, "plots", "overall_confusion_matrix.png")
-        plot_confusion_matrix(all_y_true, all_y_pred, save_path=cm_plot_path)
 
     # Calculate average metrics across all iterations
     iteration_metrics = []
@@ -2090,8 +1857,6 @@ def train_final_feature_extraction_model(all_features, all_labels, best_hyperpar
                 # Otherwise, use feature indices
                 feature_names = [f"Feature {i + 1}" for i in range(len(classifier.feature_importances_))]
 
-            plot_feature_importance(classifier, feature_names, save_path=fi_plot_path)
-
     return final_model, final_model_dir
 
 
@@ -2277,7 +2042,6 @@ def train_multiple_final_models(all_features, all_labels, best_hyperparameters,
                     # Otherwise, use feature indices
                     feature_names = [f"Feature {i + 1}" for i in range(len(classifier.feature_importances_))]
 
-                plot_feature_importance(classifier, feature_names, save_path=fi_plot_path)
 
         trained_models.append({
             'model': final_model,
@@ -2287,19 +2051,6 @@ def train_multiple_final_models(all_features, all_labels, best_hyperparameters,
         })
 
     print(f"\nAll {num_models} models trained successfully!")
-
-    # Save training summary
-    summary_path = os.path.join(final_models_dir, "training_summary.txt")
-    with open(summary_path, "w") as f:
-        f.write(f"Multiple Final Models Training Summary\n")
-        f.write(f"{'=' * 50}\n\n")
-        f.write(f"Number of models trained: {num_models}\n")
-        f.write(f"Feature Extractor: {CNN_MODEL}\n")
-        f.write(f"Classifier: {classifier_name}\n")
-        f.write(f"Use PCA: {use_pca}\n")
-        f.write(f"PCA Components: {n_components}\n")
-        f.write(f"Preprocessing approach: {best_hyperparameters['preprocessing_approach']}\n\n")
-        f.write(f"Models saved in: {final_models_dir}\n")
 
     return trained_models, final_models_dir
 
@@ -2391,10 +2142,6 @@ def evaluate_multiple_final_models(trained_models, test_features, test_labels,
             f.write(classification_report(test_labels, test_pred))
             f.write("\nConfusion Matrix:\n")
             f.write(str(confusion_matrix(test_labels, test_pred)))
-
-        # Plot confusion matrix
-        cm_plot_path = os.path.join(model_dir, "plots", "test_confusion_matrix.png")
-        plot_confusion_matrix(test_labels, test_pred, class_names, cm_plot_path)
 
     # Statistical Analysis
     print("\n" + "=" * 50)
@@ -2498,19 +2245,6 @@ def evaluate_multiple_final_models(trained_models, test_features, test_labels,
                 }
             }
 
-        # Save per-class statistics
-        class_stats_path = os.path.join(result_dir, "per_class_statistics.txt")
-        with open(class_stats_path, "w") as f:
-            f.write("Per-Class Performance Statistics\n")
-            f.write("=" * 50 + "\n\n")
-
-            for class_name, stats in class_stats.items():
-                f.write(f"{class_name}:\n")
-                f.write(f"  F1-Score: {stats['f1_score']['mean']:.4f} ± {stats['f1_score']['std']:.4f}\n")
-                f.write(f"  Precision: {stats['precision']['mean']:.4f} ± {stats['precision']['std']:.4f}\n")
-                f.write(f"  Recall: {stats['recall']['mean']:.4f} ± {stats['recall']['std']:.4f}\n")
-                f.write(f"  Range: [{stats['f1_score']['min']:.4f}, {stats['f1_score']['max']:.4f}]\n\n")
-
     # Plot box plots of metrics
     raw_metrics = {
         'accuracy': accuracies,
@@ -2518,7 +2252,6 @@ def evaluate_multiple_final_models(trained_models, test_features, test_labels,
         'precision': precisions,
         'recall': recalls
     }
-    plot_metric_distributions(stats_results, result_dir, raw_metrics)
 
     print("\nStatistical Summary:")
     print(f"Accuracy: {stats_results['accuracy']['mean']:.4f} ± {stats_results['accuracy']['std']:.4f}")
@@ -2735,11 +2468,6 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
                 print("\nTest Set Classification Report (Best CV Model):")
                 print(classification_report(test_labels_out, test_pred))
 
-                # Plot confusion matrix
-                cm_plot_path = os.path.join(dirs['classifiers'][CLASSICAL_CLASSIFIER_MODEL]['base'],
-                                            "best_model_test_confusion_matrix.png")
-                plot_confusion_matrix(test_labels_out, test_pred, class_names, cm_plot_path)
-
                 results = {
                     'k_fold': cv_results['fold_results'],
                     'best_model_info': cv_results['best_model_info'],
@@ -2911,11 +2639,6 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
                 # Adiciona aos resultados
                 test_report["macro_roc_auc"] = macro_roc_auc
                 test_report["class_roc_auc"] = roc_auc
-
-                # Plota curvas ROC
-                roc_plot_path = os.path.join(dirs['classifiers'][CLASSICAL_CLASSIFIER_MODEL]['plots'],
-                                             "roc_curves.png")
-                plot_roc_curves(model, test_features, test_labels_out, class_names, roc_plot_path)
             else:
                 # Classificação binária
                 y_score = model.predict_proba(test_features)[:, 1]
@@ -2923,11 +2646,6 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
                 print(f"ROC AUC: {roc_auc:.4f}")
                 # Adiciona aos resultados
                 test_report["roc_auc"] = roc_auc
-
-        # Plota matriz de confusão
-        cm_plot_path = os.path.join(dirs['classifiers'][CLASSICAL_CLASSIFIER_MODEL]['plots'],
-                                    "test_confusion_matrix.png")
-        plot_confusion_matrix(test_labels_out, test_pred, class_names, cm_plot_path)
 
         # Salva resultados
         with open(os.path.join(dirs['classifiers'][CLASSICAL_CLASSIFIER_MODEL]['base'],

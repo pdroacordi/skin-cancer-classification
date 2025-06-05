@@ -10,7 +10,4 @@ imbalanced-learn
 seaborn
 scikit-image
 tqdm
-pywavelets
-segmentation-models==1.0.1
-tensorflow-addons
-click
+scikit-posthocs>=0.7

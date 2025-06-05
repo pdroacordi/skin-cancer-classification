@@ -45,141 +45,6 @@ def setup_environment():
     np.random.seed(42)
     tf.random.set_seed(42)
 
-
-def setup_segmentation_data(training_input_dir, validation_input_dir,
-                            training_ground_truth_dir, output_dir):
-    """
-    Setup segmentation training data using ISIC-2018 Task 1 dataset structure.
-
-    Args:
-        training_input_dir (str): Directory containing training images.
-        validation_input_dir (str): Directory containing validation images.
-        training_ground_truth_dir (str): Directory containing ground truth masks.
-        output_dir (str): Output directory for processed segmentation data.
-    """
-    import cv2
-    import numpy as np
-    import os
-    import glob
-
-    print("Setting up segmentation training data from ISIC-2018 Task 1 dataset...")
-
-    # Create directory structure
-    train_dir = os.path.join(output_dir, 'train')
-    val_dir = os.path.join(output_dir, 'val')
-
-    train_img_dir = os.path.join(train_dir, 'images')
-    train_mask_dir = os.path.join(train_dir, 'masks')
-    val_img_dir = os.path.join(val_dir, 'images')
-    val_mask_dir = os.path.join(val_dir, 'masks')
-
-    os.makedirs(train_img_dir, exist_ok=True)
-    os.makedirs(train_mask_dir, exist_ok=True)
-    os.makedirs(val_img_dir, exist_ok=True)
-    os.makedirs(val_mask_dir, exist_ok=True)
-
-    # Find all training image files
-    training_images = sorted(glob.glob(os.path.join(training_input_dir, '*.jpg')))
-    if not training_images:
-        training_images = sorted(glob.glob(os.path.join(training_input_dir, '*.png')))
-
-    # Extract image IDs from filenames
-    training_ids = [os.path.splitext(os.path.basename(f))[0] for f in training_images]
-
-    # Find corresponding masks for training images
-    training_masks = {}
-    for img_id in training_ids:
-        # Check different possible mask naming patterns
-        mask_patterns = [
-            os.path.join(training_ground_truth_dir, f"{img_id}_segmentation.png"),
-            os.path.join(training_ground_truth_dir, f"{img_id}_mask.png"),
-            os.path.join(training_ground_truth_dir, f"{img_id}.png")
-        ]
-
-        for pattern in mask_patterns:
-            if os.path.exists(pattern):
-                training_masks[img_id] = pattern
-                break
-
-    # Find all validation image files
-    validation_images = sorted(glob.glob(os.path.join(validation_input_dir, '*.jpg')))
-    if not validation_images:
-        validation_images = sorted(glob.glob(os.path.join(validation_input_dir, '*.png')))
-
-    # Extract validation image IDs
-    validation_ids = [os.path.splitext(os.path.basename(f))[0] for f in validation_images]
-
-    # Check if we found images and masks
-    valid_training_ids = [img_id for img_id in training_ids if img_id in training_masks]
-
-    if not valid_training_ids:
-        raise ValueError(f"No matching mask files found in {training_ground_truth_dir}")
-
-    print(f"Found {len(valid_training_ids)} valid training image-mask pairs")
-    print(f"Found {len(validation_ids)} validation images")
-
-    # Process training images
-    print("Processing training images...")
-    for idx, img_id in enumerate(valid_training_ids):
-        # Get image and mask paths
-        img_path = next(path for path in training_images if img_id in path)
-        mask_path = training_masks[img_id]
-
-        # Load and resize image
-        img = cv2.imread(img_path)
-        if img is None:
-            print(f"Error loading image: {img_path}")
-            continue
-
-        img = cv2.resize(img, (299, 299))
-
-        # Load and resize mask
-        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
-        if mask is None:
-            print(f"Error loading mask: {mask_path}")
-            continue
-
-        mask = cv2.resize(mask, (299, 299), interpolation=cv2.INTER_NEAREST)
-
-        # Ensure mask is binary (0 and 255)
-        _, binary_mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
-
-        # Save processed image and mask
-        output_img_path = os.path.join(train_img_dir, f"{img_id}.jpg")
-        output_mask_path = os.path.join(train_mask_dir, f"{img_id}.png")
-
-        cv2.imwrite(output_img_path, img)
-        cv2.imwrite(output_mask_path, binary_mask)
-
-        # Print progress periodically
-        if (idx + 1) % 100 == 0 or (idx + 1) == len(valid_training_ids):
-            print(f"Processed {idx + 1}/{len(valid_training_ids)} training images")
-
-    # Process validation images (note: we don't need masks for validation as they'll be generated)
-    print("Processing validation images...")
-    for idx, img_id in enumerate(validation_ids):
-        # Get image path
-        img_path = next(path for path in validation_images if img_id in path)
-
-        # Load and resize image
-        img = cv2.imread(img_path)
-        if img is None:
-            print(f"Error loading image: {img_path}")
-            continue
-
-        img = cv2.resize(img, (299, 299))
-
-        # Save processed image
-        output_img_path = os.path.join(val_img_dir, f"{img_id}.jpg")
-        cv2.imwrite(output_img_path, img)
-
-        # Print progress periodically
-        if (idx + 1) % 100 == 0 or (idx + 1) == len(validation_ids):
-            print(f"Processed {idx + 1}/{len(validation_ids)} validation images")
-
-    print(f"Segmentation data setup complete. Data saved to {output_dir}")
-    return train_dir, val_dir
-
 def create_dataset_splits(metadata_path, image_dir_1, image_dir_2, output_dir='./res'):
     """
     Create train/val/test splits from the metadata and save them to files.
@@ -336,24 +201,11 @@ def main():
     parser.add_argument("--test-files", type=str, default=TEST_FILES_PATH,
                         help="Path to test files list")
 
-    # Train UNet segmentator
-    parser.add_argument("--setup-segmentation", action="store_true",
-                        help="Prepare data for segmentation model training. Requires --isic-training-input, --isic-validation-input, and --isic-training-ground-truth.")
-
     parser.add_argument("--train-segmentation", action="store_true",
                         help="Train the segmentation model for lesion segmentation.")
 
-    parser.add_argument("--segmentation-dir", type=str, default="../data/segmentation_data",
-                        help="Directory to store prepared segmentation data.")
-
-    parser.add_argument("--isic-training-input", type=str,
-                        help="Path to the ISIC training input images.")
-
-    parser.add_argument("--isic-validation-input", type=str,
-                        help="Path to the ISIC validation input images.")
-
-    parser.add_argument("--isic-training-ground-truth", type=str,
-                        help="Path to the ISIC training ground truth masks.")
+    parser.add_argument("--skip-train", action="store_true",
+                        help="Skip training.")
 
     args = parser.parse_args()
 
@@ -370,47 +222,6 @@ def main():
             image_dir_1=args.images_dir1,
             image_dir_2=args.images_dir2
         )
-
-    # Setup segmentation data if requested
-    if args.setup_segmentation:
-        if not (args.isic_training_input and args.isic_validation_input and args.isic_training_ground_truth):
-            parser.error(
-                "--setup-segmentation requires --isic-training-input, --isic-validation-input, and --isic-training-ground-truth")
-
-        train_dir, val_dir = setup_segmentation_data(
-            training_input_dir=args.isic_training_input,
-            validation_input_dir=args.isic_validation_input,
-            training_ground_truth_dir=args.isic_training_ground_truth,
-            output_dir=args.segmentation_dir
-        )
-    else:
-        # Default paths if setup not requested
-        train_dir = os.path.join(args.segmentation_dir, 'train')
-        val_dir = os.path.join(args.segmentation_dir, 'val')
-
-    # Train segmentation model if requested
-    if args.train_segmentation:
-        from utils.graphic_preprocessing import train_segmentation_model
-
-        print("\n" + "=" * 50)
-        print("Training Segmentation Model for Lesion Boundary Detection")
-        print("=" * 50)
-
-        # Create directories for results if they don't exist
-        unet_dir = "./results/unet_segmentation_model"
-        os.makedirs(os.path.join(unet_dir, "models"), exist_ok=True)
-        os.makedirs(os.path.join(unet_dir, "results"), exist_ok=True)
-
-        # Train the segmentation model
-        train_segmentation_model(
-            train_data_path=train_dir,
-            val_data_path=val_dir,
-            epochs=100,
-            batch_size=8,
-            save_path=unet_dir
-        )
-
-        print("\nSegmentation model training completed")
 
     # Get class names
     class_names_path = os.path.join(os.path.dirname(args.train_files), "class_names.txt")
@@ -437,12 +248,12 @@ def main():
             val_files_path=args.val_files,
             test_files_path=args.test_files,
             run_kfold=args.cv,
-            class_names=class_names
+            class_names=class_names,
+            skip_training=args.skip_train
         )
 
         results["cnn"] = cnn_results
 
-        # Clear memory
         gc.collect()
 
     if args.pipeline in ["feature-extraction", "both"]:

@@ -35,8 +35,8 @@ NUM_FINAL_MODELS = 10            # Number of final models to train
 NUM_PCA_COMPONENTS = None        # PCA components for dimensionality reduction (None = no PCA)
 
 # Model selection
-CNN_MODEL                  = 'ResNet'         # Options: 'VGG19', 'Inception', 'ResNet', 'Xception'
-CLASSICAL_CLASSIFIER_MODEL = 'RandomForest'  # Options: 'RandomForest', 'XGBoost', 'AdaBoost', 'ExtraTrees', 'SVM'
+CNN_MODEL                  = 'Inception'         # Options: 'VGG19', 'Inception', 'ResNet', 'Xception'
+CLASSICAL_CLASSIFIER_MODEL = 'ExtraTrees'  # Options: 'RandomForest', 'XGBoost', 'AdaBoost', 'ExtraTrees', 'SVM'
 CLASSIFIER_APPROACH        = "class_weight"  # Options: "class_weight", "smote", "undersampling", "hybrid"
 
 # Paths
