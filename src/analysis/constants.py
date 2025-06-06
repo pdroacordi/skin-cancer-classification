@@ -7,6 +7,17 @@ from typing import List, Dict
 CNN_MODELS: List[str] = ["VGG19", "Inception", "ResNet", "Xception"]
 ML_CLASSIFIERS: List[str] = ["RandomForest", "XGBoost", "AdaBoost", "ExtraTrees"]
 
+ALG_NICE = dict(
+    adaboost="AdaBoost",
+    extratrees="ExtraTrees",
+    randomforest="RandomForest",
+    xgboost="XGBoost",
+)
+NET_NICE = dict(
+    Resnet="ResNet",
+    Vgg19="VGG19",
+)
+
 # Colours --------------------------------------------------------------------
 COLOR_PALETTE: Dict[str, str] = {
     # meta

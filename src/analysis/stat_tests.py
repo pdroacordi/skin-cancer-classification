@@ -36,9 +36,12 @@ MIN_VARIANCE_THRESHOLD = 1e-8
 
 def _build_model_id(row: pd.Series) -> str:
     """Constrói ID único do modelo: net_kind_algorithm"""
-    alg = row.get("algorithm", "none")
-    if pd.isna(alg) or alg == "" or alg is None:
-        alg = "none"
+    alg = row.get("algorithm", "none") or "none"
+
+    if row['kind'] == 'feature_extractor':
+        aug_flag = 'aug' if bool(row.get("feature_augmentation", False)) else 'noaug'
+        return f"{row['net']}_{row['kind']}_{alg}_{aug_flag}"
+
     return f"{row['net']}_{row['kind']}_{alg}"
 
 
@@ -54,7 +57,10 @@ def _prepare_data(df: pd.DataFrame) -> Dict[str, np.ndarray]:
     Returns:
         Dict[model_id, np.array] com valores de F1-score por execução
     """
-    df = df.copy()
+    # df = df[
+    #     (df['kind'] != 'feature_extractor') |
+    #     ((df['kind'] == 'feature_extractor') & (df['feature_augmentation'] == True))
+    #     ].copy()
     df['model_id'] = df.apply(_build_model_id, axis=1)
 
     # Usar diretamente a coluna macro_avg_f1 do arquivo geral

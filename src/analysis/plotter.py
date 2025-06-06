@@ -14,7 +14,9 @@ from .constants import (
     DEFAULT_DPI,
     OUTPUT_DIR,
     CLASSES,
-    HEATMAP_CMAP
+    HEATMAP_CMAP,
+    ALG_NICE,
+    NET_NICE
 )
 
 sns.set_style("whitegrid")
@@ -161,77 +163,113 @@ class Plotter:
         self.per_class_stats.columns = [f'{col[0]}_{col[1]}' for col in self.per_class_stats.columns]
         self.per_class_stats = self.per_class_stats.reset_index()
 
-    def _process_stat_tests(self):
-        """Gera quadro de vitórias/derrotas a partir do CSV, robusto a formatos novos."""
+    def _process_stat_tests(self, top_n_if_none: int = 50):
+        """
+        Cria quadro de vitórias/derrotas a partir do CSV.
+        • Se houver linhas `significant == True` usa só elas (comportamento antigo).
+        • Se NÃO houver, usa os `top_n_if_none` menores p-values corrigidos.
+        """
         if self.stat_tests_df.empty:
             self.stat_summary = pd.DataFrame()
             return
 
+        # ── 1) Escolhe subconjunto a usar ────────────────────────────────────────
         sig = self.stat_tests_df[self.stat_tests_df["significant"]]
-        if sig.empty:
+
+        use_df = sig if not sig.empty else (
+            self.stat_tests_df.sort_values("p").head(top_n_if_none)
+            .assign(significant=False)  # marca como falso, só p/ compatibilidade
+        )
+
+        if use_df.empty:
             self.stat_summary = pd.DataFrame()
             return
 
-        # mapeia dinamicamente métrica ➜ coluna de desempenho
+        # ── 2) Mapeia métrica ➜ coluna de média -- (mantém seu dicionário) ───────
         metric_to_col = {
-            "precision": "macro_avg_precision",
-            "recall": "macro_avg_recall",
-            "f1_score": "macro_avg_f1",
-            "f1": "macro_avg_f1",
-            "accuracy": "accuracy",
+            "precision":      "macro_avg_precision",
+            "recall":         "macro_avg_recall",
+            "f1_score":       "macro_avg_f1",
+            "f1":             "macro_avg_f1",
+            "macro_avg_f1":   "macro_avg_f1",
+            "macro_f1":       "macro_avg_f1",
+            "accuracy":       "accuracy",
         }
 
         wins = []
-        for _, row in sig.iterrows():
+        for _, row in use_df.iterrows():
             metric_key = str(row["metric"]).lower()
             metric_col = metric_to_col.get(metric_key)
-            if metric_col is None or f"{metric_col}_mean" not in self.general_stats.columns:
-                continue  # métrica que não conhecemos
+            if metric_col is None:
+                continue
 
+            col_mean = f"{metric_col}_mean" if f"{metric_col}_mean" in self.general_stats.columns else metric_col
+
+            # resolve IDs (usa seu helper _convert_model_name + _resolve se já tiver)
             a_id = self._convert_model_name(row["model_a"])
             b_id = self._convert_model_name(row["model_b"])
-
             if a_id not in self.general_stats.index or b_id not in self.general_stats.index:
-                continue  # ignora se algum modelo não existe nas médias
+                continue
 
-            score_a = self.general_stats.loc[a_id, f"{metric_col}_mean"]
-            score_b = self.general_stats.loc[b_id, f"{metric_col}_mean"]
+            score_a = self.general_stats.loc[a_id, col_mean]
+            score_b = self.general_stats.loc[b_id, col_mean]
 
             winner, loser = (a_id, b_id) if score_a > score_b else (b_id, a_id)
-            wins.append(
-                dict(
-                    metric=metric_key,
-                    winner=winner,
-                    loser=loser,
-                    p_value=row["p"],
-                    winner_score=max(score_a, score_b),
-                    loser_score=min(score_a, score_b),
-                )
-            )
+            wins.append(dict(
+                metric=metric_key,
+                winner=winner,
+                loser=loser,
+                p_value=row["p"],
+                significant=row["significant"],
+                winner_score=max(score_a, score_b),
+                loser_score=min(score_a, score_b),
+            ))
 
         self.wins_df = pd.DataFrame(wins)
         if self.wins_df.empty:
             self.stat_summary = pd.DataFrame()
             return
 
-        # agrega vitórias / derrotas
+        # ── 3) Agrega vitórias/derrotas como antes ───────────────────────────────
         w = self.wins_df.groupby(["winner", "metric"]).size().reset_index(name="wins")
         l = self.wins_df.groupby(["loser", "metric"]).size().reset_index(name="losses")
         w.rename(columns={"winner": "model"}, inplace=True)
         l.rename(columns={"loser": "model"}, inplace=True)
 
-        # tabela final
-        models = set(w["model"]).union(l["model"])
+        models  = set(w["model"]).union(l["model"])
         metrics = self.wins_df["metric"].unique()
+
         summary = []
         for m in models:
             for met in metrics:
-                wins_ = w.query("model == @m and metric == @met")["wins"].sum()
+                wins_   = w.query("model == @m and metric == @met")["wins"].sum()
                 losses_ = l.query("model == @m and metric == @met")["losses"].sum()
-                summary.append(
-                    dict(model=m, metric=met, wins=wins_, losses=losses_, net_wins=wins_ - losses_)
-                )
+                summary.append(dict(
+                    model=m, metric=met,
+                    wins=wins_, losses=losses_, net_wins=wins_ - losses_
+                ))
         self.stat_summary = pd.DataFrame(summary)
+
+    def _pretty(self, model_id: str) -> str:
+        """
+        Converte IDs canônicos em rótulos legíveis.
+            Resnet_classifier_none                → ResNet
+            Resnet_feature_extractor_xgboost_aug  → ResNet + XGBoost (Aug)
+        """
+        parts = model_id.split("_")
+
+        net_raw = parts[0]
+        net = NET_NICE.get(net_raw, net_raw)  # Resnet→ResNet, Vgg19→VGG19 …
+
+        # CNN
+        if "_classifier" in model_id:
+            return net
+
+        # Ensembles
+        alg = parts[3] if len(parts) >= 4 else "?"
+        alg_disp = ALG_NICE.get(alg, alg.title())
+        aug_flag = "(Aug)" if model_id.endswith("_aug") else "(NoAug)"
+        return f"{net} + {alg_disp} {aug_flag}"
 
     @staticmethod
     def _convert_model_name(model_name: str) -> str:
@@ -261,16 +299,23 @@ class Plotter:
 
     @staticmethod
     def _create_model_id(row) -> str:
-        """Create a unique model identifier from row data."""
+        """
+        Cria ID único do modelo.
+
+        • CNN pura .................: <net>_classifier
+        • Ensemble sem augmentation : <net>_feature_extractor_<alg>_noaug
+        • Ensemble com augmentation : <net>_feature_extractor_<alg>_aug
+        """
         net = str(row['net']).strip()
         kind = str(row['kind']).strip()
-        algorithm = str(row.get('algorithm', '')).strip()
+        algorithm = str(row.get('algorithm', '')).strip() or 'none'
 
-        # Handle null/nan values properly
-        if algorithm and algorithm.lower() not in ['nan', '', 'null']:
-            return f"{net}_{kind}_{algorithm}"
-        else:
-            return f"{net}_{kind}_none"
+        if kind == 'feature_extractor':
+            aug_flag = 'aug' if bool(row.get('feature_augmentation', False)) else 'noaug'
+            return f"{net}_{kind}_{algorithm}_{aug_flag}"
+
+        # CNN classifier
+        return f"{net}_{kind}_{algorithm}"
 
     def _extract_model_metadata(self):
         """Extract model metadata for easier plotting."""
@@ -298,13 +343,14 @@ class Plotter:
         self._fig_02_best_per_ensemble()
         self._fig_03_f1_per_class_heatmap()
         self._fig_04_cnn_metric_bars()
+        self._fig_05_alg_aug_vs_noaug()
 
-        if hasattr(self, 'stat_summary') and not self.stat_summary.empty:
+        if not self.stat_summary.empty:
             print("Generating statistical analysis plots...")
-            self._fig_05_statistical_wins_bars()
-            self._generate_latex_table()
+            self._fig_06_pvalue_hist()
+            self._fig_07_pvalue_heatmap()
 
-        print("All enhanced plots generated successfully!")
+    print("All enhanced plots generated successfully!")
 
     def _get_metric_stats(self, model_id: str, metric: str) -> Tuple[float, float]:
         """Get mean and std for a metric of a specific model."""
@@ -340,7 +386,7 @@ class Plotter:
             means = []
             stds = []
             for net in networks:
-                model_id = f"{net}_feature_extractor_{alg}"  # Match the actual data structure
+                model_id = f"{net}_feature_extractor_{alg}_aug"
                 mean, std = self._get_metric_stats(model_id, 'macro_avg_f1')
                 means.append(mean)
                 stds.append(std)
@@ -418,7 +464,7 @@ class Plotter:
             best_std = 0
 
             for net in networks:
-                model_id = f"{net}_feature_extractor_{alg}"
+                model_id = f"{net}_feature_extractor_{alg}_aug"
                 mean, std = self._get_metric_stats(model_id, 'macro_avg_f1')
                 if mean > best_score:
                     best_score = mean
@@ -537,142 +583,109 @@ class Plotter:
         ax.grid(True, alpha=0.3)
         self._save(fig, "04_cnn_metrics_comparison_enhanced.png")
 
-    def _fig_05_statistical_wins_bars(self):
-        """Bar chart showing statistical wins per model."""
-        if not hasattr(self, 'stat_summary') or self.stat_summary.empty:
-            print("No statistical data available for wins chart.")
+    def _fig_05_alg_aug_vs_noaug(self):
+        """
+        4 sub-plots (Inception, ResNet, VGG19, Xception) – comparação NoAug × Aug
+        para cada algoritmo (AdaBoost, ExtraTrees, RandomForest, XGBoost),
+        com rótulos “valor ± std”.
+        """
+        nets = ["Inception", "Resnet", "Vgg19", "Xception"]
+        algs = ["adaboost", "extratrees", "randomforest", "xgboost"]
+        names = dict(adaboost="AdaBoost", extratrees="ExtraTrees",
+                     randomforest="RandomForest", xgboost="XGBoost")
+
+        def _val(mid):  # -> (mean, std)
+            return self._get_metric_stats(mid, "macro_avg_f1")
+
+        fig, axes = plt.subplots(2, 2, figsize=(11, 8), sharey=True)
+        axes = axes.flatten()
+        w = 0.35
+        col_no, col_au = "#fdae61", "#d7191c"
+
+        for idx, net in enumerate(nets):
+            ax = axes[idx]
+            x = np.arange(len(algs))
+
+            means_no, std_no, means_au, std_au = [], [], [], []
+            for alg in algs:
+                m_no, s_no = _val(f"{net}_feature_extractor_{alg}_noaug")
+                m_au, s_au = _val(f"{net}_feature_extractor_{alg}_aug")
+                means_no.append(m_no);
+                std_no.append(s_no)
+                means_au.append(m_au);
+                std_au.append(s_au)
+
+            bars_no = ax.bar(x - w / 2, means_no, w, yerr=std_no, capsize=3,
+                             color=col_no, edgecolor="black", label="NoAug")
+            bars_au = ax.bar(x + w / 2, means_au, w, yerr=std_au, capsize=3,
+                             color=col_au, edgecolor="black", label="Aug")
+
+            # rótulos
+            for bar, m, s in zip(bars_no, means_no, std_no):
+                ax.text(bar.get_x() + bar.get_width() / 2, m + .005,
+                        f"{m:.2f}±{s:.2f}", ha="center", va="bottom", fontsize=7)
+            for bar, m, s in zip(bars_au, means_au, std_au):
+                ax.text(bar.get_x() + bar.get_width() / 2, m + .005,
+                        f"{m:.2f}±{s:.2f}", ha="center", va="bottom", fontsize=7)
+
+            ax.set_xticks(x)
+            ax.set_xticklabels([names[a] for a in algs], rotation=15)
+            ax.set_title(net.replace("Resnet", "ResNet").replace("Vgg19", "VGG19"))
+            ax.grid(axis="y", alpha=.25)
+            if idx == 0:
+                ax.legend(fontsize=8)
+            if idx == 2:
+                ax.set_ylabel("F1-Score")
+
+        fig.suptitle("Ensembles – Augmentation × NoAug (por Rede)", fontsize=14)
+        fig.tight_layout(rect=[0, .03, 1, .95])
+        self._save(fig, "05_alg_aug_vs_noaug.png")
+
+    def _fig_06_pvalue_hist(self, bins: int = 30):
+        """Histograma dos p-values corrigidos (todas as comparações)."""
+        if self.stat_tests_df.empty:
             return
+        pvals = self.stat_tests_df["p"].values
+        fig, ax = plt.subplots(figsize=(6, 4))
+        counts, edges, _ = ax.hist(pvals, bins=bins, edgecolor="black", alpha=0.7)
+        for c, e in zip(counts, edges[:-1]):
+            if c > 0:
+                ax.text(e + (edges[1] - edges[0]) / 2, c + .5, int(c),
+                        ha="center", va="bottom", fontsize=8)
+        ax.set_xlabel("p (corrigido, Holm)")
+        ax.set_ylabel("Frequência")
+        ax.set_title("Distribuição dos p-values (Holm-Bonferroni)")
+        ax.axvline(0.05, color="red", ls="--", label="α = 0.05")
+        ax.legend()
+        self._save(fig, "06_pvalue_hist.png")
 
-        # Calculate total wins per model across all metrics
-        total_wins = self.stat_summary.groupby('model')['wins'].sum().sort_values(ascending=False)
-        total_losses = self.stat_summary.groupby('model')['losses'].sum()
-        total_net_wins = self.stat_summary.groupby('model')['net_wins'].sum().sort_values(ascending=False)
-
-        # Create figure with subplots
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
-
-        # Plot 1: Total wins
-        models = total_wins.index
-        wins = total_wins.values
-        losses_vals = [total_losses.get(model, 0) for model in models]
-
-        x_pos = np.arange(len(models))
-        width = 0.35
-
-        bars1 = ax1.bar(x_pos - width / 2, wins, width, label='Vitórias', color='green', alpha=0.7)
-        bars2 = ax1.bar(x_pos + width / 2, losses_vals, width, label='Derrotas', color='red', alpha=0.7)
-
-        ax1.set_xlabel('Modelo')
-        ax1.set_ylabel('Número de Comparações Significativas')
-        ax1.set_title('Vitórias vs Derrotas Estatisticamente Significativas')
-        ax1.set_xticks(x_pos)
-
-        # Format model names for display
-        display_names = [self._format_model_name_for_display(model) for model in models]
-        ax1.set_xticklabels(display_names, rotation=45, ha='right')
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
-
-        # Add value labels
-        for bars in [bars1, bars2]:
-            for bar in bars:
-                height = bar.get_height()
-                if height > 0:
-                    ax1.annotate(f'{int(height)}',
-                                 xy=(bar.get_x() + bar.get_width() / 2, height),
-                                 xytext=(0, 3),
-                                 textcoords="offset points",
-                                 ha='center', va='bottom', fontsize=9)
-
-        # Plot 2: Net wins (wins - losses)
-        models_net = total_net_wins.index
-        net_wins = total_net_wins.values
-        colors = ['green' if x >= 0 else 'red' for x in net_wins]
-
-        bars3 = ax2.bar(range(len(models_net)), net_wins, color=colors, alpha=0.7)
-        ax2.set_xlabel('Modelo')
-        ax2.set_ylabel('Vitórias Líquidas (Vitórias - Derrotas)')
-        ax2.set_title('Ranking por Vitórias Líquidas')
-        ax2.set_xticks(range(len(models_net)))
-
-        display_names_net = [self._format_model_name_for_display(model) for model in models_net]
-        ax2.set_xticklabels(display_names_net, rotation=45, ha='right')
-        ax2.grid(True, alpha=0.3)
-        ax2.axhline(y=0, color='black', linestyle='-', alpha=0.5)
-
-        # Add value labels
-        for bar in bars3:
-            height = bar.get_height()
-            ax2.annotate(f'{int(height)}',
-                         xy=(bar.get_x() + bar.get_width() / 2, height),
-                         xytext=(0, 3 if height >= 0 else -15),
-                         textcoords="offset points",
-                         ha='center', va='bottom' if height >= 0 else 'top', fontsize=9)
-
-        plt.tight_layout()
-        self._save(fig, "05_statistical_wins_bars.png")
-
-    def _generate_latex_table(self):
-        """Generate LaTeX table in SBC format for top performing models."""
-        if not hasattr(self, 'stat_summary') or self.stat_summary.empty:
-            print("No statistical data available for LaTeX table.")
+    def _fig_07_pvalue_heatmap(self, max_models: int = 20):
+        """
+        Heatmap (p corrigido) para os 'max_models' modelos mais frequentes.
+        Mostra só metade superior da matriz para evitar duplicidade.
+        """
+        if self.stat_tests_df.empty:
             return
+        # pega modelos que aparecem mais vezes (garante matrix quadrada sólida)
+        counts = pd.concat([self.stat_tests_df["model_a"],
+                            self.stat_tests_df["model_b"]]).value_counts()
+        models = counts.head(max_models).index.tolist()
+        # constrói matriz
+        models_pretty = [self._pretty(m) for m in models]
+        mat = pd.DataFrame(1.0, index=models_pretty, columns=models_pretty)
 
-        # Calculate ranking based on total net wins
-        model_ranking = self.stat_summary.groupby('model').agg({
-            'wins': 'sum',
-            'losses': 'sum',
-            'net_wins': 'sum'
-        }).sort_values('net_wins', ascending=False)
+        for _, row in self.stat_tests_df.iterrows():
+            a_raw, b_raw, p = row["model_a"], row["model_b"], row["p"]
+            if a_raw in models and b_raw in models:
+                a, b = self._pretty(a_raw), self._pretty(b_raw)
+                mat.loc[a, b] = mat.loc[b, a] = p
 
-        top_models = model_ranking.head(10)
-
-        latex_content = [
-            "\\begin{table}[htb]",
-            "\\centering",
-            "\\caption{Ranking dos Modelos por Desempenho Estatístico}",
-            "\\label{tab:statistical_ranking}",
-            "\\begin{tabular}{|l|c|c|c|c|c|}",
-            "\\hline",
-            "\\textbf{Modelo} & \\textbf{Vitórias} & \\textbf{Derrotas} & \\textbf{Saldo} & \\textbf{F1-Score} & \\textbf{Acurácia} \\\\",
-            "\\hline"
-        ]
-
-        for idx, (model, stats) in enumerate(top_models.iterrows()):
-            # Format model name
-            display_name = self._format_model_name_for_display(model)
-
-            # Get performance metrics
-            if model in self.general_stats.index:
-                f1_mean = self.general_stats.loc[model, 'macro_avg_f1_mean']
-                f1_std = self.general_stats.loc[model, 'macro_avg_f1_std']
-                acc_mean = self.general_stats.loc[model, 'accuracy_mean']
-                acc_std = self.general_stats.loc[model, 'accuracy_std']
-
-                f1_str = f"{f1_mean:.3f}±{f1_std:.3f}"
-                acc_str = f"{acc_mean:.3f}±{acc_std:.3f}"
-            else:
-                f1_str = "N/A"
-                acc_str = "N/A"
-
-            latex_content.append(
-                f"{display_name} & {int(stats['wins'])} & {int(stats['losses'])} & "
-                f"{int(stats['net_wins'])} & {f1_str} & {acc_str} \\\\"
-            )
-
-            if idx < len(top_models) - 1:
-                latex_content.append("\\hline")
-
-        latex_content.append("\\hline")
-        latex_content.append("\\end{tabular}")
-        latex_content.append("\\end{table}")
-
-        # Save to file
-        latex_file = self.out_dir / "statistical_ranking_table.tex"
-        with open(latex_file, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(latex_content))
-
-        print(f"✅ LaTeX table saved: {latex_file}")
+        fig, ax = plt.subplots(figsize=(9, 7))
+        sns.heatmap(mat, cmap="viridis_r", vmax=.25, vmin=0,
+                    square=True, linewidths=.4, cbar_kws={"label": "p"})
+        plt.xticks(rotation=40, ha="right")
+        ax.set_title("Heatmap de p-values corrigidos")
+        self._save(fig, "07_pvalue_heatmap.png")
 
     @staticmethod
     def _format_model_name_for_display(model_name: str) -> str:
