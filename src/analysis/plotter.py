@@ -185,7 +185,7 @@ class Plotter:
             self.stat_summary = pd.DataFrame()
             return
 
-        # ── 2) Mapeia métrica ➜ coluna de média -- (mantém seu dicionário) ───────
+        # ── 2) Mapeia métrica ➜ coluna de média ───────
         metric_to_col = {
             "precision":      "macro_avg_precision",
             "recall":         "macro_avg_recall",
@@ -250,7 +250,8 @@ class Plotter:
                 ))
         self.stat_summary = pd.DataFrame(summary)
 
-    def _pretty(self, model_id: str) -> str:
+    @staticmethod
+    def _pretty(model_id: str, flag=False) -> str:
         """
         Converte IDs canônicos em rótulos legíveis.
             Resnet_classifier_none                → ResNet
@@ -269,7 +270,7 @@ class Plotter:
         alg = parts[3] if len(parts) >= 4 else "?"
         alg_disp = ALG_NICE.get(alg, alg.title())
         aug_flag = "(Aug)" if model_id.endswith("_aug") else "(NoAug)"
-        return f"{net} + {alg_disp} {aug_flag}"
+        return f"{net} + {alg_disp} {aug_flag if flag else ''}"
 
     @staticmethod
     def _convert_model_name(model_name: str) -> str:
@@ -308,14 +309,14 @@ class Plotter:
         """
         net = str(row['net']).strip()
         kind = str(row['kind']).strip()
-        algorithm = str(row.get('algorithm', '')).strip() or 'none'
+        algorithm = str(row.get('algorithm', '')).strip()
 
         if kind == 'feature_extractor':
             aug_flag = 'aug' if bool(row.get('feature_augmentation', False)) else 'noaug'
             return f"{net}_{kind}_{algorithm}_{aug_flag}"
 
         # CNN classifier
-        return f"{net}_{kind}_{algorithm}"
+        return f"{net}_{kind}_none"
 
     def _extract_model_metadata(self):
         """Extract model metadata for easier plotting."""
@@ -508,20 +509,25 @@ class Plotter:
             print("No per-class data available for heatmap.")
             return
 
-        # Create pivot table with mean F1 scores
-        pivot_data = self.per_class_stats.pivot_table(
-            index='model_id',
-            columns='class_name',
-            values='f1_score_mean',
-            fill_value=0
+        pivot_data = (
+            self.per_class_stats
+            .pivot_table(index='model_id',
+                         columns='class_name',
+                         values='f1_score_mean',
+                         fill_value=0)
         )
 
-        # Ensure all classes are present
-        for class_name in CLASSES:
-            if class_name not in pivot_data.columns:
-                pivot_data[class_name] = 0
+        # Converte índice (model_id) → rótulo amigável
+        pivot_data.index = [
+            self._pretty(mid, True)
+            for mid in pivot_data.index
+        ]
 
-        pivot_data = pivot_data[CLASSES]  # Reorder columns
+        # Garante ordem consistente das classes
+        for cname in CLASSES:
+            if cname not in pivot_data.columns:
+                pivot_data[cname] = 0.0
+        pivot_data = pivot_data[CLASSES]
 
         fig, ax = plt.subplots(figsize=(14, max(8, len(pivot_data) * 0.4)))
         sns.heatmap(pivot_data, annot=True, fmt=".3f", cmap=HEATMAP_CMAP,
@@ -610,9 +616,9 @@ class Plotter:
             for alg in algs:
                 m_no, s_no = _val(f"{net}_feature_extractor_{alg}_noaug")
                 m_au, s_au = _val(f"{net}_feature_extractor_{alg}_aug")
-                means_no.append(m_no);
+                means_no.append(m_no)
                 std_no.append(s_no)
-                means_au.append(m_au);
+                means_au.append(m_au)
                 std_au.append(s_au)
 
             bars_no = ax.bar(x - w / 2, means_no, w, yerr=std_no, capsize=3,
@@ -659,7 +665,7 @@ class Plotter:
         ax.legend()
         self._save(fig, "06_pvalue_hist.png")
 
-    def _fig_07_pvalue_heatmap(self, max_models: int = 20):
+    def _fig_07_pvalue_heatmap(self, max_models: int = 100):
         """
         Heatmap (p corrigido) para os 'max_models' modelos mais frequentes.
         Mostra só metade superior da matriz para evitar duplicidade.
