@@ -269,7 +269,7 @@ class Plotter:
         # Ensembles
         alg = parts[3] if len(parts) >= 4 else "?"
         alg_disp = ALG_NICE.get(alg, alg.title())
-        aug_flag = "(Aug)" if model_id.endswith("_aug") else "(NoAug)"
+        aug_flag = "(AF)" if model_id.endswith("_aug") else "(N)"
         return f"{net} + {alg_disp} {aug_flag if flag else ''}"
 
     @staticmethod
@@ -421,7 +421,7 @@ class Plotter:
                 for bar, mean in zip(bars, cnn_means):
                     height = bar.get_height()
                     ax.text(bar.get_x() + bar.get_width() / 2., height + 0.01,
-                            f'{mean:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold')
+                            f'{mean:.3f}', ha='center', va='bottom', fontsize=11, fontweight='bold')
             else:
                 alg = algorithms[i - 1]
                 means, stds = ensemble_data[alg]
@@ -432,14 +432,14 @@ class Plotter:
                 for bar, mean in zip(bars, means):
                     height = bar.get_height()
                     ax.text(bar.get_x() + bar.get_width() / 2., height + 0.01,
-                            f'{mean:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold')
+                            f'{mean:.3f}', ha='center', va='bottom', fontsize=11, fontweight='bold')
 
         ax.set_xticks(x_pos)
         ax.set_xticklabels([net.replace('Resnet', 'ResNet').replace('Vgg19', 'VGG19')
                             for net in networks], size=16)
-        ax.set_ylabel("F1-Score", size=10)
-        ax.set_title("CNN end-to-end vs Ensembles")
-        ax.legend(title="Arquitetura", fontsize=8, title_fontsize=9)
+        ax.set_ylabel("F1-Score", size=12)
+        ax.set_title("CNN end-to-end vs Ensembles (com feature augmentation)")
+        ax.legend(title="Arquitetura", fontsize=9, title_fontsize=9)
 
         # Calculate proper y-limit
         all_values = cnn_means + [val for means, _ in ensemble_data.values() for val in means]
@@ -532,11 +532,12 @@ class Plotter:
         fig, ax = plt.subplots(figsize=(14, max(8, len(pivot_data) * 0.4)))
         sns.heatmap(pivot_data, annot=True, fmt=".3f", cmap=HEATMAP_CMAP,
                     vmin=0, vmax=1, linewidths=0.5,
-                    cbar_kws={"label": "Mean F1-Score"}, ax=ax)
+                    annot_kws={"size": 12},
+                    cbar_kws={"label": "F1-Score Médio"}, ax=ax)
 
-        ax.set_title("Mean F1-Score per Class")
-        ax.set_xlabel("Class")
-        ax.set_ylabel("Model Configuration")
+        ax.set_title("F1-Score Médio por Classe")
+        ax.set_xlabel("Classe")
+        ax.set_ylabel("Modelo")
         ax.set_xticklabels(ax.get_xticklabels(), rotation=45)
         ax.set_yticklabels(ax.get_yticklabels(), rotation=0)
 
@@ -577,7 +578,7 @@ class Plotter:
             for bar, mean, std in zip(bars, means, stds):
                 height = bar.get_height()
                 ax.text(bar.get_x() + bar.get_width()/2., height + std + 0.01,
-                       f'{mean:.3f}', ha='center', va='bottom', fontsize=9)
+                       f'{mean:.3f}', ha='center', va='bottom', fontsize=11)
 
         ax.set_xlabel('CNN')
         ax.set_ylabel('Score')
@@ -603,7 +604,7 @@ class Plotter:
         def _val(mid):  # -> (mean, std)
             return self._get_metric_stats(mid, "macro_avg_f1")
 
-        fig, axes = plt.subplots(2, 2, figsize=(11, 8), sharey=True)
+        fig, axes = plt.subplots(2, 2, figsize=(11, 10), sharey=True)
         axes = axes.flatten()
         w = 0.35
         col_no, col_au = "#fdae61", "#d7191c"
@@ -622,28 +623,36 @@ class Plotter:
                 std_au.append(s_au)
 
             bars_no = ax.bar(x - w / 2, means_no, w, yerr=std_no, capsize=3,
-                             color=col_no, edgecolor="black", label="NoAug")
+                             color=col_no, edgecolor="black", label="Sem aumento de atributos")
             bars_au = ax.bar(x + w / 2, means_au, w, yerr=std_au, capsize=3,
-                             color=col_au, edgecolor="black", label="Aug")
+                             color=col_au, edgecolor="black", label="Com aumento de atributos")
 
-            # rótulos
+            # Rótulos para "sem aumento de atributos"
             for bar, m, s in zip(bars_no, means_no, std_no):
-                ax.text(bar.get_x() + bar.get_width() / 2, m + .005,
-                        f"{m:.2f}±{s:.2f}", ha="center", va="bottom", fontsize=7)
+                ax.text(bar.get_x() + bar.get_width() / 2, m + s + 0.015,
+                        f"{m:.2f}±{s:.4f}", ha="center", va="bottom",
+                        fontsize=10, rotation=90)
+
+            # Rótulos para "com aumento de atributos"
             for bar, m, s in zip(bars_au, means_au, std_au):
-                ax.text(bar.get_x() + bar.get_width() / 2, m + .005,
-                        f"{m:.2f}±{s:.2f}", ha="center", va="bottom", fontsize=7)
+                ax.text(bar.get_x() + bar.get_width() / 2, m + s + 0.015,
+                        f"{m:.2f}±{s:.4f}", ha="center", va="bottom",
+                        fontsize=10, rotation=90)
 
             ax.set_xticks(x)
             ax.set_xticklabels([names[a] for a in algs], rotation=15)
             ax.set_title(net.replace("Resnet", "ResNet").replace("Vgg19", "VGG19"))
             ax.grid(axis="y", alpha=.25)
+
+            max_val = max(max(means_no), max(means_au))
+            ax.set_ylim(0, max_val + 0.2)
+
             if idx == 0:
                 ax.legend(fontsize=8)
             if idx == 2:
                 ax.set_ylabel("F1-Score")
 
-        fig.suptitle("Ensembles – Augmentation × NoAug (por Rede)", fontsize=14)
+        fig.suptitle("Ensembles – Com x Sem Aumento de Atributos (por Rede)", fontsize=14)
         fig.tight_layout(rect=[0, .03, 1, .95])
         self._save(fig, "05_alg_aug_vs_noaug.png")
 
