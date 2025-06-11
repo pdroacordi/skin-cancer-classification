@@ -147,7 +147,7 @@ class Plotter:
             'macro_avg_precision': ['mean', 'std', 'count'],
             'macro_avg_recall': ['mean', 'std', 'count'],
             'macro_avg_f1': ['mean', 'std', 'count']
-        }).round(4)
+        })
 
         # Flatten column names
         self.general_stats.columns = [f'{col[0]}_{col[1]}' for col in self.general_stats.columns]
@@ -157,7 +157,7 @@ class Plotter:
             'precision': ['mean', 'std', 'count'],
             'recall': ['mean', 'std', 'count'],
             'f1_score': ['mean', 'std', 'count']
-        }).round(4)
+        })
 
         # Flatten column names for per-class stats
         self.per_class_stats.columns = [f'{col[0]}_{col[1]}' for col in self.per_class_stats.columns]
@@ -393,8 +393,7 @@ class Plotter:
                 stds.append(std)
             ensemble_data[alg] = (means, stds)
 
-        # Define colors matching your original constants
-        colors = ['#4C72B0']  # Blue for CNN
+        colors = ['#4C72B0']
         for alg in algorithms:
             if alg == 'randomforest':
                 colors.append(COLOR_PALETTE.get('RandomForest', '#17becf'))
@@ -407,7 +406,7 @@ class Plotter:
             else:
                 colors.append('#666666')
 
-        labels = ['CNN', 'RandomForest', 'XGBoost', 'AdaBoost', 'ExtraTrees']
+        labels = ['CNN'] + [ALG_NICE[alg] for alg in algorithms]
 
         # Plot bars with error bars
         for i, (label, color) in enumerate(zip(labels, colors)):
@@ -478,7 +477,13 @@ class Plotter:
 
         # Map algorithm names to proper display names and colors
         display_names = ['AdaBoost', 'ExtraTrees', 'RandomForest', 'XGBoost']
-        colors = [COLOR_PALETTE.get(name, '#666666') for name in display_names]
+        alg_to_color = {
+            "AdaBoost": COLOR_PALETTE["AdaBoost"],
+            "ExtraTrees": COLOR_PALETTE["ExtraTrees"],
+            "RandomForest": COLOR_PALETTE["RandomForest"],
+            "XGBoost": COLOR_PALETTE["XGBoost"],
+        }
+        colors = [alg_to_color[alg] for alg in display_names]
 
         bars = ax.bar(range(len(algorithms)), best_scores,
                       color=colors, edgecolor="black", alpha=0.8,
@@ -630,13 +635,13 @@ class Plotter:
             # Rótulos para "sem aumento de atributos"
             for bar, m, s in zip(bars_no, means_no, std_no):
                 ax.text(bar.get_x() + bar.get_width() / 2, m + s + 0.015,
-                        f"{m:.2f}±{s:.4f}", ha="center", va="bottom",
+                        f"{m:.3f}±{s:.4f}", ha="center", va="bottom",
                         fontsize=10, rotation=90)
 
             # Rótulos para "com aumento de atributos"
             for bar, m, s in zip(bars_au, means_au, std_au):
                 ax.text(bar.get_x() + bar.get_width() / 2, m + s + 0.015,
-                        f"{m:.2f}±{s:.4f}", ha="center", va="bottom",
+                        f"{m:.3f}±{s:.4f}", ha="center", va="bottom",
                         fontsize=10, rotation=90)
 
             ax.set_xticks(x)
