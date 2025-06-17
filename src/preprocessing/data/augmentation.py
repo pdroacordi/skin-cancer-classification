@@ -10,7 +10,7 @@ import numpy as np
 from keras.utils import Sequence
 from sklearn.utils import resample
 
-sys.path.append('..')
+sys.path.append('../../..')
 
 
 class AugmentationFactory:

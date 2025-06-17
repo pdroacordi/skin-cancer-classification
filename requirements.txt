@@ -11,3 +11,4 @@ seaborn
 scikit-image
 tqdm
 scikit-posthocs>=0.7
+tensorflow-addons

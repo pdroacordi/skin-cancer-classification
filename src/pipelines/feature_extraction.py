@@ -37,10 +37,10 @@ from config import (
 )
 
 from utils.data_loaders import load_paths_labels, resize_image
-from utils.graphic_preprocessing import apply_graphic_preprocessing
+from preprocessing.graphic.pipeline import apply_graphic_preprocessing
 from models.cnn_models import get_feature_extractor_model, get_feature_extractor_from_cnn
 from models.classical_models import create_ml_pipeline, tune_hyperparameters, get_default_param_grid, save_model
-from utils.data_preprocessing import apply_data_preprocessing
+from preprocessing.data.data_preprocessing import apply_data_preprocessing
 from utils.fold_utils import save_fold_results
 
 
@@ -385,7 +385,7 @@ def extract_features_from_paths(feature_extractor, paths, labels=None,
 
     augmentation_pipelines = None
     if apply_augmentation:
-        from utils.augmentation import AugmentationFactory
+        from preprocessing.data.augmentation import AugmentationFactory
         augmentation_pipelines = AugmentationFactory.get_feature_extraction_augmentation()
         num_augmentations = len(augmentation_pipelines)
         print(f"Using {num_augmentations} augmentation pipelines for feature extraction.")

@@ -414,7 +414,7 @@ def fine_tune_feature_extractor(feature_extractor, X_train, y_train, X_val, y_va
     # Train the model
     # Apply augmentation during training if requested
     if use_augmentation:
-        from utils.augmentation import AugmentationFactory
+        from preprocessing.data.augmentation import AugmentationFactory
 
         medium_augmentation = AugmentationFactory.get_medium_augmentation()
 
