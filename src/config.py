@@ -1,5 +1,5 @@
 NUM_CLASSES = 7  # Number of skin lesion classes in HAM10000
-BATCH_SIZE = 8  # Smaller batch size to prevent memory issues
+BATCH_SIZE = 16  # Smaller batch size to prevent memory issues
 NUM_EPOCHS = 100
 IMG_SIZE = (299, 299, 3)  # Width, height, channels
 
@@ -7,13 +7,13 @@ IMG_SIZE = (299, 299, 3)  # Width, height, channels
 GPU_MEMORY_LIMIT = 0.9  # Fraction of GPU memory to use
 
 # Pipeline configuration
-USE_GRAPHIC_PREPROCESSING = False    # Apply hair removal, contrast enhancement, etc.
+USE_GRAPHIC_PREPROCESSING = True    # Apply hair removal, contrast enhancement, etc.
 USE_DATA_AUGMENTATION     = True    # Apply data augmentation during training
-USE_FEATURE_AUGMENTATION  = True
+USE_FEATURE_AUGMENTATION  = False
 USE_DATA_PREPROCESSING    = False    # Apply data pre-processing, such as PCA, SMOTE, etc.
 USE_FINE_TUNING           = True     # Fine-tune pretrained CNN
 
-USE_HAIR_REMOVAL          = False
+USE_HAIR_REMOVAL          = True
 USE_IMAGE_SEGMENTATION    = False
 USE_ENHANCED_CONTRAST     = False
 
@@ -35,7 +35,7 @@ NUM_FINAL_MODELS = 10            # Number of final models to train
 NUM_PCA_COMPONENTS = None        # PCA components for dimensionality reduction (None = no PCA)
 
 # Model selection
-CNN_MODEL                  = 'Xception'         # Options: 'VGG19', 'Inception', 'ResNet', 'Xception'
+CNN_MODEL                  = 'VGG19'         # Options: 'VGG19', 'Inception', 'ResNet', 'Xception'
 CLASSICAL_CLASSIFIER_MODEL = 'ExtraTrees'  # Options: 'RandomForest', 'XGBoost', 'AdaBoost', 'ExtraTrees', 'SVM'
 CLASSIFIER_APPROACH        = "class_weight"  # Options: "class_weight", "smote", "undersampling", "hybrid"
 

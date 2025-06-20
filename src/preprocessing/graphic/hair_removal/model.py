@@ -3,37 +3,38 @@ from tensorflow.keras import layers as L
 
 
 class SEResBlock(tf.keras.layers.Layer):
-    """Squeeze-and-Excitation Residual Block"""
+    """Squeeze-and-Excitation Residual Block with proper config for serialization."""
 
     def __init__(self, filters, ratio=16, **kwargs):
         super().__init__(**kwargs)
         self.filters = filters
-        self.ratio = ratio
+        self.ratio   = ratio
 
         # Main path
         self.conv1 = L.Conv2D(filters, 3, padding="same")
-        self.bn1 = L.BatchNormalization()
+        self.bn1   = L.BatchNormalization()
         self.conv2 = L.Conv2D(filters, 3, padding="same")
-        self.bn2 = L.BatchNormalization()
-        self.relu = L.ReLU()
+        self.bn2   = L.BatchNormalization()
+        self.relu  = L.ReLU()
 
         # Squeeze-and-Excitation
         self.gap = L.GlobalAveragePooling2D()
-        self.d1 = L.Dense(filters // ratio, activation="relu")
-        self.d2 = L.Dense(filters, activation="sigmoid")
+        self.d1  = L.Dense(filters // ratio, activation="relu")
+        self.d2  = L.Dense(filters, activation="sigmoid")
 
-        # Projection shortcut
-        self.proj = None
-        self.bn_proj = None
+        # Projection shortcut (initialized in build)
+        self.proj     = None
+        self.bn_proj  = None
 
     def build(self, input_shape):
         in_ch = input_shape[-1]
         if in_ch != self.filters:
-            self.proj = L.Conv2D(self.filters, 1, padding="same")
+            self.proj    = L.Conv2D(self.filters, 1, padding="same")
             self.bn_proj = L.BatchNormalization()
+        super().build(input_shape)
 
     def call(self, inputs, training=None):
-        # Shortcut path
+        # Shortcut
         shortcut = inputs
         if self.proj is not None:
             shortcut = self.proj(shortcut)
@@ -51,16 +52,22 @@ class SEResBlock(tf.keras.layers.Layer):
         se = self.gap(x)
         se = self.d1(se)
         se = self.d2(se)
-        se = tf.expand_dims(tf.expand_dims(se, 1), 1)
+        se = tf.reshape(se, (-1, 1, 1, self.filters))
 
-        # Apply SE weights
         x = x * se
 
         # Residual connection
         x = x + shortcut
-        x = self.relu(x)
+        return self.relu(x)
 
-        return x
+    def get_config(self):
+        # This is what Keras needs to serialize your layer
+        config = super().get_config()
+        config.update({
+            "filters": self.filters,
+            "ratio":   self.ratio,
+        })
+        return config
 
 
 def create_chimeranet(img_size=448, num_classes=1):

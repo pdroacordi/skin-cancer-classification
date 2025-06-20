@@ -1,127 +1,154 @@
+import os
 from pathlib import Path
-import tensorflow as tf, tensorflow_addons as tfa
-from tensorflow_addons.optimizers import AdamW
 
-from ..config import HairRemovalConfig
-from .dataset import HairRemovalDatasetKeras as HairRemovalDataset
-from ..model import ChimeraNet
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras import layers as L
+from tensorflow.keras.callbacks import (
+    ModelCheckpoint, ReduceLROnPlateau, EarlyStopping,
+    TensorBoard, LearningRateScheduler
+)
 
-
-# ---------- DiceLoss ----------
-class DiceLoss(tf.keras.losses.Loss):
-    def __init__(self, smooth: float = 1e-6, **kwargs):
-        super().__init__(name="dice_loss", **kwargs)
-        self.smooth = smooth
-
-    def call(self, y_true, y_pred):
-        y_true = tf.cast(y_true, tf.float32)
-        y_pred = tf.cast(y_pred, tf.float32)
-        inter = tf.reduce_sum(y_true * y_pred, axis=[1, 2, 3])
-        union = tf.reduce_sum(y_true + y_pred, axis=[1, 2, 3])
-        dice = (2.0 * inter + self.smooth) / (union + self.smooth)
-        return 1.0 - dice
+from preprocessing.graphic.hair_removal.config import HairRemovalConfig
+from preprocessing.graphic.hair_removal.training.dataset import HairRemovalDataset
+from preprocessing.graphic.hair_removal.training.metrics import (
+    HybridLoss,
+    F1Score,
+    IoUMetric,
+    DiceMetric
+)
 
 
-class DiceMetric(tf.keras.metrics.Metric):
-    """Custom Dice coefficient metric that handles serialization properly."""
-
-    def __init__(self, name='dice', **kwargs):
-        super().__init__(name=name, **kwargs)
-        self.intersection = self.add_weight(name='intersection', initializer='zeros')
-        self.union = self.add_weight(name='union', initializer='zeros')
-        self.smooth = 1e-6
-
-    def update_state(self, y_true, y_pred, sample_weight=None):
-        y_true = tf.cast(y_true, tf.float32)
-        y_pred = tf.cast(y_pred > 0.5, tf.float32)  # Threshold at 0.5
-
-        intersection = tf.reduce_sum(y_true * y_pred)
-        union = tf.reduce_sum(y_true) + tf.reduce_sum(y_pred)
-
-        self.intersection.assign_add(intersection)
-        self.union.assign_add(union)
-
-    def result(self):
-        dice = (2.0 * self.intersection + self.smooth) / (self.union + self.smooth)
-        return dice
-
-    def reset_state(self):
-        self.intersection.assign(0.0)
-        self.union.assign(0.0)
-
-class CombinedLoss(tf.keras.losses.Loss):
-    def __init__(self, alpha=0.3, smooth=1e-6, **kwargs):
-        super().__init__(name="bce_dice", **kwargs)
-        self.alpha  = alpha
-        self.smooth = smooth
-        self.bce     = tf.keras.losses.BinaryCrossentropy()
-
-    def call(self, y_true, y_pred):
-        y_true = tf.cast(y_true, tf.float32)
-        y_pred = tf.cast(y_pred, tf.float32)
-        # BCE component
-        bce_loss  = self.bce(y_true, y_pred)
-        # Dice component
-        inter = tf.reduce_sum(y_true * y_pred, axis=[1,2,3])
-        union = tf.reduce_sum(y_true + y_pred, axis=[1,2,3])
-        dice_score = (2.0 * inter + self.smooth) / (union + self.smooth)
-        dice_loss  = 1.0 - dice_score
-        return self.alpha * bce_loss + (1.0 - self.alpha) * tf.reduce_mean(dice_loss)
-
-
-# ---------- Treinador ----------
 class HairRemovalTrainer:
-    def __init__(self, data_root: Path, out_dir: Path, cfg: HairRemovalConfig):
-        self.cfg      = cfg
-        self.out_dir  = out_dir
-        self.dataset  = HairRemovalDataset(data_root, cfg)
-        self.model    = ChimeraNet(cfg.img_size).model
+    """Enhanced trainer with improved training strategies"""
 
-        optimizer = AdamW(weight_decay=1e-5, learning_rate=cfg.lr)
+    def __init__(self, data_root: Path, out_dir: Path, cfg: HairRemovalConfig):
+        self.cfg = cfg
+        self.out_dir = out_dir
+        os.makedirs(out_dir, exist_ok=True)
+
+        self.dataset = HairRemovalDataset(data_root, cfg)
+
+        # Build model with better initialization
+        from preprocessing.graphic.hair_removal.model import create_chimeranet
+        self.model = create_chimeranet(cfg.img_size)
+
+        # Initialize optimizer with gradient clipping
+        self.optimizer = tf.keras.optimizers.Adam(
+            learning_rate=cfg.initial_lr,
+            beta_1=0.9,
+            beta_2=0.999,
+            clipnorm=cfg.gradient_clip_norm
+        )
+
+        # Compile with enhanced loss and metrics
         self.model.compile(
-            optimizer=optimizer,
-            loss=CombinedLoss(alpha=0.3),
+            optimizer=self.optimizer,
+            loss=HybridLoss(
+                bce_weight=cfg.loss_weights['bce'],
+                dice_weight=cfg.loss_weights['dice'],
+                tversky_weight=cfg.loss_weights['tversky']
+            ),
             metrics=[
                 DiceMetric(name="dice"),
-                tf.keras.metrics.MeanIoU(num_classes=2, name="iou")
-            ],
+                IoUMetric(name="iou"),
+                F1Score(name="f1_score"),
+                tf.keras.metrics.Precision(name="precision"),
+                tf.keras.metrics.Recall(name="recall")
+            ]
         )
+
+    def cosine_annealing_scheduler(self, epoch, lr):
+        """Cosine annealing learning rate scheduler"""
+        epochs = self.cfg.epochs
+        lr_max = self.cfg.initial_lr
+        lr_min = self.cfg.min_lr
+
+        lr = lr_min + (lr_max - lr_min) * 0.5 * (1 + np.cos(np.pi * epoch / epochs))
+        return lr
 
     def train(self):
+        """Train with enhanced strategies"""
         ds_train, ds_val = self.dataset.tf_datasets()
-        ckpt = tf.keras.callbacks.ModelCheckpoint(
-            filepath=self.out_dir / "best",
-            monitor="val_dice",
-            mode="max",
-            save_best_only=True,
-            save_weights_only=True,
-            verbose=1
-        )
-        reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
-            monitor="val_dice",
-            mode="max",
-            factor=0.5,
-            patience=8,
-            min_lr=1e-6,
-            verbose=1
-        )
-        es = tf.keras.callbacks.EarlyStopping(
-            monitor="val_dice",
-            mode="max",
-            patience=20,
-            restore_best_weights=True,
-            verbose=1
-        )
 
-        self.model.fit(
+        total_samples = len(self.dataset)
+        train_samples = int(total_samples * 0.85)
+        val_samples = int(total_samples * 0.15)
+
+        train_steps = train_samples // self.cfg.batch_size
+        val_steps = max(1, val_samples // self.cfg.batch_size)
+
+        # Enhanced callbacks
+        callbacks = [
+            # Best model checkpoint
+            ModelCheckpoint(
+                filepath=self.out_dir / "best_weights.h5",
+                monitor="val_dice",
+                mode="max",
+                save_best_only=True,
+                save_weights_only=True,
+                verbose=1
+            ),
+
+            # Checkpoint every N epochs
+            ModelCheckpoint(
+                filepath=str(self.out_dir / "checkpoint_{epoch:03d}.h5"),
+                save_freq=25 * train_steps,  # Every 25 epochs
+                save_weights_only=True,
+                verbose=0
+            ),
+
+            # Learning rate scheduler
+            LearningRateScheduler(self.cosine_annealing_scheduler, verbose=1),
+
+            # Reduce on plateau as backup
+            ReduceLROnPlateau(
+                monitor="val_dice",
+                mode="max",
+                factor=0.5,
+                patience=20,
+                min_lr=self.cfg.min_lr,
+                verbose=1
+            ),
+
+            # Early stopping with longer patience
+            EarlyStopping(
+                monitor="val_dice",
+                mode="max",
+                patience=50,
+                restore_best_weights=True,
+                verbose=1
+            ),
+
+            # TensorBoard logging
+            TensorBoard(
+                log_dir=str(self.out_dir / "logs"),
+                histogram_freq=10,
+                write_graph=True,
+                write_images=True,
+                update_freq='epoch'
+            )
+        ]
+
+        # Train model
+        history = self.model.fit(
             ds_train,
             validation_data=ds_val,
             epochs=self.cfg.epochs,
-            callbacks=[ckpt, reduce_lr, es],
+            steps_per_epoch=train_steps,
+            validation_steps=val_steps,
+            callbacks=callbacks,
+            verbose=1
         )
 
+        # Save final model
+        self.model.save_weights(str(self.out_dir / "final_model_weights.h5"))
 
-# ---------- CLI ----------
+        # Save training history
+        np.save(str(self.out_dir / "history.npy"), history.history)
+
+        return history
+
 if __name__ == "__main__":
     import argparse
 

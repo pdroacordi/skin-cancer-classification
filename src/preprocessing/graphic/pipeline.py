@@ -12,12 +12,11 @@ from typing import Tuple, Optional, Dict, Any
 from dataclasses import dataclass
 import logging
 
-from base.preprocessor import ImagePreprocessor
-from config import PreprocessingConfig
-from steps.contrast_enhancer import ContrastEnhancer
-from steps.hair_removal import HairRemovalStep
+from .base.preprocessor import ImagePreprocessor
+from .config import PreprocessingConfig
+from .steps.contrast_enhancer import ContrastEnhancer
+from .steps.hair_removal import HairRemovalStep
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -38,7 +37,7 @@ class PreprocessingPipeline:
     def process(self, img: np.ndarray, visualize: bool = False) -> np.ndarray:
         out = img.copy()
         for step in self.steps:
-            logger.info(f"Applying {step.get_name()}")
+            # logger.info(f"Applying {step.get_name()}")
             out = step.process(out)
             if visualize:
                 self._viz(img, out, step.get_name())
