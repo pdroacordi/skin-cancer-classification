@@ -21,7 +21,7 @@ from config import (
     USE_FINE_TUNING,
     USE_GRAPHIC_PREPROCESSING,
     USE_DATA_AUGMENTATION,
-    NUM_KFOLDS, BATCH_SIZE
+    NUM_KFOLDS
 )
 from pipelines.cnn_classifier import run_cnn_classifier_pipeline
 from pipelines.feature_extraction import run_feature_extraction_pipeline

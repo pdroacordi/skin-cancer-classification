@@ -2,18 +2,20 @@ import os
 import numpy as np
 import cv2
 from tensorflow.keras.utils import to_categorical
-
+from pathlib import Path
+from typing import Tuple, Optional, Callable, Union, List
 import sys
+
 sys.path.append('..')
 from config import NUM_CLASSES, IMG_SIZE
 
 
-def load_paths_labels(file_path):
+def load_paths_labels(file_path: str) -> Tuple[np.ndarray, np.ndarray]:
     """
     Load image paths and labels from a text file.
 
     Args:
-        file_path (str): Path to the file containing image paths and labels.
+        file_path: Path to the file containing image paths and labels.
 
     Returns:
         tuple: (paths, labels) as numpy arrays
@@ -33,17 +35,16 @@ def load_paths_labels(file_path):
 
     return np.array(paths), np.array(labels)
 
-
-def resize_image(image, target_size=None):
+def resize_image(image: np.ndarray, target_size: Optional[Tuple[int, int]] = None) -> np.ndarray:
     """
     Resize an image to the target size.
 
     Args:
-        image (numpy.array): Input image in BGR or RGB format.
-        target_size (tuple): Desired size as (height, width). If None, uses IMG_SIZE.
+        image: Input image in BGR or RGB format
+        target_size: Desired size as (height, width). If None, uses IMG_SIZE
 
     Returns:
-        numpy.array: Resized image.
+        Resized image
     """
     if target_size is None:
         target_size = IMG_SIZE[:2]
@@ -52,15 +53,15 @@ def resize_image(image, target_size=None):
     return resized_image
 
 
-def load_image(image_path):
+def load_image(image_path: str) -> Optional[np.ndarray]:
     """
     Load an image from a given path.
 
     Args:
-        image_path (str): Path to the image file.
+        image_path: Path to the image file
 
     Returns:
-        numpy.array: Image as BGR array or None if loading fails.
+        Image as BGR array or None if loading fails
     """
     image = cv2.imread(image_path)
     if image is None:
@@ -68,16 +69,16 @@ def load_image(image_path):
     return image
 
 
-def apply_model_preprocessing(image, model_name):
+def apply_model_preprocessing(image: np.ndarray, model_name: str) -> np.ndarray:
     """
     Apply model-specific preprocessing to an image.
 
     Args:
-        image (numpy.array): RGB image.
-        model_name (str): Name of the CNN model.
+        image: RGB image
+        model_name: Name of the CNN model
 
     Returns:
-        numpy.array: Preprocessed image.
+        Preprocessed image
     """
     from tensorflow.keras.applications.vgg19 import preprocess_input as preprocess_input_vgg19
     from tensorflow.keras.applications.inception_v3 import preprocess_input as preprocess_input_inception
@@ -101,31 +102,34 @@ class MemoryEfficientDataGenerator:
     Memory-efficient data generator that loads and processes images in batches.
     """
 
-    def __init__(self, paths, labels, batch_size, model_name, preprocess_fn=None,
-                 augment_fn=None, shuffle=True):
+    def __init__(self,
+                 paths: Union[List[str], np.ndarray],
+                 labels: Union[List[int], np.ndarray],
+                 batch_size: int,
+                 model_name: str,
+                 augment_fn: Optional[Callable] = None,
+                 shuffle: bool = True):
         """
         Initialize the data generator.
 
         Args:
-            paths (list): List of image paths.
-            labels (list): List of image labels.
-            batch_size (int): Batch size.
-            model_name (str): CNN model name for preprocessing.
-            preprocess_fn (callable, optional): Function for applying preprocessing.
-            augment_fn (callable, optional): Function for applying data augmentation.
-            shuffle (bool): Whether to shuffle the data.
+            paths: List of image paths
+            labels: List of image labels
+            batch_size: Batch size
+            model_name: CNN model name for preprocessing
+            augment_fn: Function for applying data augmentation
+            shuffle: Whether to shuffle the data
         """
-        self.paths = paths
-        self.labels = labels
+        self.paths = np.array(paths) if not isinstance(paths, np.ndarray) else paths
+        self.labels = np.array(labels) if not isinstance(labels, np.ndarray) else labels
         self.batch_size = batch_size
         self.model_name = model_name
-        self.preprocess_fn = preprocess_fn
         self.augment_fn = augment_fn
         self.shuffle = shuffle
         self.n = len(paths)
         self.indices = np.arange(self.n)
 
-    def __len__(self):
+    def __len__(self) -> int:
         """Return the number of batches per epoch."""
         return int(np.ceil(self.n / self.batch_size))
 
@@ -133,7 +137,7 @@ class MemoryEfficientDataGenerator:
         """Create a new iterator."""
         return self
 
-    def __next__(self):
+    def __next__(self) -> Tuple[np.ndarray, np.ndarray]:
         """Get the next batch."""
         if not hasattr(self, '_current_idx'):
             self._current_idx = 0
@@ -147,7 +151,8 @@ class MemoryEfficientDataGenerator:
             raise StopIteration
 
         # Get batch indices
-        batch_indices = self.indices[self._current_idx:min(self._current_idx + self.batch_size, self.n)]
+        end_idx = min(self._current_idx + self.batch_size, self.n)
+        batch_indices = self.indices[self._current_idx:end_idx]
         self._current_idx += self.batch_size
 
         # Load and process batch
@@ -160,10 +165,6 @@ class MemoryEfficientDataGenerator:
                 continue
 
             image = resize_image(image, IMG_SIZE[:2])
-
-            # Apply preprocessing if available
-            if self.preprocess_fn:
-                image = self.preprocess_fn(image)
 
             # Convert BGR to RGB
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -191,7 +192,7 @@ class MemoryEfficientDataGenerator:
         Create a generator that can be used with Keras model.fit().
 
         Returns:
-            generator: A generator yielding (batch_images, batch_labels).
+            generator: A generator yielding (batch_images, batch_labels)
         """
 
         def generator():
@@ -207,16 +208,18 @@ class MemoryEfficientDataGenerator:
         return generator()
 
 
-def load_and_preprocess_dataset(paths, labels, model_name, preprocess_fn=None, augment_fn=None):
+def load_and_preprocess_dataset(paths: Union[List[str], np.ndarray],
+                                labels: Union[List[int], np.ndarray],
+                                model_name: str,
+                                augment_fn: Optional[Callable] = None) -> Tuple[np.ndarray, np.ndarray]:
     """
     Load and preprocess a full dataset into memory.
 
     Args:
-        paths (list): List of image paths.
-        labels (list): List of image labels.
-        model_name (str): CNN model name for preprocessing.
-        preprocess_fn (callable, optional): Function for applying preprocessing.
-        augment_fn (callable, optional): Function for applying data augmentation.
+        paths: List of image paths
+        labels: List of image labels
+        model_name: CNN model name for preprocessing
+        augment_fn: Function for applying data augmentation
 
     Returns:
         tuple: (preprocessed_images, one_hot_labels)
@@ -228,10 +231,6 @@ def load_and_preprocess_dataset(paths, labels, model_name, preprocess_fn=None, a
             continue
 
         image = resize_image(image, IMG_SIZE[:2])
-
-        # Apply preprocessing if available
-        if preprocess_fn:
-            image = preprocess_fn(image)
 
         # Convert BGR to RGB
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)

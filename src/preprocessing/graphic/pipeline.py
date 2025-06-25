@@ -56,7 +56,6 @@ class PreprocessingPipeline:
 def apply_graphic_preprocessing(image: np.ndarray,
                               use_hair_removal: bool = True,
                               use_contrast_enhancement: bool = True,
-                              use_segmentation: bool = False,
                               visualize: bool = False) -> np.ndarray:
     """
     Apply graphic preprocessing to dermoscopic image.

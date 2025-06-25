@@ -94,24 +94,11 @@ def run_single_fold_training(train_paths, train_labels, val_paths, val_labels,
         augmentation = AugmentationFactory.get_medium_augmentation()
         augment_fn = lambda img: augmentation(image=img)['image']
 
-    # Preprocessing function
-    preprocess_fn = None
-    if USE_GRAPHIC_PREPROCESSING:
-        preprocess_fn = lambda img: apply_graphic_preprocessing(
-            img,
-            use_hair_removal=USE_HAIR_REMOVAL,
-            use_contrast_enhancement=USE_ENHANCED_CONTRAST,
-            use_segmentation=USE_IMAGE_SEGMENTATION,
-            visualize=VISUALIZE
-        )
-
-    # Create data generators
     train_gen = MemoryEfficientDataGenerator(
         paths=train_paths,
         labels=train_labels,
         batch_size=BATCH_SIZE,
         model_name=CNN_MODEL,
-        preprocess_fn=preprocess_fn,
         augment_fn=augment_fn,
         shuffle=True
     )
@@ -121,8 +108,7 @@ def run_single_fold_training(train_paths, train_labels, val_paths, val_labels,
         labels=val_labels,
         batch_size=BATCH_SIZE,
         model_name=CNN_MODEL,
-        preprocess_fn=preprocess_fn,
-        augment_fn=None,  # No augmentation for validation
+        augment_fn=None,
         shuffle=False
     )
 
@@ -179,16 +165,6 @@ def evaluate_model(model, test_paths, test_labels, result_dir, class_names=None)
     Returns:
         dict: Evaluation metrics.
     """
-    # Preprocessing function
-    preprocess_fn = None
-    if USE_GRAPHIC_PREPROCESSING:
-        preprocess_fn = lambda img: apply_graphic_preprocessing(
-            img,
-            use_hair_removal=USE_HAIR_REMOVAL,
-            use_contrast_enhancement=USE_ENHANCED_CONTRAST,
-            use_segmentation=USE_IMAGE_SEGMENTATION,
-            visualize=False
-        )
 
     # Create test generator
     test_gen = MemoryEfficientDataGenerator(
@@ -196,7 +172,6 @@ def evaluate_model(model, test_paths, test_labels, result_dir, class_names=None)
         labels=test_labels,
         batch_size=BATCH_SIZE,
         model_name=CNN_MODEL,
-        preprocess_fn=preprocess_fn,
         augment_fn=None,
         shuffle=False
     )
@@ -366,24 +341,12 @@ def run_kfold_cross_validation(all_paths, all_labels, result_dir, class_names=No
                 y_true = []
                 y_pred = []
 
-                # Preprocessing function
-                preprocess_fn = None
-                if USE_GRAPHIC_PREPROCESSING:
-                    preprocess_fn = lambda img: apply_graphic_preprocessing(
-                        img,
-                        use_hair_removal=USE_HAIR_REMOVAL,
-                        use_contrast_enhancement=USE_ENHANCED_CONTRAST,
-                        use_segmentation=USE_IMAGE_SEGMENTATION,
-                        visualize=False
-                    )
-
                 # Create validation generator
                 val_gen = MemoryEfficientDataGenerator(
                     paths=val_paths,
                     labels=val_labels,
                     batch_size=BATCH_SIZE,
                     model_name=CNN_MODEL,
-                    preprocess_fn=preprocess_fn,
                     augment_fn=None,
                     shuffle=False
                 )
@@ -606,17 +569,6 @@ def train_final_model_cnn(all_data_paths, all_data_labels, best_hyperparameters,
         save_path=None  # Don't try to load existing
     )
 
-    # Define preprocessing function based on best hyperparameters
-    preprocess_fn = None
-    if best_hyperparameters['use_graphic_preprocessing']:
-        preprocess_fn = lambda img: apply_graphic_preprocessing(
-            img,
-            use_hair_removal=best_hyperparameters['use_hair_removal'],
-            use_contrast_enhancement=best_hyperparameters['use_enhanced_contrast'],
-            use_segmentation=best_hyperparameters['use_image_segmentation'],
-            visualize=False
-        )
-
     # Define augmentation function if used in best model
     augment_fn = None
     if best_hyperparameters['use_augmentation']:
@@ -631,7 +583,6 @@ def train_final_model_cnn(all_data_paths, all_data_labels, best_hyperparameters,
         labels=all_data_labels,
         batch_size=batch_size,
         model_name=model_name,
-        preprocess_fn=preprocess_fn,
         augment_fn=augment_fn,
         shuffle=True
     )
@@ -648,8 +599,7 @@ def train_final_model_cnn(all_data_paths, all_data_labels, best_hyperparameters,
         labels=val_labels,
         batch_size=batch_size,
         model_name=model_name,
-        preprocess_fn=preprocess_fn,
-        augment_fn=None,  # No augmentation for validation
+        augment_fn=None,
         shuffle=False
     )
 
@@ -795,17 +745,6 @@ def train_multiple_final_cnn_models(all_data_paths, all_data_labels, best_hyperp
         augmentation = AugmentationFactory.get_medium_augmentation()
         augment_fn = lambda img: augmentation(image=img)['image']
 
-    # Preprocessing function
-    preprocess_fn = None
-    if best_hyperparameters.get('use_graphic_preprocessing', USE_GRAPHIC_PREPROCESSING):
-        preprocess_fn = lambda img: apply_graphic_preprocessing(
-            img,
-            use_hair_removal=best_hyperparameters.get('use_hair_removal', USE_HAIR_REMOVAL),
-            use_contrast_enhancement=best_hyperparameters.get('use_enhanced_contrast', USE_ENHANCED_CONTRAST),
-            use_segmentation=best_hyperparameters.get('use_image_segmentation', USE_IMAGE_SEGMENTATION),
-            visualize=False
-        )
-
     trained_models = []
 
     for model_idx in range(num_models):
@@ -827,7 +766,6 @@ def train_multiple_final_cnn_models(all_data_paths, all_data_labels, best_hyperp
             labels=all_data_labels,
             batch_size=best_hyperparameters.get('batch_size', BATCH_SIZE),
             model_name=best_hyperparameters['model_name'],
-            preprocess_fn=preprocess_fn,
             augment_fn=augment_fn,
             shuffle=True
         )
@@ -845,7 +783,6 @@ def train_multiple_final_cnn_models(all_data_paths, all_data_labels, best_hyperp
             labels=val_labels,
             batch_size=best_hyperparameters.get('batch_size', BATCH_SIZE),
             model_name=best_hyperparameters['model_name'],
-            preprocess_fn=preprocess_fn,
             augment_fn=None,
             shuffle=False
         )
@@ -919,17 +856,6 @@ def evaluate_multiple_final_cnn_models(trained_models, test_paths, test_labels,
     print("Evaluating Multiple Final CNN Models on Test Set")
     print("=" * 60)
 
-    # Preprocessing function
-    preprocess_fn = None
-    if USE_GRAPHIC_PREPROCESSING:
-        preprocess_fn = lambda img: apply_graphic_preprocessing(
-            img,
-            use_hair_removal=USE_HAIR_REMOVAL,
-            use_contrast_enhancement=USE_ENHANCED_CONTRAST,
-            use_segmentation=USE_IMAGE_SEGMENTATION,
-            visualize=False
-        )
-
     # Results storage
     all_results = {
         'model_metrics': [],
@@ -955,7 +881,6 @@ def evaluate_multiple_final_cnn_models(trained_models, test_paths, test_labels,
             labels=test_labels,
             batch_size=BATCH_SIZE,
             model_name=CNN_MODEL,
-            preprocess_fn=preprocess_fn,
             augment_fn=None,
             shuffle=False
         )

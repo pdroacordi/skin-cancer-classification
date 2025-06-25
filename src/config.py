@@ -41,9 +41,9 @@ CLASSIFIER_APPROACH        = "class_weight"  # Options: "class_weight", "smote",
 
 # Paths
 RESULTS_DIR      = './results'
-TRAIN_FILES_PATH = "./res/train_files.txt"
-VAL_FILES_PATH   = "./res/val_files.txt"
-TEST_FILES_PATH  = "./res/test_files.txt"
+TRAIN_FILES_PATH = "./res/preprocessed_train_files.txt" if USE_GRAPHIC_PREPROCESSING else "./res/train_files.txt"
+VAL_FILES_PATH   = "./res/preprocessed_val_files.txt" if USE_GRAPHIC_PREPROCESSING else"./res/val_files.txt"
+TEST_FILES_PATH  = "./res/preprocessed_test_files.txt" if USE_GRAPHIC_PREPROCESSING else"./res/test_files.txt"
 
 # Callbacks configuration
 EARLY_STOPPING_PATIENCE = 10
