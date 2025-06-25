@@ -20,22 +20,20 @@ from config import (
     NUM_EPOCHS,
     USE_GRAPHIC_PREPROCESSING,
     USE_DATA_AUGMENTATION,
+    USE_FEATURE_PREPROCESSING,
     USE_FINE_TUNING,
-    VISUALIZE,
     NUM_KFOLDS,
     CNN_MODEL,
     RESULTS_DIR,
-    USE_DATA_PREPROCESSING,
     USE_HAIR_REMOVAL,
-    USE_IMAGE_SEGMENTATION,
     USE_ENHANCED_CONTRAST,
     FINE_TUNING_AT_LAYER,
     NUM_ITERATIONS,
-    NUM_CLASSES, NUM_FINAL_MODELS
+    NUM_CLASSES,
+    NUM_FINAL_MODELS
 )
 
 from utils.data_loaders import load_paths_labels, MemoryEfficientDataGenerator
-from preprocessing.graphic.pipeline import apply_graphic_preprocessing
 from preprocessing.data.augmentation import AugmentationFactory
 from models.cnn_models import load_or_create_cnn, get_callbacks, create_model_name
 from utils.fold_utils import save_fold_results
@@ -58,10 +56,9 @@ def create_result_directories(base_dir=RESULTS_DIR):
     """Create directories for saving results."""
     str_hair       = "hair_removal_" if USE_HAIR_REMOVAL else ""
     str_contrast   = "contrast_" if USE_ENHANCED_CONTRAST else ""
-    str_segmented  = "segmentation_" if USE_IMAGE_SEGMENTATION else ""
-    str_graphic    = f"{str_segmented}{str_contrast}{str_hair}" if USE_GRAPHIC_PREPROCESSING else ""
+    str_graphic    = f"{str_contrast}{str_hair}" if USE_GRAPHIC_PREPROCESSING else ""
     str_augment    = "use_augmentation_" if USE_DATA_AUGMENTATION else ""
-    str_preprocess = "use_data_preprocess_" if USE_DATA_PREPROCESSING else ""
+    str_preprocess = "use_feature_preprocess_" if USE_FEATURE_PREPROCESSING else ""
     result_dir     = os.path.join(base_dir, f"cnn_classifier_{CNN_MODEL}_{str_graphic}{str_augment}{str_preprocess}")
 
     # Create subdirectories
@@ -399,7 +396,6 @@ def run_kfold_cross_validation(all_paths, all_labels, result_dir, class_names=No
                         'use_augmentation': USE_DATA_AUGMENTATION,
                         'use_graphic_preprocessing': USE_GRAPHIC_PREPROCESSING,
                         'use_hair_removal': USE_HAIR_REMOVAL,
-                        'use_image_segmentation': USE_IMAGE_SEGMENTATION,
                         'use_enhanced_contrast': USE_ENHANCED_CONTRAST
                     }
 
@@ -1133,7 +1129,6 @@ def run_cnn_classifier_pipeline(train_files_path, val_files_path, test_files_pat
             'use_augmentation': USE_DATA_AUGMENTATION,
             'use_graphic_preprocessing': USE_GRAPHIC_PREPROCESSING,
             'use_hair_removal': USE_HAIR_REMOVAL,
-            'use_image_segmentation': USE_IMAGE_SEGMENTATION,
             'use_enhanced_contrast': USE_ENHANCED_CONTRAST
         }
         trained_models, final_models_dir = train_multiple_final_cnn_models(
@@ -1222,7 +1217,6 @@ def run_cnn_classifier_pipeline(train_files_path, val_files_path, test_files_pat
                 if USE_GRAPHIC_PREPROCESSING:
                     f.write(f"  Hair Removal: {USE_HAIR_REMOVAL}\n")
                     f.write(f"  Contrast Enhancement: {USE_ENHANCED_CONTRAST}\n")
-                    f.write(f"  Image Segmentation: {USE_IMAGE_SEGMENTATION}\n")
                 f.write(f"\nCross-validation:\n")
                 f.write(f"  Iterations: {NUM_ITERATIONS}\n")
                 f.write(f"  Folds per iteration: {NUM_KFOLDS}\n")

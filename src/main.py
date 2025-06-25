@@ -266,8 +266,6 @@ def main():
             val_files_path=args.val_files,
             test_files_path=args.test_files,
             use_kfold=args.cv,
-            fine_tune_extractor=USE_FINE_TUNING,
-            balance_features=USE_DATA_AUGMENTATION,
             tune_hyperparams=False,
             class_names=class_names
         )

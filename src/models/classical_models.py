@@ -7,14 +7,13 @@ import sys
 
 import joblib
 import numpy as np
-from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, ExtraTreesClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
 sys.path.append('..')
-from config import NUM_PCA_COMPONENTS, NUM_CLASSES
+from config import NUM_CLASSES
 
 
 def get_classifier(classifier_name, random_state=42):
@@ -91,14 +90,12 @@ def get_classifier(classifier_name, random_state=42):
             f"Unsupported classifier: {classifier_name}. Choose from 'RandomForest', 'XGBoost', 'AdaBoost', 'ExtraTrees', or 'SVM'")
 
 
-def create_ml_pipeline(classifier_name, use_pca=True, n_components=None, random_state=42):
+def create_ml_pipeline(classifier_name, random_state=42):
     """
     Create a machine learning pipeline with preprocessing and a classifier.
 
     Args:
         classifier_name (str): Name of the classifier.
-        use_pca (bool): Whether to use PCA for dimensionality reduction.
-        n_components (int, optional): Number of PCA components. If None, uses NUM_PCA_COMPONENTS from config.
         random_state (int): Random state for reproducibility.
 
     Returns:
@@ -106,20 +103,10 @@ def create_ml_pipeline(classifier_name, use_pca=True, n_components=None, random_
     """
     steps = []
 
-    # Add scaling
-    steps.append(('scaler', StandardScaler()))
-
-    # Add PCA if requested
-    if use_pca:
-        # Use config value if n_components is not specified
-        if n_components is None:
-            n_components = NUM_PCA_COMPONENTS
-
-        if n_components is not None:
-            steps.append(('pca', PCA(n_components=n_components, random_state=random_state)))
-
     # Add classifier
     steps.append(('classifier', get_classifier(classifier_name, random_state=random_state)))
+
+    print(f"Creating {classifier_name} pipeline: {steps}")
 
     return Pipeline(steps)
 

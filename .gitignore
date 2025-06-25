@@ -4,6 +4,7 @@
 /results/**/features_by_fold/
 /results/**/final_model/
 /results/**/final_models/
+/results/chimera
 !results/**/final_models/*.csv
 
 

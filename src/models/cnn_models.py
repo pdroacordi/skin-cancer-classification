@@ -13,7 +13,7 @@ from tensorflow.keras.models import Model, load_model
 from tensorflow.keras.optimizers import Adam
 
 from skincancer.src.config import USE_DATA_AUGMENTATION, CNN_MODEL, USE_GRAPHIC_PREPROCESSING, USE_HAIR_REMOVAL, \
-    USE_ENHANCED_CONTRAST, USE_IMAGE_SEGMENTATION, USE_DATA_PREPROCESSING, USE_FINE_TUNING
+    USE_ENHANCED_CONTRAST, USE_FINE_TUNING
 
 sys.path.append('..')
 from config import (
@@ -22,7 +22,7 @@ from config import (
     EARLY_STOPPING_PATIENCE,
     REDUCE_LR_PATIENCE,
     REDUCE_LR_FACTOR,
-    FINE_TUNING_AT_LAYER
+    FINE_TUNING_AT_LAYER, USE_FEATURE_PREPROCESSING
 )
 
 
@@ -267,14 +267,9 @@ def find_trained_cnn_model(results_dir='./results', cnn_model_name=CNN_MODEL):
             base_pattern += "_hair_removal"
         if USE_ENHANCED_CONTRAST:
             base_pattern += "_contrast"
-        if USE_IMAGE_SEGMENTATION:
-            base_pattern += "_segmentation"
 
     if USE_DATA_AUGMENTATION:
         base_pattern += "_use_augmentation"
-
-    if USE_DATA_PREPROCESSING:
-        base_pattern += "_use_data_preprocess"
 
      # Caminhos possíveis para modelos finais - com e sem sufixos adicionais
     search_patterns = [

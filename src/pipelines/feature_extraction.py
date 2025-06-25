@@ -6,42 +6,38 @@ Handles feature extraction, model training, and evaluation.
 import gc
 import os
 import sys
+from typing import Optional, Any, List, Tuple, Dict
 
 import numpy as np
 import tensorflow as tf
-from sklearn.metrics import classification_report, confusion_matrix, roc_curve, auc, roc_auc_score
-from sklearn.preprocessing import label_binarize
+from sklearn.metrics import classification_report, confusion_matrix
 from tensorflow.keras.backend import clear_session
 
 sys.path.append('..')
 from config import (
     BATCH_SIZE,
     USE_GRAPHIC_PREPROCESSING,
-    USE_DATA_PREPROCESSING,
+    USE_FEATURE_PREPROCESSING,
     USE_FINE_TUNING,
     NUM_KFOLDS,
     CNN_MODEL,
     CLASSICAL_CLASSIFIER_MODEL,
-    NUM_PCA_COMPONENTS,
     RESULTS_DIR,
     USE_DATA_AUGMENTATION,
-    VISUALIZE,
     IMG_SIZE,
-    CLASSIFIER_APPROACH,
     USE_HAIR_REMOVAL,
-    USE_IMAGE_SEGMENTATION,
     USE_ENHANCED_CONTRAST,
     NUM_ITERATIONS,
     USE_FEATURE_AUGMENTATION,
-    NUM_FINAL_MODELS
+    NUM_FINAL_MODELS,
+    FEATURE_PREPROCESSING_PRESET,
 )
 
 from utils.data_loaders import load_paths_labels, resize_image
-from preprocessing.graphic.pipeline import apply_graphic_preprocessing
 from models.cnn_models import get_feature_extractor_model, get_feature_extractor_from_cnn
 from models.classical_models import create_ml_pipeline, tune_hyperparameters, get_default_param_grid, save_model
-from preprocessing.data.data_preprocessing import apply_data_preprocessing
 from utils.fold_utils import save_fold_results
+from preprocessing.feature.pipeline import apply_feature_preprocessing
 
 
 def setup_gpu_memory():
@@ -76,10 +72,9 @@ def create_feature_extraction_directories(base_dir=RESULTS_DIR, cnn_model_name=C
     # Build feature extraction path components based on configuration
     str_hair = "hair_removal_" if USE_HAIR_REMOVAL else ""
     str_contrast = "contrast_" if USE_ENHANCED_CONTRAST else ""
-    str_segmented = "segmentation_" if USE_IMAGE_SEGMENTATION else ""
-    str_graphic = f"{str_segmented}{str_contrast}{str_hair}" if USE_GRAPHIC_PREPROCESSING else ""
+    str_graphic = f"{str_contrast}{str_hair}" if USE_GRAPHIC_PREPROCESSING else ""
     str_augment = "use_augmentation_" if USE_DATA_AUGMENTATION else ""
-    str_preprocess = f"use_data_preprocess_{CLASSIFIER_APPROACH}" if USE_DATA_PREPROCESSING else ""
+    str_preprocess = f"use_feature_preprocessing_" if USE_FEATURE_PREPROCESSING else ""
     str_feature = f"use_feature_augmentation_" if USE_FEATURE_AUGMENTATION else ""
 
     # Create main result directory path
@@ -174,158 +169,7 @@ def create_feature_extraction_directories(base_dir=RESULTS_DIR, cnn_model_name=C
 
     return dirs
 
-def extract_features(feature_extractor, images, batch_size=32):
-    """
-    Extract features from images using a feature extractor model.
-
-    Args:
-        feature_extractor: Feature extractor model.
-        images (numpy.array): Input images.
-        batch_size (int): Batch size for feature extraction.
-
-    Returns:
-        numpy.array: Extracted features.
-    """
-    # Extract features in batches to avoid memory issues
-    num_samples = len(images)
-    num_batches = int(np.ceil(num_samples / batch_size))
-
-    features_list = []
-    for i in range(num_batches):
-        start_idx = i * batch_size
-        end_idx = min((i + 1) * batch_size, num_samples)
-
-        batch_images = images[start_idx:end_idx]
-        batch_features = feature_extractor.predict(batch_images, verbose=0)
-
-        features_list.append(batch_features)
-
-    # Concatenate all features
-    features = np.concatenate(features_list, axis=0)
-    features = features.astype(np.float32)
-
-    return features
-
-
-def extract_and_save_features(feature_extractor, paths, labels=None,
-                              preprocess_fn=None, model_name=CNN_MODEL,
-                              features_save_path=None, apply_augmentation=USE_FEATURE_AUGMENTATION):
-    """
-    Extract features and save them to disk with augmentation metadata.
-
-    Args:
-        feature_extractor: Feature extractor model.
-        paths (numpy.array): Image paths.
-        labels (numpy.array, optional): Image labels.
-        preprocess_fn (callable, optional): Function for image preprocessing.
-        model_name (str): CNN model name for preprocessing.
-        features_save_path (str, optional): Path to save features.
-        apply_augmentation (bool): Whether to apply data augmentation.
-
-    Returns:
-        tuple: (features, labels) if labels is provided, otherwise just features.
-    """
-    print(f"Extracting features from {len(paths)} images...")
-    print(f"Feature augmentation: {'ENABLED' if apply_augmentation else 'DISABLED'}")
-
-    try:
-        # Extract features
-        if labels is not None:
-            features, labels_out = extract_features_from_paths(
-                feature_extractor=feature_extractor,
-                paths=paths,
-                labels=labels,
-                preprocess_fn=preprocess_fn,
-                model_name=model_name,
-                apply_augmentation=apply_augmentation
-            )
-
-            # Calculate augmentation factor if applicable
-            if apply_augmentation and len(features) > len(labels):
-                if len(features) % len(labels) == 0:
-                    augmentation_factor = len(features) // len(labels)
-                    print(f"Features extracted with {augmentation_factor}x augmentation.")
-                else:
-                    print(
-                        f"Warning: Feature count ({len(features)}) is not a clean multiple of label count ({len(labels)})")
-                    augmentation_factor = None
-            else:
-                augmentation_factor = 1  # No effective augmentation
-        else:
-            features = extract_features_from_paths(
-                feature_extractor=feature_extractor,
-                paths=paths,
-                labels=None,
-                preprocess_fn=preprocess_fn,
-                model_name=model_name,
-                apply_augmentation=apply_augmentation
-            )
-            labels_out = None
-            augmentation_factor = None
-
-        # Ensure features are in the correct format
-        if features is None or len(features) == 0:
-            print("WARNING: No features were extracted! This will cause errors.")
-            # Return empty arrays as a fallback instead of None
-            empty_shape = feature_extractor.output_shape[1:]
-            features = np.array([]).reshape((0, *empty_shape))
-            if labels is not None:
-                return features, labels
-            return features
-
-        features = features.astype(np.float32)
-
-        # Save features if path was provided
-        if features_save_path:
-            print(f"Saving features to: {features_save_path}")
-
-            # Create directory if it doesn't exist
-            os.makedirs(os.path.dirname(features_save_path), exist_ok=True)
-
-            # Determine format based on extension
-            if features_save_path.endswith('.npz'):
-                # Save with augmentation metadata
-                if labels_out is not None:
-                    np.savez(
-                        features_save_path,
-                        features=features,
-                        labels=labels_out,
-                        augmentation_enabled=apply_augmentation,
-                        augmentation_factor=augmentation_factor if augmentation_factor is not None else 1,
-                        feature_augmentation_flag='USE_FEATURE_AUGMENTATION'  # Track which flag was used
-                    )
-                else:
-                    np.savez(
-                        features_save_path,
-                        features=features,
-                        augmentation_enabled=apply_augmentation,
-                        augmentation_factor=augmentation_factor if augmentation_factor is not None else 1,
-                        feature_augmentation_flag='USE_FEATURE_AUGMENTATION'
-                    )
-            else:
-                # Default to .npy if extension is not specified
-                if not features_save_path.endswith('.npy'):
-                    features_save_path += '.npy'
-                np.save(features_save_path, features)
-
-        if labels is not None:
-            return features, labels_out if labels_out is not None else labels
-        else:
-            return features
-
-    except Exception as e:
-        print(f"ERROR in extract_and_save_features: {e}")
-        import traceback
-        traceback.print_exc()
-        # Handle the error gracefully by returning empty arrays
-        empty_shape = feature_extractor.output_shape[1:]
-        features = np.array([]).reshape((0, *empty_shape))
-        if labels is not None:
-            return features, labels
-        return features
-
-def extract_features_from_paths(feature_extractor, paths, labels=None,
-                                preprocess_fn=None, model_name=CNN_MODEL,
+def extract_features_from_paths(feature_extractor, paths, labels=None, model_name=CNN_MODEL,
                                 batch_size=BATCH_SIZE, apply_augmentation=USE_FEATURE_AUGMENTATION):
     """
     Extract features from image paths using a feature extractor model.
@@ -335,7 +179,6 @@ def extract_features_from_paths(feature_extractor, paths, labels=None,
         feature_extractor: Feature extractor model.
         paths (numpy.array): Image paths.
         labels (numpy.array, optional): Image labels.
-        preprocess_fn (callable, optional): Function for image preprocessing.
         model_name (str): CNN model name for preprocessing.
         batch_size (int): Batch size for feature extraction.
         apply_augmentation (bool): Whether to apply image augmentation.
@@ -357,10 +200,6 @@ def extract_features_from_paths(feature_extractor, paths, labels=None,
             return None
 
         image = resize_image(image, IMG_SIZE[:2])
-
-        # Apply preprocessing if available
-        if preprocess_fn:
-            image = preprocess_fn(image)
 
         # Convert BGR to RGB
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -540,274 +379,120 @@ def extract_features_from_paths(feature_extractor, paths, labels=None,
         empty_shape = feature_extractor.output_shape[1:]
         return np.array([]).reshape((0, *empty_shape)), np.array([]) if labels is not None else np.array([])
 
-
-def load_or_extract_features(feature_extractor, paths, labels=None,
-                             preprocess_fn=None, model_name=CNN_MODEL,
-                             features_save_path=None, apply_augmentation=USE_FEATURE_AUGMENTATION):
+def load_cached(
+    save_path: str
+) -> Optional[Dict[str, Any]]:
     """
-    Load cached features or extract new ones with improved handling of augmented data.
-
-    Args:
-        feature_extractor: Feature extractor model.
-        paths (numpy.array): Image paths.
-        labels (numpy.array, optional): Image labels.
-        preprocess_fn (callable, optional): Function for image preprocessing.
-        model_name (str): CNN model name for preprocessing.
-        features_save_path (str, optional): Path to save/load features.
-        apply_augmentation (bool): Whether augmentation was applied or should be applied.
-
-    Returns:
-        tuple: (features, labels) if labels is provided, otherwise just features.
+    Tenta carregar um arquivo .npz ou .npy e retorna um dict com:
+      - features: np.ndarray
+      - labels: Optional[np.ndarray]
+      - metadata: dict (flags de pré-processamento e augmentation)
+    Retorna None se o arquivo não existir ou for inválido.
     """
-    if features_save_path is None:
-        print(f"Extracting features from {len(paths)} images...")
-        return extract_features_from_paths(
-            feature_extractor=feature_extractor,
-            paths=paths,
-            labels=labels,
-            preprocess_fn=preprocess_fn,
-            model_name=model_name,
-            apply_augmentation=apply_augmentation
+    if not save_path or not os.path.exists(save_path):
+        return None
+
+    try:
+        if save_path.endswith(".npz"):
+            data = np.load(save_path, allow_pickle=True)
+            return {
+                "features": data["features"].astype(np.float32),
+                "labels": data.get("labels", None),
+                "metadata": {
+                    "augmentation_enabled": bool(data.get("augmentation_enabled", False)),
+                },
+            }
+
+        elif save_path.endswith(".npy"):
+            arr = np.load(save_path)
+            return {
+                "features": arr.astype(np.float32),
+                "labels": None,
+                "metadata": {"augmentation_enabled": None},
+            }
+
+    except Exception:
+        # arquivo corrupto ou formato inesperado
+        return None
+
+
+def save_cache(
+    save_path: str,
+    features: np.ndarray,
+    labels: Optional[np.ndarray],
+    raw_features: np.ndarray,
+    aug_enabled: bool,
+    pipeline: Any
+) -> None:
+    """
+    Salva num .npz (ou .npy) os arrays + metadados de preprocessing.
+    """
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+    if save_path.endswith(".npz"):
+        to_save = {
+            "features": features,
+            "raw_features": raw_features,
+            "augmentation_enabled": aug_enabled,
+        }
+        if labels is not None:
+            to_save["labels"] = labels
+        if pipeline is not None:
+            to_save["preprocessing_info"] = pipeline.get_feature_info()
+        np.savez(save_path, **to_save)
+
+    else:
+        np.save(save_path, features)
+
+def load_or_extract_features(
+    feature_extractor,
+    paths: List[str],
+    labels: Optional[np.ndarray] = None,
+    model_name: Optional[str] = None,
+    features_save_path: Optional[str] = None,
+    apply_augmentation: bool = False,
+) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+    """
+    Carrega do cache ou extrai features, e aplica pré-processamento avançado se configurado.
+    """
+    # 1) Se não há path de salvamento, extrai e retorna
+    if not features_save_path:
+        print(f"Extracting {len(paths)} features (no cache)...")
+        feats, labs = extract_features_from_paths(
+            feature_extractor, paths, labels, model_name, BATCH_SIZE, apply_augmentation
         )
+        return feats, labs
 
-        # Try to load cached features if file exists
-    if os.path.exists(features_save_path):
-        print(f"Loading cached features from: {features_save_path}")
-        try:
-            # Try to load based on file extension
-            if features_save_path.endswith('.npz'):
-                features_data = np.load(features_save_path, allow_pickle=True)
+    # 2) Tenta carregar cache
+    cache = load_cached(features_save_path)
+    if cache:
+        feats = cache["features"]
+        labs = cache.get("labels") if cache.get("labels") is not None else labels
+        print("Using cached features as-is")
+        return feats, labs
 
-                # Check if it's an NPZ file with the expected keys
-                if isinstance(features_data, np.lib.npyio.NpzFile) and 'features' in features_data:
-                    features = features_data['features'].astype(np.float32)
-
-                    # Check if the file contains labels
-                    if 'labels' in features_data:
-                        saved_labels = features_data['labels']
-                    else:
-                        saved_labels = None
-
-                    # Check if the file contains augmentation metadata
-                    if 'augmentation_enabled' in features_data:
-                        cached_augmentation = bool(features_data['augmentation_enabled'])
-                        print(f"Cache metadata: augmentation_enabled={cached_augmentation}")
-                    else:
-                        cached_augmentation = None  # Unknown
-
-                    if 'augmentation_factor' in features_data:
-                        cached_aug_factor = int(features_data['augmentation_factor'])
-                        print(f"Cache metadata: augmentation_factor={cached_aug_factor}x")
-                    else:
-                        cached_aug_factor = None  # Unknown
-
-                    # Check feature consistency
-                    if features.ndim != 2:
-                        print(f"Warning: Cached features have unexpected shape: {features.shape}. Re-extracting...")
-                        return extract_and_save_features(
-                            feature_extractor, paths, labels, preprocess_fn, model_name,
-                            features_save_path, apply_augmentation
-                        )
-
-                    # Check if augmentation settings match
-                    if cached_augmentation is not None and cached_augmentation != apply_augmentation:
-                        print(f"Augmentation mismatch: cached={cached_augmentation}, requested={apply_augmentation}")
-                        print("Re-extracting features with correct augmentation settings...")
-                        return extract_and_save_features(
-                            feature_extractor, paths, labels, preprocess_fn, model_name,
-                            features_save_path, apply_augmentation
-                        )
-
-                    # Check if labels match (if provided)
-                    if labels is not None and saved_labels is not None:
-                        if len(labels) != len(saved_labels):
-                            # Check if the difference could be due to augmentation
-                            if len(saved_labels) > len(labels) and len(saved_labels) % len(labels) == 0:
-                                detected_aug_factor = len(saved_labels) // len(labels)
-                                print(f"Detected augmentation factor: {detected_aug_factor}x")
-
-                                # Determine if this matches our current augmentation settings
-                                if apply_augmentation:
-                                    print(f"Current settings use augmentation, consistent with cached features.")
-                                    return features, saved_labels
-                                else:
-                                    print("Current settings don't use augmentation, but cached features do.")
-                                    print("Re-extracting features to match current settings...")
-                                    return extract_and_save_features(
-                                        feature_extractor, paths, labels, preprocess_fn,
-                                        model_name, features_save_path, apply_augmentation
-                                    )
-                            else:
-                                print(f"Label count mismatch: Current={len(labels)}, Cached={len(saved_labels)}")
-                                print("Re-extracting features...")
-                                return extract_and_save_features(
-                                    feature_extractor, paths, labels, preprocess_fn,
-                                    model_name, features_save_path, apply_augmentation
-                                )
-                        elif not np.array_equal(labels, saved_labels):
-                            # Labels differ - check if it's just ordering or actual difference
-                            print("Labels differ. Re-extracting features...")
-                            return extract_and_save_features(
-                                feature_extractor, paths, labels, preprocess_fn,
-                                model_name, features_save_path, apply_augmentation
-                            )
-                        else:
-                            print("Labels match exactly! Using cached features.")
-
-                        # If we reach here, labels match exactly, so return features and labels
-                        return features, labels
-                    else:
-                        # No current labels or no saved labels
-                        if labels is None and saved_labels is not None:
-                            print("No labels provided, using cached features and labels.")
-                            return features, saved_labels
-                        elif labels is not None and saved_labels is None:
-                            print("Cached features have no labels. Using current labels.")
-                            return features, labels
-                        else:
-                            print("Both current and cached have no labels.")
-                            return features
-                else:
-                    print("Warning: NPZ file format is not as expected. Re-extracting features...")
-                    return extract_and_save_features(
-                        feature_extractor, paths, labels, preprocess_fn,
-                        model_name, features_save_path, apply_augmentation
-                    )
-
-            elif features_save_path.endswith('.npy'):
-                features = np.load(features_save_path, allow_pickle=False)
-                features = features.astype(np.float32)
-
-                # Check basic consistency
-                if features.ndim != 2:
-                    print(f"Warning: Cached features have unexpected shape: {features.shape}. Re-extracting...")
-                    return extract_and_save_features(
-                        feature_extractor, paths, labels, preprocess_fn,
-                        model_name, features_save_path, apply_augmentation
-                    )
-
-                # Cannot check augmentation settings with .npy files
-                print("Warning: .npy files don't store augmentation metadata. Consider using .npz format.")
-
-                if labels is not None:
-                    if len(features) != len(labels) and apply_augmentation and len(features) > len(labels):
-                        if len(features) % len(labels) == 0:
-                            augmentation_factor = len(features) // len(labels)
-                            print(f"Detected augmentation factor in .npy file: {augmentation_factor}x")
-                            print("Using cached features with current labels.")
-                            return features, labels
-                        else:
-                            print(f"Warning: Feature/label count mismatch. Re-extracting...")
-                            return extract_and_save_features(
-                                feature_extractor, paths, labels, preprocess_fn,
-                                model_name, features_save_path, apply_augmentation
-                            )
-                    elif len(features) != len(labels):
-                        print(f"Warning: Feature/label count mismatch. Re-extracting...")
-                        return extract_and_save_features(
-                            feature_extractor, paths, labels, preprocess_fn,
-                            model_name, features_save_path, apply_augmentation
-                        )
-                    return features, labels
-                return features
-
-            else:
-                print(f"Unsupported feature file extension: {features_save_path}. Re-extracting features...")
-                return extract_and_save_features(
-                    feature_extractor, paths, labels, preprocess_fn,
-                    model_name, features_save_path, apply_augmentation
-                )
-
-        except Exception as e:
-            print(f"Error loading cached features: {e}. Re-extracting...")
-            return extract_and_save_features(
-                feature_extractor, paths, labels, preprocess_fn,
-                model_name, features_save_path, apply_augmentation
-            )
-
-        # If we reach here, the file doesn't exist
-    print(f"No cached features found at {features_save_path}. Extracting...")
-    return extract_and_save_features(
-        feature_extractor, paths, labels, preprocess_fn,
-        model_name, features_save_path, apply_augmentation
+    # 3) Cache não encontrado ou inválido → extrai do zero
+    print(f"Extracting {len(paths)} features...")
+    raw_feats, out_labels = extract_features_from_paths(
+        feature_extractor, paths, labels, model_name, BATCH_SIZE, apply_augmentation
     )
 
+    if raw_feats.size == 0:
+        print("No features extracted!")
+        return raw_feats, out_labels
 
-def augment_features_with_balanced_sampling(features, labels, target_count=None):
-    """
-    Create a balanced dataset by augmenting features from underrepresented classes.
-
-    Args:
-        features (numpy.array): Feature matrix.
-        labels (numpy.array): Target labels.
-        target_count (int, optional): Target count for each class. If None, uses the largest class count.
-
-    Returns:
-        tuple: (balanced_features, balanced_labels)
-    """
-    # Count samples in each class
-    unique_classes = np.unique(labels)
-    class_counts = {cls: np.sum(labels == cls) for cls in unique_classes}
-
-    # Set target count to the largest class if not specified
-    if target_count is None:
-        target_count = max(class_counts.values())
-
-    balanced_features = []
-    balanced_labels = []
-
-    # Process each class
-    for cls in unique_classes:
-        # Get indices for this class
-        cls_indices = np.where(labels == cls)[0]
-        cls_features = features[cls_indices]
-        cls_labels = labels[cls_indices]
-
-        # If class already has enough samples, just take the original samples
-        if len(cls_indices) >= target_count:
-            balanced_features.append(cls_features[:target_count])
-            balanced_labels.append(cls_labels[:target_count])
-        else:
-            # Need to augment this class
-            # First include all original samples
-            aug_features = list(cls_features)
-            aug_labels = list(cls_labels)
-
-            # Use random oversampling with small Gaussian noise
-            while len(aug_features) < target_count:
-                idx = np.random.randint(0, len(cls_features))
-                feat = cls_features[idx]
-
-                # Add small Gaussian noise to create synthetic sample
-                noise = np.random.normal(0, 0.01, size=feat.shape)
-                synth_feat = feat + noise
-
-                aug_features.append(synth_feat)
-                aug_labels.append(cls)
-
-            balanced_features.append(np.array(aug_features[:target_count]))
-            balanced_labels.append(np.array(aug_labels[:target_count]))
-
-    # Concatenate all classes
-    balanced_features = np.concatenate(balanced_features, axis=0)
-    balanced_labels = np.concatenate(balanced_labels, axis=0)
-
-    balanced_features = balanced_features.astype(np.float32)
-
-    # Shuffle the balanced dataset
-    shuffle_indices = np.random.permutation(len(balanced_features))
-    balanced_features = balanced_features[shuffle_indices]
-    balanced_labels = balanced_labels[shuffle_indices]
-
-    return balanced_features, balanced_labels
-
+    # 5) Salvamento
+    save_cache(
+        features_save_path, raw_feats, out_labels,
+        raw_feats, apply_augmentation, None
+    )
+    return raw_feats, out_labels
 
 def train_and_evaluate_classical_model(train_features, train_labels,
                                        val_features, val_labels,
                                        classifier_name=CLASSICAL_CLASSIFIER_MODEL,
-                                       use_pca=True, n_components=NUM_PCA_COMPONENTS,
-                                       tune_hyperparams=True, result_dir=None,
-                                       model_save_path=None, class_weights=None):
+                                       tune_hyperparams=True,
+                                       model_save_path=None):
     """
     Train and evaluate a classical ML model on extracted features.
 
@@ -817,12 +502,8 @@ def train_and_evaluate_classical_model(train_features, train_labels,
         val_features (numpy.array): Validation feature matrix.
         val_labels (numpy.array): Validation labels.
         classifier_name (str): Name of the classifier.
-        use_pca (bool): Whether to use PCA for dimensionality reduction.
-        n_components (int, optional): Number of PCA components.
         tune_hyperparams (bool): Whether to tune hyperparameters.
-        result_dir (str, optional): Directory to save results.
         model_save_path (str, optional): Path to save the trained model.
-        class_weights (dict, optional): Dictionary mapping class indices to weights.
 
     Returns:
         tuple: (model, evaluation_results)
@@ -834,9 +515,7 @@ def train_and_evaluate_classical_model(train_features, train_labels,
 
     # Create ML pipeline
     pipeline = create_ml_pipeline(
-        classifier_name=classifier_name,
-        use_pca=use_pca,
-        n_components=n_components
+        classifier_name=classifier_name
     )
 
     # Tune hyperparameters if requested
@@ -844,86 +523,29 @@ def train_and_evaluate_classical_model(train_features, train_labels,
         print("Tuning hyperparameters...")
         param_grid = get_default_param_grid(classifier_name)
 
-        # Add class weight options for tree-based models if class weights are provided
-        if class_weights is not None and classifier_name in ["RandomForest", "ExtraTrees", "AdaBoost"]:
-            if "classifier__class_weight" not in param_grid:
-                param_grid["classifier__class_weight"] = ['balanced', None]
-
         grid_search = tune_hyperparameters(
             pipeline=pipeline,
             X=train_features,
             y=train_labels,
             param_grid=param_grid,
-            cv=5,
-            class_weights=class_weights
+            cv=5
         )
 
         # Use best model
         model = grid_search.best_estimator_
     else:
-        # If class weights are provided and we're not tuning hyperparameters
-        if class_weights is not None:
-            # Get the classifier from the pipeline
-            if hasattr(pipeline, 'named_steps') and 'classifier' in pipeline.named_steps:
-                classifier = pipeline.named_steps['classifier']
+        model = pipeline
+        model.fit(train_features, train_labels)
 
-                # Train the preprocessing steps
-                if hasattr(pipeline, "steps") and len(pipeline.steps) > 1:
-                    for name, transform in pipeline.steps[:-1]:  # All steps except classifier
-                        if hasattr(transform, "fit"):
-                            train_features = transform.fit_transform(train_features, train_labels)
-
-                # Check if classifier supports sample weights
-                if hasattr(classifier, 'fit') and 'sample_weight' in classifier.fit.__code__.co_varnames:
-                    # Create sample weights from class weights
-                    sample_weights = np.array([class_weights[label] for label in train_labels])
-                    classifier.fit(train_features, train_labels, sample_weight=sample_weights)
-                    print("Training with sample weights based on class imbalance")
-                else:
-                    # If sample_weight not supported, try to set class_weight attribute
-                    if hasattr(classifier, 'class_weight'):
-                        classifier.class_weight = class_weights
-                        print("Setting class_weight parameter")
-                    classifier.fit(train_features, train_labels)
-
-                model = pipeline
-            else:
-                # Fall back to regular pipeline fit
-                model = pipeline
-                model.fit(train_features, train_labels)
-        else:
-            # Train model with default parameters
-            model = pipeline
-            model.fit(train_features, train_labels)
-
-    # Save model if path is provided
     if model_save_path:
         save_model(model, model_save_path)
 
-    # Evaluate on validation set
     val_pred = model.predict(val_features)
 
-    # Calculate metrics
     report = classification_report(val_labels, val_pred, output_dict=True)
 
-    # Print classification report
     print("\nValidation Set Classification Report:")
     print(classification_report(val_labels, val_pred))
-
-    # Plot confusion matrix if result directory is provided
-    if result_dir:
-        if hasattr(model, 'named_steps') and 'classifier' in model.named_steps:
-            classifier = model.named_steps['classifier']
-            if hasattr(classifier, 'feature_importances_'):
-                fi_plot_path = os.path.join(result_dir, "plots", "feature_importance.png")
-
-                # Get feature names or indices
-                if hasattr(model, 'named_steps') and 'pca' in model.named_steps:
-                    # For PCA, feature names are PCA components
-                    feature_names = [f"PC{i + 1}" for i in range(len(classifier.feature_importances_))]
-                else:
-                    # Otherwise, use feature indices
-                    feature_names = [f"Feature {i + 1}" for i in range(len(classifier.feature_importances_))]
 
     # Evaluation results
     evaluation_results = {
@@ -957,17 +579,6 @@ def run_kfold_feature_extraction(all_paths, all_labels, dirs, class_names=None):
     # Create feature extraction directory
     features_by_fold_dir = dirs['features_by_fold']
     os.makedirs(features_by_fold_dir, exist_ok=True)
-
-    # Define preprocessing function
-    preprocess_fn = None
-    if USE_GRAPHIC_PREPROCESSING:
-        preprocess_fn = lambda img: apply_graphic_preprocessing(
-            img,
-            use_hair_removal=USE_HAIR_REMOVAL,
-            use_contrast_enhancement=USE_ENHANCED_CONTRAST,
-            use_segmentation=USE_IMAGE_SEGMENTATION,
-            visualize=False
-        )
 
     feature_extractor, _ = get_feature_extractor_model(
         model_name=CNN_MODEL,
@@ -1021,7 +632,6 @@ def run_kfold_feature_extraction(all_paths, all_labels, dirs, class_names=None):
                 feature_extractor=feature_extractor,
                 paths=train_paths,
                 labels=train_labels,
-                preprocess_fn=preprocess_fn,
                 model_name=CNN_MODEL,
                 features_save_path=train_features_path,
                 apply_augmentation=USE_FEATURE_AUGMENTATION
@@ -1031,7 +641,6 @@ def run_kfold_feature_extraction(all_paths, all_labels, dirs, class_names=None):
                 feature_extractor=feature_extractor,
                 paths=val_paths,
                 labels=val_labels,
-                preprocess_fn=preprocess_fn,
                 model_name=CNN_MODEL,
                 features_save_path=val_features_path,
             )
@@ -1080,7 +689,7 @@ def run_kfold_feature_extraction(all_paths, all_labels, dirs, class_names=None):
     return fold_features
 
 
-def run_model_training_by_fold(fold_features, result_dir, tune_hyperparams=True, class_names=None):
+def run_model_training_by_fold(fold_features, result_dir, tune_hyperparams=True):
     """
     Train classical models using pre-extracted features for each fold.
 
@@ -1088,7 +697,6 @@ def run_model_training_by_fold(fold_features, result_dir, tune_hyperparams=True,
         fold_features (dict): Dictionary with fold-specific feature paths from run_kfold_feature_extraction
         result_dir (str): Directory to save results
         tune_hyperparams (bool): Whether to tune hyperparameters
-        class_names (list, optional): List of class names
 
     Returns:
         dict: Dictionary with training results
@@ -1155,59 +763,49 @@ def run_model_training_by_fold(fold_features, result_dir, tune_hyperparams=True,
 
             # Load features
             print(f"Loading training features from: {train_features_path}")
-            train_data = np.load(train_features_path, allow_pickle=True)
-            train_features = train_data['features'].astype(np.float32)
-            train_labels = train_data['labels']
+            train_data     = np.load(train_features_path, allow_pickle=True)
+            train_raw      = train_data['features'].astype(np.float32)
+            train_labels   = train_data['labels']
 
             print(f"Loading validation features from: {val_features_path}")
-            val_data = np.load(val_features_path, allow_pickle=True)
-            val_features = val_data['features'].astype(np.float32)
-            val_labels = val_data['labels']
+            val_data       = np.load(val_features_path, allow_pickle=True)
+            val_raw        = val_data['features'].astype(np.float32)
+            val_labels     = val_data['labels']
+
+            if USE_FEATURE_PREPROCESSING:
+                # 1) fit on train, *and* get back the fitted pipeline
+                train_proc, feat_pipe = apply_feature_preprocessing(
+                    features        = train_raw,
+                    labels          = train_labels,
+                    preset          = FEATURE_PREPROCESSING_PRESET,
+                    training        = True,
+                    save_path       = None
+                )
+                # 2) transform valid with the very same pipeline
+                val_proc = feat_pipe.transform(val_raw)
+            else:
+                train_proc, val_proc = train_raw, val_raw
 
             # Print data shapes
-            print(f"Training features shape: {train_features.shape}")
-            print(f"Validation features shape: {val_features.shape}")
+            print(f"Training features shape: {train_proc.shape}")
+            print(f"Validation features shape: {val_proc.shape}")
             print(f"Training class distribution: {np.bincount(train_labels)}")
             print(f"Validation class distribution: {np.bincount(val_labels)}")
-
-            # Apply data preprocessing if enabled
-            class_weights = None
-            if USE_DATA_PREPROCESSING:
-                print(f"Applying data preprocessing to iteration {iteration}, fold {fold} training data...")
-
-                if CLASSIFIER_APPROACH == "class_weight":
-                    train_features, train_labels, class_weights = apply_data_preprocessing(
-                        features=train_features,
-                        labels=train_labels,
-                        method="class_weight",
-                        random_state=42 + iteration * NUM_KFOLDS + fold
-                    )
-                elif CLASSIFIER_APPROACH in ["hybrid", "undersampling", "smote"]:
-                    train_features, train_labels, _ = apply_data_preprocessing(
-                        features=train_features,
-                        labels=train_labels,
-                        method=CLASSIFIER_APPROACH,
-                        random_state=42 + iteration * NUM_KFOLDS + fold
-                    )
 
             # Train model
             try:
                 model, evaluation = train_and_evaluate_classical_model(
-                    train_features=train_features,
+                    train_features=train_proc,
                     train_labels=train_labels,
-                    val_features=val_features,
+                    val_features=val_proc,
                     val_labels=val_labels,
                     classifier_name=CLASSICAL_CLASSIFIER_MODEL,
-                    use_pca=(NUM_PCA_COMPONENTS is not None),
-                    n_components=NUM_PCA_COMPONENTS,
                     tune_hyperparams=tune_hyperparams,
-                    result_dir=fold_dir,
-                    model_save_path=model_save_path,
-                    class_weights=class_weights
+                    model_save_path=model_save_path
                 )
 
                 # Get predictions
-                val_pred = model.predict(val_features)
+                val_pred = model.predict(val_proc)
 
                 # Add to iteration predictions
                 iteration_y_true.extend(val_labels)
@@ -1227,10 +825,6 @@ def run_model_training_by_fold(fold_features, result_dir, tune_hyperparams=True,
                     # Store hyperparameters and configuration
                     hyperparameters = {
                         'classifier_name': CLASSICAL_CLASSIFIER_MODEL,
-                        'use_pca': (NUM_PCA_COMPONENTS is not None),
-                        'n_components': NUM_PCA_COMPONENTS,
-                        'class_weights': class_weights,
-                        'preprocessing_approach': CLASSIFIER_APPROACH if USE_DATA_PREPROCESSING else None,
                         'model_params': model_params
                     }
 
@@ -1261,7 +855,7 @@ def run_model_training_by_fold(fold_features, result_dir, tune_hyperparams=True,
                 continue
 
             # Clean up
-            del train_features, val_features, train_labels, val_labels, model
+            del train_proc, val_proc, train_labels, val_labels, model
             gc.collect()
 
         # Calculate overall metrics for this iteration
@@ -1301,14 +895,10 @@ def run_model_training_by_fold(fold_features, result_dir, tune_hyperparams=True,
     # Save results to a text file
     with open(os.path.join(result_dir, "overall_results.txt"), "w") as f:
         f.write(f"Classifier: {CLASSICAL_CLASSIFIER_MODEL}\n")
-        f.write(f"Use PCA: {NUM_PCA_COMPONENTS is not None}\n")
-        f.write(f"PCA Components: {NUM_PCA_COMPONENTS}\n")
         f.write(f"Tune Hyperparameters: {tune_hyperparams}\n")
         f.write(f"Number of Folds: {NUM_KFOLDS}\n")
         f.write(f"Number of Iterations: {len(fold_features['iterations'])}\n")
-        f.write(f"Use Data Preprocessing: {USE_DATA_PREPROCESSING}\n")
-        if USE_DATA_PREPROCESSING:
-            f.write(f"Preprocessing Method: {CLASSIFIER_APPROACH}\n\n")
+        f.write(f"Use Feature Preprocessing: {USE_FEATURE_PREPROCESSING}\n")
 
         f.write("Overall Classification Report (All Iterations):\n")
         f.write(classification_report(all_y_true, all_y_pred))
@@ -1324,10 +914,11 @@ def run_model_training_by_fold(fold_features, result_dir, tune_hyperparams=True,
     }
 
 
-def run_kfold_cross_validation(all_features, all_labels,
+def run_kfold_cross_validation(all_features,
+                               all_labels,
                                classifier_name=CLASSICAL_CLASSIFIER_MODEL,
-                               use_pca=True, n_components=NUM_PCA_COMPONENTS,
-                               tune_hyperparams=False, result_dir=None):
+                               tune_hyperparams=False,
+                               result_dir=None):
     """
     Run K-fold cross-validation for a classical ML model.
 
@@ -1335,8 +926,6 @@ def run_kfold_cross_validation(all_features, all_labels,
         all_features (numpy.array): Feature matrix.
         all_labels (numpy.array): Target labels.
         classifier_name (str): Name of the classifier.
-        use_pca (bool): Whether to use PCA for dimensionality reduction.
-        n_components (int, optional): Number of PCA components.
         tune_hyperparams (bool): Whether to tune hyperparameters.
         result_dir (str, optional): Directory to save results.
 
@@ -1428,46 +1017,9 @@ def run_kfold_cross_validation(all_features, all_labels,
             else:
                 fold_dir = None
 
-            # Handle class imbalance based on the approach specified in config
-            class_weights = None
-            if USE_DATA_PREPROCESSING:
-                print(f"Applying data preprocessing to iteration {iteration + 1}, fold {fold + 1} training data...")
-
-                if CLASSIFIER_APPROACH == "class_weight":
-                    train_features, train_labels, class_weights = apply_data_preprocessing(
-                        features=train_features,
-                        labels=train_labels,
-                        method="class_weight",
-                        random_state=42 + iteration * NUM_KFOLDS + fold
-                        # Different random state for each fold and iteration
-                    )
-                elif CLASSIFIER_APPROACH == "hybrid":
-                    train_features, train_labels, _ = apply_data_preprocessing(
-                        features=train_features,
-                        labels=train_labels,
-                        method="hybrid",
-                        random_state=42 + iteration * NUM_KFOLDS + fold
-                    )
-                elif CLASSIFIER_APPROACH == "undersampling":
-                    train_features, train_labels, _ = apply_data_preprocessing(
-                        features=train_features,
-                        labels=train_labels,
-                        method="undersampling",
-                        random_state=42 + iteration * NUM_KFOLDS + fold
-                    )
-                else:  # Default to original SMOTE approach
-                    train_features, train_labels, _ = apply_data_preprocessing(
-                        features=train_features,
-                        labels=train_labels,
-                        method="smote",
-                        random_state=42 + iteration * NUM_KFOLDS + fold
-                    )
-
             # Create ML pipeline
             pipeline = create_ml_pipeline(
-                classifier_name=classifier_name,
-                use_pca=use_pca,
-                n_components=n_components
+                classifier_name=classifier_name
             )
 
             try:
@@ -1475,59 +1027,17 @@ def run_kfold_cross_validation(all_features, all_labels,
                 if tune_hyperparams:
                     print(f"Tuning hyperparameters for iteration {iteration + 1}, fold {fold + 1}...")
                     param_grid = get_default_param_grid(classifier_name)
-
-                    # Add class weight options for tree-based models
-                    if class_weights is not None and classifier_name in ["RandomForest", "ExtraTrees", "AdaBoost"]:
-                        if "classifier__class_weight" not in param_grid:
-                            param_grid["classifier__class_weight"] = ['balanced', None]
-
                     grid_search = tune_hyperparameters(
                         pipeline=pipeline,
                         X=train_features,
                         y=train_labels,
                         param_grid=param_grid,
-                        cv=3,  # Smaller CV for speed
-                        class_weights=class_weights
+                        cv=3,
                     )
-
-                    # Use best model
                     fold_model = grid_search.best_estimator_
                 else:
-                    # Regular training with or without class weights
-                    if class_weights is not None:
-                        # Get the classifier from the pipeline
-                        if hasattr(pipeline, 'named_steps') and 'classifier' in pipeline.named_steps:
-                            classifier = pipeline.named_steps['classifier']
-
-                            # Train the preprocessing steps
-                            if hasattr(pipeline, "steps") and len(pipeline.steps) > 1:
-                                for name, transform in pipeline.steps[:-1]:  # All steps except classifier
-                                    if hasattr(transform, "fit"):
-                                        train_features = transform.fit_transform(train_features, train_labels)
-
-                            # Check if classifier supports sample weights
-                            if hasattr(classifier, 'fit') and 'sample_weight' in classifier.fit.__code__.co_varnames:
-                                # Create sample weights from class weights
-                                sample_weights = np.array([class_weights[label] for label in train_labels])
-                                classifier.fit(train_features, train_labels, sample_weight=sample_weights)
-                                print(
-                                    f"Iteration {iteration + 1}, Fold {fold + 1}: Training with sample weights based on class imbalance")
-                            else:
-                                # If sample_weight not supported, try to set class_weight attribute
-                                if hasattr(classifier, 'class_weight'):
-                                    classifier.class_weight = class_weights
-                                    print(f"Iteration {iteration + 1}, Fold {fold + 1}: Setting class_weight parameter")
-                                classifier.fit(train_features, train_labels)
-
-                            fold_model = pipeline
-                        else:
-                            # Fall back to regular pipeline fit
-                            pipeline.fit(train_features, train_labels)
-                            fold_model = pipeline
-                    else:
-                        # Train model with default parameters
-                        pipeline.fit(train_features, train_labels)
-                        fold_model = pipeline
+                    pipeline.fit(train_features, train_labels)
+                    fold_model = pipeline
 
                 # Save model if path is provided
                 if model_save_path:
@@ -1560,10 +1070,6 @@ def run_kfold_cross_validation(all_features, all_labels,
                     # Store core configuration
                     hyperparameters = {
                         'classifier_name': classifier_name,
-                        'use_pca': use_pca,
-                        'n_components': n_components,
-                        'class_weights': class_weights,
-                        'preprocessing_approach': CLASSIFIER_APPROACH if USE_DATA_PREPROCESSING else None,
                         'model_params': model_params
                     }
 
@@ -1573,7 +1079,7 @@ def run_kfold_cross_validation(all_features, all_labels,
                         'accuracy': report['accuracy'],
                         'macro_avg_f1': report['macro avg']['f1-score'],
                         'model_path': model_save_path,
-                        'model': fold_model,  # Keep reference to the model object itself
+                        'model': fold_model,
                         'hyperparameters': hyperparameters
                     }
 
@@ -1660,14 +1166,10 @@ def run_kfold_cross_validation(all_features, all_labels,
     if result_dir:
         with open(os.path.join(result_dir, "overall_results.txt"), "w") as f:
             f.write(f"Classifier: {classifier_name}\n")
-            f.write(f"Use PCA: {use_pca}\n")
-            f.write(f"PCA Components: {n_components}\n")
             f.write(f"Tune Hyperparameters: {tune_hyperparams}\n")
             f.write(f"Number of Folds: {NUM_KFOLDS}\n")
             f.write(f"Number of Iterations: {NUM_ITERATIONS}\n")
-            f.write(f"Use Data Preprocessing: {USE_DATA_PREPROCESSING}\n")
-            if USE_DATA_PREPROCESSING:
-                f.write(f"Preprocessing Method: {CLASSIFIER_APPROACH}\n\n")
+            f.write(f"Use Feature Preprocessing: {USE_FEATURE_PREPROCESSING}\n")
 
             f.write("Average Metrics Across All Iterations:\n")
             f.write(f"Accuracy: {overall_avg_accuracy:.4f}\n")
@@ -1697,172 +1199,9 @@ def run_kfold_cross_validation(all_features, all_labels,
         'result_dir': result_dir
     }
 
-
-def train_final_feature_extraction_model(all_features, all_labels, best_hyperparameters,
-                                         result_dir, class_names=None, feature_extractor=None,
-                                         all_paths=None, all_labels_orig=None, preprocess_fn=None):
-    """
-    Train a final classical ML model on all training data using the best hyperparameters.
-    Can either use pre-extracted features or extract features on demand.
-
-    Args:
-        all_features: Combined training and validation features (can be None if paths provided)
-        all_labels: Combined training and validation labels (can be None if paths provided)
-        best_hyperparameters: Best hyperparameters found during cross-validation
-        result_dir: Directory to save results
-        class_names: List of class names
-        feature_extractor: Feature extractor model (required if all_features is None)
-        all_paths: Combined training and validation paths (required if all_features is None)
-        all_labels_orig: Original labels for paths (required if all_features is None)
-        preprocess_fn: Image preprocessing function
-
-    Returns:
-        Final trained model and evaluation results
-    """
-    print("\n" + "=" * 60)
-    print("Training Final Classical ML Model on All Training Data")
-    print("=" * 60)
-
-    # Create final model directory
-    final_model_dir = os.path.join(result_dir, CLASSICAL_CLASSIFIER_MODEL.lower(), "final_model")
-    os.makedirs(final_model_dir, exist_ok=True)
-    os.makedirs(os.path.join(final_model_dir, "plots"), exist_ok=True)
-
-    # Final model save path
-    final_model_path = os.path.join(final_model_dir, "final_ml_model.joblib")
-
-    # Extract hyperparameters
-    classifier_name = best_hyperparameters['classifier_name']
-    use_pca = best_hyperparameters['use_pca']
-    n_components = best_hyperparameters['n_components']
-    initial_class_weights = best_hyperparameters.get('class_weights', None)
-
-    # If features are not provided, extract them
-    if all_features is None:
-        if feature_extractor is None or all_paths is None or all_labels_orig is None:
-            raise ValueError("Must provide either all_features and all_labels OR "
-                             "feature_extractor, all_paths, and all_labels_orig")
-
-        # Path for combined features
-        combined_features_path = os.path.join(
-            result_dir,
-            "features",
-            "training_features.npz"
-        )
-
-        # Extract features from all data
-        print("Extracting features for final model training...")
-        all_features, all_labels = load_or_extract_features(
-            feature_extractor=feature_extractor,
-            paths=all_paths,
-            labels=all_labels_orig,
-            preprocess_fn=preprocess_fn,
-            model_name=CNN_MODEL,
-            features_save_path=combined_features_path
-        )
-
-    # Ensure features are the right type
-    all_features = all_features.astype(np.float32)
-
-    # Apply data preprocessing if it was used in the best model
-    class_weights = initial_class_weights
-    if best_hyperparameters['preprocessing_approach'] is not None:
-        print(f"Applying {best_hyperparameters['preprocessing_approach']} preprocessing to all training data...")
-        preprocessed_features, preprocessed_labels, new_class_weights = apply_data_preprocessing(
-            features=all_features,
-            labels=all_labels,
-            method=best_hyperparameters['preprocessing_approach'],
-            random_state=42
-        )
-
-        if best_hyperparameters['preprocessing_approach'] == "class_weight":
-            class_weights = new_class_weights
-    else:
-        preprocessed_features = all_features
-        preprocessed_labels = all_labels
-
-    # Create ML pipeline with best configuration
-    pipeline = create_ml_pipeline(
-        classifier_name=classifier_name,
-        use_pca=use_pca,
-        n_components=n_components
-    )
-
-    # If we have the model_params, try to set them directly
-    if 'model_params' in best_hyperparameters and best_hyperparameters['model_params']:
-        try:
-            # Set parameters for the classifier in the pipeline
-            if hasattr(pipeline, 'named_steps') and 'classifier' in pipeline.named_steps:
-                classifier = pipeline.named_steps['classifier']
-                relevant_params = {k.replace('classifier__', ''): v for k, v in
-                                   best_hyperparameters['model_params'].items()
-                                   if k.startswith('classifier__')}
-                classifier.set_params(**relevant_params)
-        except Exception as e:
-            print(f"Warning: Could not set all model parameters: {e}")
-
-    # Train the model on all data
-    print(f"Training final model on all {len(preprocessed_features)} samples...")
-
-    # Handle class weights if they were used
-    if class_weights is not None:
-        # Check if the classifier supports sample weights
-        if hasattr(pipeline, 'named_steps') and 'classifier' in pipeline.named_steps:
-            classifier = pipeline.named_steps['classifier']
-
-            # Train the preprocessing steps
-            if hasattr(pipeline, "steps") and len(pipeline.steps) > 1:
-                for name, transform in pipeline.steps[:-1]:  # All steps except classifier
-                    if hasattr(transform, "fit"):
-                        preprocessed_features = transform.fit_transform(preprocessed_features, preprocessed_labels)
-
-            # Check if classifier supports sample weights
-            if hasattr(classifier, 'fit') and 'sample_weight' in classifier.fit.__code__.co_varnames:
-                # Create sample weights from class weights
-                sample_weights = np.array([class_weights[label] for label in preprocessed_labels])
-                classifier.fit(preprocessed_features, preprocessed_labels, sample_weight=sample_weights)
-                print("Training with sample weights based on class imbalance")
-            else:
-                # If sample_weight not supported, try to set class_weight attribute
-                if hasattr(classifier, 'class_weight'):
-                    classifier.class_weight = class_weights
-                    print("Setting class_weight parameter")
-                classifier.fit(preprocessed_features, preprocessed_labels)
-
-            final_model = pipeline
-        else:
-            # Fall back to regular pipeline fit
-            pipeline.fit(preprocessed_features, preprocessed_labels)
-            final_model = pipeline
-    else:
-        # Train normally
-        pipeline.fit(preprocessed_features, preprocessed_labels)
-        final_model = pipeline
-
-    # Save the final model
-    save_model(final_model, final_model_path)
-    print(f"Final model trained and saved to: {final_model_path}")
-
-    # If possible, plot feature importance
-    if hasattr(final_model, 'named_steps') and 'classifier' in final_model.named_steps:
-        classifier = final_model.named_steps['classifier']
-        if hasattr(classifier, 'feature_importances_'):
-            fi_plot_path = os.path.join(final_model_dir, "plots", "final_model_feature_importance.png")
-
-            # Get feature names or indices
-            if hasattr(final_model, 'named_steps') and 'pca' in final_model.named_steps:
-                # For PCA, feature names are PCA components
-                feature_names = [f"PC{i + 1}" for i in range(len(classifier.feature_importances_))]
-            else:
-                # Otherwise, use feature indices
-                feature_names = [f"Feature {i + 1}" for i in range(len(classifier.feature_importances_))]
-
-    return final_model, final_model_dir
-
-
 def train_multiple_final_models(all_features, all_labels, best_hyperparameters,
-                                result_dir, class_names=None, feature_extractor=None,
-                                all_paths=None, all_labels_orig=None, preprocess_fn=None,
+                                result_dir,feature_extractor=None,
+                                all_paths=None, all_labels_orig=None,
                                 num_models=10):
     """
     Train multiple final classical ML models on all training data using the best hyperparameters.
@@ -1873,11 +1212,9 @@ def train_multiple_final_models(all_features, all_labels, best_hyperparameters,
         all_labels: Combined training and validation labels (can be None if paths provided)
         best_hyperparameters: Best hyperparameters found during cross-validation
         result_dir: Directory to save results
-        class_names: List of class names
         feature_extractor: Feature extractor model (required if all_features is None)
         all_paths: Combined training and validation paths (required if all_features is None)
         all_labels_orig: Original labels for paths (required if all_features is None)
-        preprocess_fn: Image preprocessing function
         num_models: Number of models to train (default: 10)
 
     Returns:
@@ -1888,14 +1225,11 @@ def train_multiple_final_models(all_features, all_labels, best_hyperparameters,
     print("=" * 60)
 
     # Create final models directory
-    final_models_dir = os.path.join(result_dir, CLASSICAL_CLASSIFIER_MODEL.lower(), "final_models")
+    final_models_dir = os.path.join(result_dir['base'], CLASSICAL_CLASSIFIER_MODEL.lower(), "final_models")
     os.makedirs(final_models_dir, exist_ok=True)
 
     # Extract hyperparameters
     classifier_name = best_hyperparameters['classifier_name']
-    use_pca = best_hyperparameters['use_pca']
-    n_components = best_hyperparameters['n_components']
-    initial_class_weights = best_hyperparameters.get('class_weights', None)
 
     # If features are not provided, extract them
     if all_features is None:
@@ -1905,7 +1239,7 @@ def train_multiple_final_models(all_features, all_labels, best_hyperparameters,
 
         # Path for combined features
         combined_features_path = os.path.join(
-            result_dir,
+            result_dir['base'],
             "features",
             "training_features.npz"
         )
@@ -1916,7 +1250,6 @@ def train_multiple_final_models(all_features, all_labels, best_hyperparameters,
             feature_extractor=feature_extractor,
             paths=all_paths,
             labels=all_labels_orig,
-            preprocess_fn=preprocess_fn,
             model_name=CNN_MODEL,
             features_save_path=combined_features_path,
             apply_augmentation=USE_FEATURE_AUGMENTATION
@@ -1925,10 +1258,20 @@ def train_multiple_final_models(all_features, all_labels, best_hyperparameters,
     # Ensure features are the right type
     all_features = all_features.astype(np.float32)
 
-    trained_models = []
-    model_results = []
+    if USE_FEATURE_PREPROCESSING:
+        # fit the pipeline on the *entire* training set once…
+        all_proc, feat_pipe = apply_feature_preprocessing(
+            features=all_features,
+            labels=all_labels,
+            preset=FEATURE_PREPROCESSING_PRESET,
+            training=True,
+            save_path=os.path.join(result_dir['models'], "final_feat_pipe.joblib")
+        )
+    else:
+        all_proc, feat_pipe = all_features, None
 
-    # Train multiple models
+    trained_models = []
+
     for model_idx in range(num_models):
         print(f"\n{'=' * 50}")
         print(f"Training Model {model_idx + 1}/{num_models}")
@@ -1942,32 +1285,9 @@ def train_multiple_final_models(all_features, all_labels, best_hyperparameters,
         # Model save path
         model_path = os.path.join(model_dir, "final_ml_model.joblib")
 
-        # Apply data preprocessing if it was used in the best model
-        class_weights = initial_class_weights
-        if best_hyperparameters['preprocessing_approach'] is not None:
-            print(f"Applying {best_hyperparameters['preprocessing_approach']} preprocessing to all training data...")
-
-            # Use different random state for each model
-            random_state = 42 + model_idx
-
-            preprocessed_features, preprocessed_labels, new_class_weights = apply_data_preprocessing(
-                features=all_features,
-                labels=all_labels,
-                method=best_hyperparameters['preprocessing_approach'],
-                random_state=random_state
-            )
-
-            if best_hyperparameters['preprocessing_approach'] == "class_weight":
-                class_weights = new_class_weights
-        else:
-            preprocessed_features = all_features
-            preprocessed_labels = all_labels
-
         # Create ML pipeline with best configuration
         pipeline = create_ml_pipeline(
             classifier_name=classifier_name,
-            use_pca=use_pca,
-            n_components=n_components,
             random_state=42 + model_idx  # Different random state for each model
         )
 
@@ -1987,61 +1307,14 @@ def train_multiple_final_models(all_features, all_labels, best_hyperparameters,
                 print(f"Warning: Could not set all model parameters: {e}")
 
         # Train the model on all data
-        print(f"Training model {model_idx + 1} on all {len(preprocessed_features)} samples...")
+        print(f"Training model {model_idx + 1} on all {len(all_features)} samples...")
 
-        # Handle class weights if they were used
-        if class_weights is not None:
-            # Check if the classifier supports sample weights
-            if hasattr(pipeline, 'named_steps') and 'classifier' in pipeline.named_steps:
-                classifier = pipeline.named_steps['classifier']
-
-                # Train the preprocessing steps
-                if hasattr(pipeline, "steps") and len(pipeline.steps) > 1:
-                    for name, transform in pipeline.steps[:-1]:  # All steps except classifier
-                        if hasattr(transform, "fit"):
-                            preprocessed_features = transform.fit_transform(preprocessed_features, preprocessed_labels)
-
-                # Check if classifier supports sample weights
-                if hasattr(classifier, 'fit') and 'sample_weight' in classifier.fit.__code__.co_varnames:
-                    # Create sample weights from class weights
-                    sample_weights = np.array([class_weights[label] for label in preprocessed_labels])
-                    classifier.fit(preprocessed_features, preprocessed_labels, sample_weight=sample_weights)
-                    print("Training with sample weights based on class imbalance")
-                else:
-                    # If sample_weight not supported, try to set class_weight attribute
-                    if hasattr(classifier, 'class_weight'):
-                        classifier.class_weight = class_weights
-                        print("Setting class_weight parameter")
-                    classifier.fit(preprocessed_features, preprocessed_labels)
-
-                final_model = pipeline
-            else:
-                # Fall back to regular pipeline fit
-                pipeline.fit(preprocessed_features, preprocessed_labels)
-                final_model = pipeline
-        else:
-            # Train normally
-            pipeline.fit(preprocessed_features, preprocessed_labels)
-            final_model = pipeline
+        pipeline.fit(all_proc, all_labels)
+        final_model = pipeline
 
         # Save the model
         save_model(final_model, model_path)
         print(f"Model {model_idx + 1} trained and saved to: {model_path}")
-
-        # If possible, plot feature importance
-        if hasattr(final_model, 'named_steps') and 'classifier' in final_model.named_steps:
-            classifier = final_model.named_steps['classifier']
-            if hasattr(classifier, 'feature_importances_'):
-                fi_plot_path = os.path.join(model_dir, "plots", "feature_importance.png")
-
-                # Get feature names or indices
-                if hasattr(final_model, 'named_steps') and 'pca' in final_model.named_steps:
-                    # For PCA, feature names are PCA components
-                    feature_names = [f"PC{i + 1}" for i in range(len(classifier.feature_importances_))]
-                else:
-                    # Otherwise, use feature indices
-                    feature_names = [f"Feature {i + 1}" for i in range(len(classifier.feature_importances_))]
-
 
         trained_models.append({
             'model': final_model,
@@ -2272,8 +1545,8 @@ def evaluate_multiple_final_models(trained_models, test_features, test_labels,
 
 
 def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files_path,
-                                    use_kfold=False, fine_tune_extractor=True,
-                                    balance_features=True, tune_hyperparams=True,
+                                    use_kfold=False,
+                                    tune_hyperparams=True,
                                     class_names=None):
     """
     Run the complete feature extraction + classical ML pipeline.
@@ -2283,8 +1556,6 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
         val_files_path (str): Path to validation files list.
         test_files_path (str): Path to test files list.
         use_kfold (bool): Whether to run K-fold cross-validation.
-        fine_tune_extractor (bool): Whether to fine-tune the feature extractor.
-        balance_features (bool): Whether to balance class representation in features.
         tune_hyperparams (bool): Whether to tune hyperparameters for classical models.
         class_names (list, optional): List of class names.
 
@@ -2308,17 +1579,6 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
     train_paths, train_labels = load_paths_labels(train_files_path)
     val_paths, val_labels = load_paths_labels(val_files_path)
     test_paths, test_labels = load_paths_labels(test_files_path)
-
-    # Create preprocessing function
-    preprocess_fn = None
-    if USE_GRAPHIC_PREPROCESSING:
-        preprocess_fn = lambda img: apply_graphic_preprocessing(
-            img,
-            use_hair_removal=USE_HAIR_REMOVAL,
-            use_contrast_enhancement=USE_ENHANCED_CONTRAST,
-            use_segmentation=USE_IMAGE_SEGMENTATION,
-            visualize=VISUALIZE
-        )
 
     extractor_path = dirs['extractor']
 
@@ -2344,8 +1604,7 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
         cv_results = run_model_training_by_fold(
             fold_features=fold_features,
             tune_hyperparams=tune_hyperparams,
-            result_dir=dirs['classifiers'][CLASSICAL_CLASSIFIER_MODEL]['base'],
-            class_names=class_names
+            result_dir=dirs['classifiers'][CLASSICAL_CLASSIFIER_MODEL]['base']
         )
 
         # Save detailed fold results
@@ -2363,12 +1622,10 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
                 all_features=None,
                 all_labels=None,
                 best_hyperparameters=cv_results['best_hyperparameters'],
-                result_dir=dirs['base'],
-                class_names=class_names,
+                result_dir=dirs,
                 feature_extractor=feature_extractor,
                 all_paths=all_paths,
                 all_labels_orig=all_labels,
-                preprocess_fn=preprocess_fn,
                 num_models=NUM_FINAL_MODELS
             )
             print(f"All {NUM_FINAL_MODELS} final models trained and saved in: {final_models_dir}")
@@ -2387,21 +1644,31 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
             feature_extractor=feature_extractor,
             paths=test_paths,
             labels=test_labels,
-            preprocess_fn=preprocess_fn,
             model_name=CNN_MODEL,
             features_save_path=test_features_path,
-            apply_augmentation=False
+            apply_augmentation=False,
         )
 
         test_features = test_features.astype(np.float32)
 
-        # Evaluate all final models on test set
+        if USE_FEATURE_PREPROCESSING:
+            # fit the pipeline on the *entire* training set once…
+            proc_test_feat, pipe = apply_feature_preprocessing(
+                features=test_features,
+                labels=all_labels,
+                preset=FEATURE_PREPROCESSING_PRESET,
+                training=True,
+                save_path=os.path.join(dirs['models'], "final_feat_pipe.joblib")
+            )
+        else:
+            proc_test_feat, pipe = test_features, None
+
         if trained_models:
             print("\nEvaluating multiple final models on test set...")
 
             eval_results = evaluate_multiple_final_models(
                 trained_models=trained_models,
-                test_features=test_features,
+                test_features=proc_test_feat,
                 test_labels=test_labels_out,
                 result_dir=final_models_dir,
                 class_names=class_names
@@ -2428,11 +1695,7 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
                 f.write(f"Use Feature Augmentation: {USE_FEATURE_AUGMENTATION}\n")
                 f.write(f"Use Fine-tuning: {USE_FINE_TUNING}\n")
                 f.write(f"Use Preprocessing: {USE_GRAPHIC_PREPROCESSING}\n")
-                f.write(f"Use PCA: {NUM_PCA_COMPONENTS is not None}\n")
-                f.write(f"PCA Components: {NUM_PCA_COMPONENTS}\n")
-                f.write(f"Use Data Preprocessing: {USE_DATA_PREPROCESSING}\n")
-                if USE_DATA_PREPROCESSING:
-                    f.write(f"Preprocessing Method: {CLASSIFIER_APPROACH}\n")
+                f.write(f"Use Feature Preprocessing: {USE_FEATURE_PREPROCESSING}\n")
                 f.write(f"\nCross-validation:\n")
                 f.write(f"  Iterations: {NUM_ITERATIONS}\n")
                 f.write(f"  Folds per iteration: {NUM_KFOLDS}\n")
@@ -2479,225 +1742,6 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
                         "class_report": test_report
                     }
                 }
-    else:
-        # Extração direta de features sem validação cruzada
-        print("Extracting features without cross-validation...")
-
-        # Paths para salvar features
-        train_features_path = os.path.join(dirs['features'], "train_features.npz")
-        val_features_path = os.path.join(dirs['features'], "val_features.npz")
-        test_features_path = dirs['test_features']
-
-        classifier_path = os.path.join(
-            dirs['classifiers'][CLASSICAL_CLASSIFIER_MODEL]['models'],
-            f"{CLASSICAL_CLASSIFIER_MODEL.lower()}_classifier.joblib"
-        )
-
-        # Extract features
-        train_features, train_labels_out = load_or_extract_features(
-            feature_extractor=feature_extractor,
-            paths=train_paths,
-            labels=train_labels,
-            preprocess_fn=preprocess_fn,
-            model_name=CNN_MODEL,
-            features_save_path=train_features_path
-        )
-
-        val_features, val_labels_out = load_or_extract_features(
-            feature_extractor=feature_extractor,
-            paths=val_paths,
-            labels=val_labels,
-            preprocess_fn=preprocess_fn,
-            model_name=CNN_MODEL,
-            features_save_path=val_features_path
-        )
-
-        # Converte para float32 se necessário
-        train_features = train_features.astype(np.float32)
-        val_features = val_features.astype(np.float32)
-
-        # Aplica pré-processamento de dados para lidar com desbalanceamento de classes
-        preprocessing_info = {}
-        if USE_DATA_PREPROCESSING:
-            print("Applying data preprocessing to training features only...")
-            print(f"Original training class distribution: {np.bincount(train_labels_out)}")
-
-            # Aplica a abordagem selecionada com base em CLASSIFIER_APPROACH
-            if CLASSIFIER_APPROACH == "class_weight":
-                train_features, train_labels_out, class_weights = apply_data_preprocessing(
-                    features=train_features,
-                    labels=train_labels_out,
-                    method="class_weight",
-                    random_state=42
-                )
-                preprocessing_info = {
-                    "method": "class_weight",
-                    "class_weights": class_weights
-                }
-            elif CLASSIFIER_APPROACH == "hybrid":
-                train_features, train_labels_out, _ = apply_data_preprocessing(
-                    features=train_features,
-                    labels=train_labels_out,
-                    method="hybrid",
-                    random_state=42
-                )
-                preprocessing_info = {
-                    "method": "hybrid"
-                }
-            elif CLASSIFIER_APPROACH == "undersampling":
-                train_features, train_labels_out, _ = apply_data_preprocessing(
-                    features=train_features,
-                    labels=train_labels_out,
-                    method="undersampling",
-                    random_state=42
-                )
-                preprocessing_info = {
-                    "method": "undersampling"
-                }
-            else:  # Default para SMOTE
-                train_features, train_labels_out, _ = apply_data_preprocessing(
-                    features=train_features,
-                    labels=train_labels_out,
-                    method="smote",
-                    random_state=42
-                )
-                preprocessing_info = {
-                    "method": "smote"
-                }
-
-            if CLASSIFIER_APPROACH != "class_weight":
-                print(f"After {CLASSIFIER_APPROACH}. New class distribution: {np.bincount(train_labels_out)}")
-            print("Note: Validation and test data remain with original distribution")
-
-        # Aplica balanceamento simples se solicitado (e não houver pré-processamento)
-        elif balance_features and not USE_DATA_PREPROCESSING:
-            print("Balancing features across classes...")
-            train_features, train_labels_out = augment_features_with_balanced_sampling(
-                features=train_features,
-                labels=train_labels_out
-            )
-            print(f"After balancing. New class distribution: {np.bincount(train_labels_out)}")
-
-        # Treina modelo único
-        model, train_results = train_and_evaluate_classical_model(
-            train_features=train_features,
-            train_labels=train_labels_out,
-            val_features=val_features,
-            val_labels=val_labels_out,
-            classifier_name=CLASSICAL_CLASSIFIER_MODEL,
-            use_pca=(NUM_PCA_COMPONENTS is not None),
-            n_components=NUM_PCA_COMPONENTS,
-            tune_hyperparams=tune_hyperparams,
-            result_dir=dirs['classifiers'][CLASSICAL_CLASSIFIER_MODEL]['base'],
-            model_save_path=classifier_path,
-            class_weights=preprocessing_info.get("class_weights", None)
-        )
-
-        # Extrai features de teste e avalia
-        test_features, test_labels_out = load_or_extract_features(
-            feature_extractor=feature_extractor,
-            paths=test_paths,
-            labels=test_labels,
-            preprocess_fn=preprocess_fn,
-            model_name=CNN_MODEL,
-            features_save_path=test_features_path
-        )
-
-        test_features = test_features.astype(np.float32)
-
-        # Avalia no conjunto de teste
-        test_pred = model.predict(test_features)
-
-        # Calcula métricas
-        test_report = classification_report(test_labels_out, test_pred, output_dict=True)
-
-        # Imprime relatório de classificação
-        print("\nTest Set Classification Report:")
-        print(classification_report(test_labels_out, test_pred))
-
-        # Adicional: métricas ROC AUC
-        if hasattr(model, 'predict_proba'):
-            # Calcula ROC AUC para multi-classe
-            if len(np.unique(test_labels_out)) > 2:
-                # Abordagem One-vs-Rest para multi-classe
-                y_test_bin = label_binarize(test_labels_out, classes=np.unique(test_labels_out))
-
-                # Se o modelo suporta predict_proba
-                y_score = model.predict_proba(test_features)
-
-                # Calcula ROC AUC para cada classe
-                roc_auc = {}
-                for i in range(len(np.unique(test_labels_out))):
-                    fpr, tpr, _ = roc_curve(y_test_bin[:, i], y_score[:, i])
-                    roc_auc[i] = auc(fpr, tpr)
-
-                # Calcula ROC AUC médio (macro)
-                macro_roc_auc = np.mean(list(roc_auc.values()))
-
-                print(f"Macro-average ROC AUC: {macro_roc_auc:.4f}")
-
-                # Adiciona aos resultados
-                test_report["macro_roc_auc"] = macro_roc_auc
-                test_report["class_roc_auc"] = roc_auc
-            else:
-                # Classificação binária
-                y_score = model.predict_proba(test_features)[:, 1]
-                roc_auc = roc_auc_score(test_labels_out, y_score)
-                print(f"ROC AUC: {roc_auc:.4f}")
-                # Adiciona aos resultados
-                test_report["roc_auc"] = roc_auc
-
-        # Salva resultados
-        with open(os.path.join(dirs['classifiers'][CLASSICAL_CLASSIFIER_MODEL]['base'],
-                               "test_results.txt"), "w") as f:
-            f.write(f"Feature Extractor: {CNN_MODEL}\n")
-            f.write(f"Classifier: {CLASSICAL_CLASSIFIER_MODEL}\n")
-            f.write(f"Use Fine-tuning: {USE_FINE_TUNING}\n")
-            f.write(f"Use Preprocessing: {USE_GRAPHIC_PREPROCESSING}\n")
-            f.write(f"Use PCA: {NUM_PCA_COMPONENTS is not None}\n")
-            f.write(f"PCA Components: {NUM_PCA_COMPONENTS}\n\n")
-            f.write(f"Use Data Preprocessing: {USE_DATA_PREPROCESSING}\n")
-            if USE_DATA_PREPROCESSING:
-                f.write(f"Preprocessing Method: {CLASSIFIER_APPROACH}\n\n")
-
-            f.write("Test Set Classification Report:\n")
-            f.write(classification_report(test_labels_out, test_pred))
-
-            f.write("\nConfusion Matrix:\n")
-            f.write(str(confusion_matrix(test_labels_out, test_pred)))
-
-            # Escreve ROC AUC se disponível
-            if "macro_roc_auc" in test_report:
-                f.write(f"\nMacro-average ROC AUC: {test_report['macro_roc_auc']:.4f}\n")
-                f.write("Class-wise ROC AUC:\n")
-                for class_idx, auc_value in test_report["class_roc_auc"].items():
-                    class_name = class_names[class_idx] if class_names and class_idx < len(
-                        class_names) else f"Class {class_idx}"
-                    f.write(f"  {class_name}: {auc_value:.4f}\n")
-            elif "roc_auc" in test_report:
-                f.write(f"\nROC AUC: {test_report['roc_auc']:.4f}\n")
-
-        # Armazena resultados
-        test_results = {
-            "accuracy": test_report["accuracy"],
-            "macro_avg_precision": test_report["macro avg"]["precision"],
-            "macro_avg_recall": test_report["macro avg"]["recall"],
-            "macro_avg_f1": test_report["macro avg"]["f1-score"],
-            "class_report": test_report
-        }
-
-        # Adiciona ROC AUC aos resultados se disponível
-        if "macro_roc_auc" in test_report:
-            test_results["macro_roc_auc"] = test_report["macro_roc_auc"]
-            test_results["class_roc_auc"] = test_report["class_roc_auc"]
-        elif "roc_auc" in test_report:
-            test_results["roc_auc"] = test_report["roc_auc"]
-
-        results = {
-            'train_evaluation': train_results,
-            'test_evaluation': test_results,
-            'model': model
-        }
 
     # Limpa memória
     clear_session()
