@@ -10,7 +10,7 @@ GPU_MEMORY_LIMIT = 0.9  # Fraction of GPU memory to use
 USE_GRAPHIC_PREPROCESSING = False    # Apply hair removal, contrast enhancement, etc.
 USE_DATA_AUGMENTATION     = True    # Apply data augmentation during training
 USE_FEATURE_AUGMENTATION  = True
-USE_FEATURE_PREPROCESSING = True    # Apply feature pre-processing
+USE_FEATURE_PREPROCESSING = False    # Apply feature pre-processing
 USE_FINE_TUNING           = True     # Fine-tune pretrained CNN
 
 USE_HAIR_REMOVAL          = True

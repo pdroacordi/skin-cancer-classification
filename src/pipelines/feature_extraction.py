@@ -774,38 +774,38 @@ def run_model_training_by_fold(fold_features, result_dir, tune_hyperparams=True)
 
             if USE_FEATURE_PREPROCESSING:
                 # 1) fit on train, *and* get back the fitted pipeline
-                train_proc, feat_pipe = apply_feature_preprocessing(
+                proc_feat, proc_labels, feat_pipe = apply_feature_preprocessing(
                     features        = train_raw,
                     labels          = train_labels,
-                    preset          = FEATURE_PREPROCESSING_PRESET,
+                    algorithm       = CLASSICAL_CLASSIFIER_MODEL,
                     training        = True,
                     save_path       = None
                 )
                 # 2) transform valid with the very same pipeline
-                val_proc = feat_pipe.transform(val_raw)
+                proc_val_feat, proc_val_lab = feat_pipe.transform(val_raw, val_labels)
             else:
-                train_proc, val_proc = train_raw, val_raw
+                proc_feat, proc_labels, proc_val_feat, proc_val_lab = train_raw, train_labels, val_raw, val_labels
 
             # Print data shapes
-            print(f"Training features shape: {train_proc.shape}")
-            print(f"Validation features shape: {val_proc.shape}")
+            print(f"Training features shape: {proc_feat.shape}")
+            print(f"Validation features shape: {proc_val_feat.shape}")
             print(f"Training class distribution: {np.bincount(train_labels)}")
             print(f"Validation class distribution: {np.bincount(val_labels)}")
 
             # Train model
             try:
                 model, evaluation = train_and_evaluate_classical_model(
-                    train_features=train_proc,
-                    train_labels=train_labels,
-                    val_features=val_proc,
-                    val_labels=val_labels,
+                    train_features=proc_feat,
+                    train_labels=proc_labels,
+                    val_features=proc_val_feat,
+                    val_labels=proc_val_lab,
                     classifier_name=CLASSICAL_CLASSIFIER_MODEL,
                     tune_hyperparams=tune_hyperparams,
                     model_save_path=model_save_path
                 )
 
                 # Get predictions
-                val_pred = model.predict(val_proc)
+                val_pred = model.predict(proc_val_feat)
 
                 # Add to iteration predictions
                 iteration_y_true.extend(val_labels)
@@ -855,7 +855,7 @@ def run_model_training_by_fold(fold_features, result_dir, tune_hyperparams=True)
                 continue
 
             # Clean up
-            del train_proc, val_proc, train_labels, val_labels, model
+            del proc_feat, proc_val_feat, proc_labels, proc_val_lab, model
             gc.collect()
 
         # Calculate overall metrics for this iteration
@@ -1260,15 +1260,15 @@ def train_multiple_final_models(all_features, all_labels, best_hyperparameters,
 
     if USE_FEATURE_PREPROCESSING:
         # fit the pipeline on the *entire* training set once…
-        all_proc, feat_pipe = apply_feature_preprocessing(
+        all_feat_proc, all_lab_proc, feat_pipe = apply_feature_preprocessing(
             features=all_features,
             labels=all_labels,
-            preset=FEATURE_PREPROCESSING_PRESET,
+            algorithm=CLASSICAL_CLASSIFIER_MODEL,
             training=True,
             save_path=os.path.join(result_dir['models'], "final_feat_pipe.joblib")
         )
     else:
-        all_proc, feat_pipe = all_features, None
+        all_feat_proc, all_lab_proc, feat_pipe = all_features, all_labels, None
 
     trained_models = []
 
@@ -1309,7 +1309,7 @@ def train_multiple_final_models(all_features, all_labels, best_hyperparameters,
         # Train the model on all data
         print(f"Training model {model_idx + 1} on all {len(all_features)} samples...")
 
-        pipeline.fit(all_proc, all_labels)
+        pipeline.fit(all_feat_proc, all_lab_proc)
         final_model = pipeline
 
         # Save the model
@@ -1652,16 +1652,15 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
         test_features = test_features.astype(np.float32)
 
         if USE_FEATURE_PREPROCESSING:
-            # fit the pipeline on the *entire* training set once…
-            proc_test_feat, pipe = apply_feature_preprocessing(
+            proc_test_feat, proc_test_lab, pipe = apply_feature_preprocessing(
                 features=test_features,
-                labels=all_labels,
-                preset=FEATURE_PREPROCESSING_PRESET,
-                training=True,
+                labels=test_labels_out,
+                algorithm=CLASSICAL_CLASSIFIER_MODEL,
+                training=False,
                 save_path=os.path.join(dirs['models'], "final_feat_pipe.joblib")
             )
         else:
-            proc_test_feat, pipe = test_features, None
+            proc_test_feat, proc_test_lab, pipe = test_features, test_labels_out, None
 
         if trained_models:
             print("\nEvaluating multiple final models on test set...")
@@ -1669,7 +1668,7 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
             eval_results = evaluate_multiple_final_models(
                 trained_models=trained_models,
                 test_features=proc_test_feat,
-                test_labels=test_labels_out,
+                test_labels=proc_test_lab,
                 result_dir=final_models_dir,
                 class_names=class_names
             )
@@ -1714,34 +1713,6 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
                     f.write(f"\n95% Confidence Intervals:\n")
                     f.write(f"  Accuracy: [{stats['accuracy']['95_ci'][0]:.4f}, {stats['accuracy']['95_ci'][1]:.4f}]\n")
                     f.write(f"  F1-Score: [{stats['f1_score']['95_ci'][0]:.4f}, {stats['f1_score']['95_ci'][1]:.4f}]\n")
-
-        else:
-            print("No final models were trained. Falling back to best model from cross-validation...")
-
-            # Fall back to evaluating the best model from cross-validation
-            best_model_path = cv_results['best_model_info']['model_path']
-            if os.path.exists(best_model_path):
-                from models.classical_models import load_model
-                best_model = load_model(best_model_path)
-
-                # Evaluate on test set
-                test_pred = best_model.predict(test_features)
-                test_report = classification_report(test_labels_out, test_pred, output_dict=True)
-
-                print("\nTest Set Classification Report (Best CV Model):")
-                print(classification_report(test_labels_out, test_pred))
-
-                results = {
-                    'k_fold': cv_results['fold_results'],
-                    'best_model_info': cv_results['best_model_info'],
-                    'test_results': {
-                        "accuracy": test_report["accuracy"],
-                        "macro_avg_precision": test_report["macro avg"]["precision"],
-                        "macro_avg_recall": test_report["macro avg"]["recall"],
-                        "macro_avg_f1": test_report["macro avg"]["f1-score"],
-                        "class_report": test_report
-                    }
-                }
 
     # Limpa memória
     clear_session()
