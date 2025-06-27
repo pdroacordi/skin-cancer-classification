@@ -63,33 +63,22 @@ def apply_feature_preprocessing(
     """
     import os
 
-    # Load existing pipeline if provided
-    if save_path and os.path.exists(save_path):
-        # Dynamically load the correct pipeline class
+    # 1) Se estamos em modo inferência E existe pipeline salvo, carregue-o:
+    if not training and save_path and os.path.exists(save_path):
         pipeline = AlgorithmPreprocessingPipeline.load(save_path)
-        processed_features, processed_labels = pipeline.transform(
-            features, labels, training=training
-        )
-        return processed_features, processed_labels, pipeline
 
-    # Create new pipeline
-    pipeline = PreprocessingPipelineFactory.create_pipeline(algorithm)
-
-    if training:
-        # Fit and transform training data
+    else:
+        # 2) Caso contrário, (re)crie e ajuste o pipeline nos dados atuais:
+        pipeline =  PreprocessingPipelineFactory.create_pipeline(algorithm)
         pipeline.fit(features, labels)
-        processed_features, processed_labels = pipeline.transform(
-            features, labels, training=True
-        )
 
-        # Save if requested
-        if save_path:
+        # 3) Se for modo treino e save_path fornecido, salve para inferência futura
+        if training and save_path:
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             pipeline.save(save_path)
-    else:
-        # For test data, just transform
-        processed_features, processed_labels = pipeline.transform(
-            features, labels, training=False
-        )
 
+    # 4) Transforme sempre com o pipeline adequado
+    processed_features, processed_labels = pipeline.transform(
+        features, labels, training=training
+    )
     return processed_features, processed_labels, pipeline

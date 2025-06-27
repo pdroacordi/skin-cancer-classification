@@ -10,8 +10,9 @@ GPU_MEMORY_LIMIT = 0.9  # Fraction of GPU memory to use
 USE_GRAPHIC_PREPROCESSING = False    # Apply hair removal, contrast enhancement, etc.
 USE_DATA_AUGMENTATION     = True    # Apply data augmentation during training
 USE_FEATURE_AUGMENTATION  = True
-USE_FEATURE_PREPROCESSING = False    # Apply feature pre-processing
+USE_FEATURE_PREPROCESSING = True    # Apply feature pre-processing
 USE_FINE_TUNING           = True     # Fine-tune pretrained CNN
+USE_METADATA              = True    # use Metadata (age, location, etc)
 
 USE_HAIR_REMOVAL          = True
 USE_ENHANCED_CONTRAST     = False
@@ -34,13 +35,14 @@ NUM_FINAL_MODELS = 10            # Number of final models to train
 
 # Model selection
 CNN_MODEL                  = 'VGG19'         # Options: 'VGG19', 'Inception', 'ResNet', 'Xception'
-CLASSICAL_CLASSIFIER_MODEL = 'ExtraTrees'  # Options: 'RandomForest', 'XGBoost', 'AdaBoost', 'ExtraTrees', 'SVM'
+CLASSICAL_CLASSIFIER_MODEL = 'XGBoost'  # Options: 'RandomForest', 'XGBoost', 'AdaBoost', 'ExtraTrees', 'SVM'
 
 # Paths
 RESULTS_DIR      = './results'
 TRAIN_FILES_PATH = "./res/preprocessed_train_files.txt" if USE_GRAPHIC_PREPROCESSING else "./res/train_files.txt"
 VAL_FILES_PATH   = "./res/preprocessed_val_files.txt" if USE_GRAPHIC_PREPROCESSING else"./res/val_files.txt"
 TEST_FILES_PATH  = "./res/preprocessed_test_files.txt" if USE_GRAPHIC_PREPROCESSING else"./res/test_files.txt"
+METADATA_PATH    = "./res/metadata.csv"
 
 # Callbacks configuration
 EARLY_STOPPING_PATIENCE = 10

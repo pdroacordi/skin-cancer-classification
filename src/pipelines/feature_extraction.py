@@ -9,9 +9,16 @@ import sys
 from typing import Optional, Any, List, Tuple, Dict
 
 import numpy as np
+import pandas as pd
 import tensorflow as tf
 from sklearn.metrics import classification_report, confusion_matrix
 from tensorflow.keras.backend import clear_session
+
+from utils.metadata_extractor import (
+    extract_metadata_for_paths,
+    MetadataFeatureExtractor,
+    combine_cnn_and_metadata_features
+)
 
 sys.path.append('..')
 from config import (
@@ -30,7 +37,7 @@ from config import (
     NUM_ITERATIONS,
     USE_FEATURE_AUGMENTATION,
     NUM_FINAL_MODELS,
-    FEATURE_PREPROCESSING_PRESET,
+    USE_METADATA, METADATA_PATH,
 )
 
 from utils.data_loaders import load_paths_labels, resize_image
@@ -70,16 +77,17 @@ def create_feature_extraction_directories(base_dir=RESULTS_DIR, cnn_model_name=C
         dict: Dictionary with paths to created directories
     """
     # Build feature extraction path components based on configuration
-    str_hair = "hair_removal_" if USE_HAIR_REMOVAL else ""
-    str_contrast = "contrast_" if USE_ENHANCED_CONTRAST else ""
-    str_graphic = f"{str_contrast}{str_hair}" if USE_GRAPHIC_PREPROCESSING else ""
-    str_augment = "use_augmentation_" if USE_DATA_AUGMENTATION else ""
+    str_hair       = "hair_removal_" if USE_HAIR_REMOVAL else ""
+    str_contrast   = "contrast_" if USE_ENHANCED_CONTRAST else ""
+    str_graphic    = f"{str_contrast}{str_hair}" if USE_GRAPHIC_PREPROCESSING else ""
+    str_augment    = "use_augmentation_" if USE_DATA_AUGMENTATION else ""
     str_preprocess = f"use_feature_preprocessing_" if USE_FEATURE_PREPROCESSING else ""
-    str_feature = f"use_feature_augmentation_" if USE_FEATURE_AUGMENTATION else ""
+    str_feature    = f"use_feature_augmentation_" if USE_FEATURE_AUGMENTATION else ""
+    str_meta       = "use_metadata_" if USE_METADATA else ""
 
     # Create main result directory path
     result_dir = os.path.join(base_dir,
-                              f"feature_extraction_{cnn_model_name}_{str_graphic}{str_augment}{str_feature}{str_preprocess}")
+                              f"feature_extraction_{cnn_model_name}_{str_graphic}{str_augment}{str_feature}{str_preprocess}{str_meta}")
 
     # Create base directory
     os.makedirs(result_dir, exist_ok=True)
@@ -400,7 +408,10 @@ def load_cached(
                 "labels": data.get("labels", None),
                 "metadata": {
                     "augmentation_enabled": bool(data.get("augmentation_enabled", False)),
+                    "metadata_enabled": bool(data.get("metadata_enabled", False)),
                 },
+                "augmentation_enabled": bool(data.get("augmentation_enabled", False)),
+                "metadata_enabled": bool(data.get("metadata_enabled", False)),
             }
 
         elif save_path.endswith(".npy"):
@@ -416,13 +427,50 @@ def load_cached(
         return None
 
 
+def _handle_metadata_augmentation(
+        metadata_features: np.ndarray,
+        num_cnn_features: int,
+        num_original_samples: int,
+        apply_augmentation: bool
+) -> np.ndarray:
+    """
+    Handle metadata features when CNN features are augmented.
+
+    Args:
+        metadata_features: Original metadata features
+        num_cnn_features: Number of CNN features (possibly augmented)
+        num_original_samples: Number of original samples
+        apply_augmentation: Whether augmentation was applied
+
+    Returns:
+        Metadata features with same number of samples as CNN features
+    """
+    if not apply_augmentation or num_cnn_features == num_original_samples:
+        # No augmentation or already matching
+        return metadata_features
+
+    # Calculate augmentation factor
+    aug_factor = num_cnn_features // num_original_samples
+
+    if aug_factor > 1:
+        print(f"  → Replicating metadata features {aug_factor}x to match augmented CNN features")
+        # Replicate metadata features for each augmented version
+        metadata_features_aug = []
+        for i in range(num_original_samples):
+            # Repeat metadata for each augmented version of the image
+            metadata_features_aug.extend([metadata_features[i]] * aug_factor)
+
+        metadata_features = np.array(metadata_features_aug)
+        print(f"  → Augmented metadata shape: {metadata_features.shape}")
+
+    return metadata_features
+
 def save_cache(
     save_path: str,
     features: np.ndarray,
     labels: Optional[np.ndarray],
-    raw_features: np.ndarray,
     aug_enabled: bool,
-    pipeline: Any
+    metadata_enabled: bool = False,
 ) -> None:
     """
     Salva num .npz (ou .npy) os arrays + metadados de preprocessing.
@@ -432,15 +480,12 @@ def save_cache(
     if save_path.endswith(".npz"):
         to_save = {
             "features": features,
-            "raw_features": raw_features,
             "augmentation_enabled": aug_enabled,
+            "metadata_enabled": metadata_enabled,
         }
         if labels is not None:
             to_save["labels"] = labels
-        if pipeline is not None:
-            to_save["preprocessing_info"] = pipeline.get_feature_info()
         np.savez(save_path, **to_save)
-
     else:
         np.save(save_path, features)
 
@@ -451,42 +496,106 @@ def load_or_extract_features(
     model_name: Optional[str] = None,
     features_save_path: Optional[str] = None,
     apply_augmentation: bool = False,
+    metadata_df: Optional[pd.DataFrame] = None,
+    metadata_extractor: Optional[MetadataFeatureExtractor] = None,
 ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
     """
     Carrega do cache ou extrai features, e aplica pré-processamento avançado se configurado.
     """
-    # 1) Se não há path de salvamento, extrai e retorna
+    # Extract metadata features for the original paths
+    if metadata_df is not None and metadata_extractor is not None:
+        metadata_features = extract_metadata_for_paths(
+            image_paths=paths,
+            metadata_df=metadata_df,
+            metadata_extractor=metadata_extractor
+        )
+        print(f"  → metadata_features.shape = {metadata_features.shape}, expected {len(paths)} rows")
+    else:
+        metadata_features = None
+
+    # 1) If no save path, extract and return
     if not features_save_path:
         print(f"Extracting {len(paths)} features (no cache)...")
-        feats, labs = extract_features_from_paths(
+        cnn_feats, labs = extract_features_from_paths(
             feature_extractor, paths, labels, model_name, BATCH_SIZE, apply_augmentation
         )
-        return feats, labs
 
-    # 2) Tenta carregar cache
+        # Handle augmentation for metadata features
+        if metadata_features is not None:
+            metadata_features = _handle_metadata_augmentation(
+                metadata_features, cnn_feats.shape[0], len(paths), apply_augmentation
+            )
+
+        combined_features = combine_cnn_and_metadata_features(
+            cnn_features=cnn_feats,
+            metadata_features=metadata_features,
+        )
+        return combined_features, labs
+
+    # 2) Try to load cache
     cache = load_cached(features_save_path)
     if cache:
-        feats = cache["features"]
+        cnn_feats = cache["features"]
         labs = cache.get("labels") if cache.get("labels") is not None else labels
-        print("Using cached features as-is")
-        return feats, labs
 
-    # 3) Cache não encontrado ou inválido → extrai do zero
+        # Check if cached features already include metadata
+        if "metadata_enabled" in cache and cache["metadata_enabled"]:
+            print("Using cached features with metadata")
+            return cnn_feats, labs
+
+        # If cache doesn't have metadata but we need it, combine
+        if metadata_features is not None:
+            print("Adding metadata to cached CNN features")
+
+            # Handle augmentation for metadata features based on cached feature size
+            metadata_features = _handle_metadata_augmentation(
+                metadata_features, cnn_feats.shape[0], len(paths), apply_augmentation
+            )
+
+            combined_features = combine_cnn_and_metadata_features(
+                cnn_features=cnn_feats,
+                metadata_features=metadata_features,
+            )
+
+            # Update cache with combined features
+            save_cache(
+                features_save_path, combined_features, labs,
+                apply_augmentation, metadata_enabled=True
+            )
+
+            return combined_features, labs
+        else:
+            print("Using cached CNN features without metadata")
+            return cnn_feats, labs
+
+    # 3) Cache not found - extract from scratch
     print(f"Extracting {len(paths)} features...")
-    raw_feats, out_labels = extract_features_from_paths(
+    cnn_feats, out_labels = extract_features_from_paths(
         feature_extractor, paths, labels, model_name, BATCH_SIZE, apply_augmentation
     )
 
-    if raw_feats.size == 0:
+    if cnn_feats.size == 0:
         print("No features extracted!")
-        return raw_feats, out_labels
+        return cnn_feats, out_labels
 
-    # 5) Salvamento
-    save_cache(
-        features_save_path, raw_feats, out_labels,
-        raw_feats, apply_augmentation, None
+    # Handle augmentation for metadata features
+    if metadata_features is not None:
+        metadata_features = _handle_metadata_augmentation(
+            metadata_features, cnn_feats.shape[0], len(paths), apply_augmentation
+        )
+
+    combined_features = combine_cnn_and_metadata_features(
+        cnn_features=cnn_feats,
+        metadata_features=metadata_features,
     )
-    return raw_feats, out_labels
+
+    # Save combined features
+    save_cache(
+        features_save_path, combined_features, out_labels,
+        apply_augmentation, metadata_enabled=(metadata_features is not None)
+    )
+
+    return combined_features, out_labels
 
 def train_and_evaluate_classical_model(train_features, train_labels,
                                        val_features, val_labels,
@@ -559,7 +668,11 @@ def train_and_evaluate_classical_model(train_features, train_labels,
     return model, evaluation_results
 
 
-def run_kfold_feature_extraction(all_paths, all_labels, dirs, class_names=None):
+def run_kfold_feature_extraction(all_paths,
+                                 all_labels,
+                                 dirs,
+                                 metadata_df: Optional[pd.DataFrame] = None,
+                                 metadata_extractor: Optional[MetadataFeatureExtractor] = None):
     """
     Run feature extraction for each fold of k-fold cross-validation.
     Extracts features separately for each fold to avoid data leakage.
@@ -568,7 +681,8 @@ def run_kfold_feature_extraction(all_paths, all_labels, dirs, class_names=None):
         all_paths (numpy.array): All image paths.
         all_labels (numpy.array): All labels.
         dirs (dict): Directory to save results.
-        class_names (list, optional): List of class names.
+        metadata_df (Optional[pandas.DataFrame]): Pandas DataFrame containing metadata information.
+        metadata_extractor (Optional[MetadataFeatureExtractor]): MetadataFeatureExtractor object.
 
     Returns:
         dict: Dictionary containing fold-specific features and paths
@@ -634,7 +748,9 @@ def run_kfold_feature_extraction(all_paths, all_labels, dirs, class_names=None):
                 labels=train_labels,
                 model_name=CNN_MODEL,
                 features_save_path=train_features_path,
-                apply_augmentation=USE_FEATURE_AUGMENTATION
+                apply_augmentation=USE_FEATURE_AUGMENTATION,
+                metadata_extractor=metadata_extractor,
+                metadata_df=metadata_df
             )
 
             val_features, val_labels_out = load_or_extract_features(
@@ -643,6 +759,8 @@ def run_kfold_feature_extraction(all_paths, all_labels, dirs, class_names=None):
                 labels=val_labels,
                 model_name=CNN_MODEL,
                 features_save_path=val_features_path,
+                metadata_extractor=metadata_extractor,
+                metadata_df=metadata_df
             )
 
             # Store fold information
@@ -1202,7 +1320,10 @@ def run_kfold_cross_validation(all_features,
 def train_multiple_final_models(all_features, all_labels, best_hyperparameters,
                                 result_dir,feature_extractor=None,
                                 all_paths=None, all_labels_orig=None,
-                                num_models=10):
+                                num_models=10,
+                                metadata_df: Optional[pd.DataFrame] = None,
+                                metadata_extractor: Optional[MetadataFeatureExtractor] = None
+                                ):
     """
     Train multiple final classical ML models on all training data using the best hyperparameters.
     This allows for statistical testing of model performance.
@@ -1216,6 +1337,8 @@ def train_multiple_final_models(all_features, all_labels, best_hyperparameters,
         all_paths: Combined training and validation paths (required if all_features is None)
         all_labels_orig: Original labels for paths (required if all_features is None)
         num_models: Number of models to train (default: 10)
+        metadata_df: Pandas DataFrame containing metadata (required if all_features is None)
+        metadata_extractor: MetadataFeatureExtractor model (required if all_features is None)
 
     Returns:
         List of trained models and their directories
@@ -1252,7 +1375,9 @@ def train_multiple_final_models(all_features, all_labels, best_hyperparameters,
             labels=all_labels_orig,
             model_name=CNN_MODEL,
             features_save_path=combined_features_path,
-            apply_augmentation=USE_FEATURE_AUGMENTATION
+            apply_augmentation=USE_FEATURE_AUGMENTATION,
+            metadata_extractor=metadata_extractor,
+            metadata_df=metadata_df
         )
 
     # Ensure features are the right type
@@ -1585,6 +1710,21 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
     # Get feature extractor model
     feature_extractor, from_pretrained = get_feature_extractor_from_cnn(extractor_path)
 
+    if USE_METADATA:
+        metadata_df = pd.read_csv(METADATA_PATH)
+        metadata_extractor_path = os.path.join(RESULTS_DIR, 'metadata_extractor', 'metadata_extractor.joblib')
+        if os.path.exists(metadata_extractor_path):
+            print("Loading existing metadata extractor...")
+            metadata_extractor = MetadataFeatureExtractor.load(metadata_extractor_path)
+        else:
+            print("Creating and fitting metadata extractor...")
+            metadata_extractor = MetadataFeatureExtractor()
+            metadata_extractor.fit(metadata_df)
+            metadata_extractor.save(metadata_extractor_path)
+    else:
+        metadata_extractor = None
+        metadata_df = None
+
     if use_kfold:
         # Combina treino e validação para validação cruzada
         all_paths = np.concatenate([train_paths, val_paths])
@@ -1597,7 +1737,8 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
             all_paths=all_paths,
             all_labels=all_labels,
             dirs=dirs,
-            class_names=class_names
+            metadata_extractor=metadata_extractor,
+            metadata_df=metadata_df
         )
 
         # Treina modelos clássicos para cada fold usando as features extraídas
@@ -1626,7 +1767,9 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
                 feature_extractor=feature_extractor,
                 all_paths=all_paths,
                 all_labels_orig=all_labels,
-                num_models=NUM_FINAL_MODELS
+                num_models=NUM_FINAL_MODELS,
+                metadata_extractor=metadata_extractor,
+                metadata_df=metadata_df
             )
             print(f"All {NUM_FINAL_MODELS} final models trained and saved in: {final_models_dir}")
 
@@ -1647,6 +1790,8 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
             model_name=CNN_MODEL,
             features_save_path=test_features_path,
             apply_augmentation=False,
+            metadata_extractor=metadata_extractor,
+            metadata_df=metadata_df
         )
 
         test_features = test_features.astype(np.float32)
