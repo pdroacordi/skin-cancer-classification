@@ -126,7 +126,7 @@ def create_feature_extraction_directories(base_dir=RESULTS_DIR, cnn_model_name=C
         'base': classifier_dir,
         'plots': classifier_plots_dir,
         'iterations': {},
-        'final_model': os.path.join(classifier_dir, "final_model")
+        'final_models': os.path.join(classifier_dir, "final_models")
     }
 
     # Create iteration and fold directories
@@ -907,8 +907,8 @@ def run_model_training_by_fold(fold_features, result_dir, tune_hyperparams=True)
             # Print data shapes
             print(f"Training features shape: {proc_feat.shape}")
             print(f"Validation features shape: {proc_val_feat.shape}")
-            print(f"Training class distribution: {np.bincount(train_labels)}")
-            print(f"Validation class distribution: {np.bincount(val_labels)}")
+            print(f"Training class distribution: {np.bincount(proc_labels)}")
+            print(f"Validation class distribution: {np.bincount(proc_val_lab)}")
 
             # Train model
             try:
@@ -926,7 +926,7 @@ def run_model_training_by_fold(fold_features, result_dir, tune_hyperparams=True)
                 val_pred = model.predict(proc_val_feat)
 
                 # Add to iteration predictions
-                iteration_y_true.extend(val_labels)
+                iteration_y_true.extend(proc_val_lab)
                 iteration_y_pred.extend(val_pred)
 
                 # Update best model if current is better
@@ -1390,7 +1390,7 @@ def train_multiple_final_models(all_features, all_labels, best_hyperparameters,
             labels=all_labels,
             algorithm=CLASSICAL_CLASSIFIER_MODEL,
             training=True,
-            save_path=os.path.join(result_dir['models'], "final_feat_pipe.joblib")
+            save_path=os.path.join(result_dir['classifiers'][CLASSICAL_CLASSIFIER_MODEL]['final_models'],  "final_feat_pipe.joblib")
         )
     else:
         all_feat_proc, all_lab_proc, feat_pipe = all_features, all_labels, None
@@ -1802,7 +1802,7 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
                 labels=test_labels_out,
                 algorithm=CLASSICAL_CLASSIFIER_MODEL,
                 training=False,
-                save_path=os.path.join(dirs['models'], "final_feat_pipe.joblib")
+                save_path=os.path.join(dirs['classifiers'][CLASSICAL_CLASSIFIER_MODEL]['final_models'], "final_feat_pipe.joblib")
             )
         else:
             proc_test_feat, proc_test_lab, pipe = test_features, test_labels_out, None

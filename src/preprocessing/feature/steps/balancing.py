@@ -35,6 +35,43 @@ class SMOTEBalancing(BalancingStrategy):
         }
 
 
+class TargetedSMOTEBalancing(SMOTEBalancing):
+    """SMOTE that only oversamples very minority classes."""
+
+    def __init__(self, minority_threshold=500, **kwargs):
+        super().__init__(method='smote', **kwargs)
+        self.minority_threshold = minority_threshold
+
+    def balance(self, X: np.ndarray, y: np.ndarray):
+        from imblearn.over_sampling import SMOTE
+        from collections import Counter
+
+        # Count samples per class
+        class_counts = Counter(y)
+
+        # Determine which classes to oversample
+        sampling_strategy = {}
+        max_samples = max(class_counts.values())
+
+        for class_label, count in class_counts.items():
+            if count < self.minority_threshold:
+                # For very minority classes, increase significantly but not to max
+                # This prevents creating too many synthetic samples
+                target_count = min(count * 3, max_samples)
+                sampling_strategy[class_label] = target_count
+            else:
+                # Keep original count for other classes
+                sampling_strategy[class_label] = count
+
+        # Apply SMOTE with custom strategy
+        self.balancer = SMOTE(
+            sampling_strategy=sampling_strategy,
+            **self.kwargs
+        )
+
+        return self.balancer.fit_resample(X, y)
+
+
 class ClassWeightBalancing(BalancingStrategy):
     """Class weight-based balancing."""
 
