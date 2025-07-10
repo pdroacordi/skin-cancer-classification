@@ -671,6 +671,7 @@ def train_and_evaluate_classical_model(train_features, train_labels,
 def run_kfold_feature_extraction(all_paths,
                                  all_labels,
                                  dirs,
+                                 feature_extractor,
                                  metadata_df: Optional[pd.DataFrame] = None,
                                  metadata_extractor: Optional[MetadataFeatureExtractor] = None):
     """
@@ -681,6 +682,7 @@ def run_kfold_feature_extraction(all_paths,
         all_paths (numpy.array): All image paths.
         all_labels (numpy.array): All labels.
         dirs (dict): Directory to save results.
+        feature_extractor: FeatureExtractor object.
         metadata_df (Optional[pandas.DataFrame]): Pandas DataFrame containing metadata information.
         metadata_extractor (Optional[MetadataFeatureExtractor]): MetadataFeatureExtractor object.
 
@@ -693,12 +695,6 @@ def run_kfold_feature_extraction(all_paths,
     # Create feature extraction directory
     features_by_fold_dir = dirs['features_by_fold']
     os.makedirs(features_by_fold_dir, exist_ok=True)
-
-    feature_extractor, _ = get_feature_extractor_model(
-        model_name=CNN_MODEL,
-        fine_tune=USE_FINE_TUNING,
-        save_path=dirs['extractor']  # Use the path from the directory structure
-    )
 
     # Initialize results dictionary
     fold_features = {
@@ -1737,6 +1733,7 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
             all_paths=all_paths,
             all_labels=all_labels,
             dirs=dirs,
+            feature_extractor=feature_extractor,
             metadata_extractor=metadata_extractor,
             metadata_df=metadata_df
         )

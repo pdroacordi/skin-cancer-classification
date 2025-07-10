@@ -105,8 +105,6 @@ def create_ml_pipeline(classifier_name, random_state=42):
     # Add classifier
     steps.append(('classifier', get_classifier(classifier_name, random_state=random_state)))
 
-    print(f"Creating {classifier_name} pipeline: {steps}")
-
     return Pipeline(steps)
 
 

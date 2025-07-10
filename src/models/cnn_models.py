@@ -12,8 +12,7 @@ from tensorflow.keras.layers import GlobalAveragePooling2D, Dense, Dropout
 from tensorflow.keras.models import Model, load_model
 from tensorflow.keras.optimizers import Adam
 
-from skincancer.src.config import USE_DATA_AUGMENTATION, CNN_MODEL, USE_GRAPHIC_PREPROCESSING, USE_HAIR_REMOVAL, \
-    USE_ENHANCED_CONTRAST, USE_FINE_TUNING
+from skincancer.src.config import USE_DATA_AUGMENTATION, CNN_MODEL, USE_FINE_TUNING
 
 sys.path.append('..')
 from config import (
@@ -22,7 +21,7 @@ from config import (
     EARLY_STOPPING_PATIENCE,
     REDUCE_LR_PATIENCE,
     REDUCE_LR_FACTOR,
-    FINE_TUNING_AT_LAYER, USE_FEATURE_PREPROCESSING
+    FINE_TUNING_AT_LAYER, USE_HAIR_REMOVAL, USE_ENHANCED_CONTRAST, USE_GRAPHIC_PREPROCESSING
 )
 
 
@@ -245,55 +244,57 @@ def get_feature_extractor_model(model_name, fine_tune=True, weights='imagenet', 
     return feature_extractor, False
 
 
-def find_trained_cnn_model(results_dir='./results', cnn_model_name=CNN_MODEL):
+def find_trained_cnn_model(results_dir='./results'):
     """
-    Procura por um modelo CNN já treinado no diretório de resultados,
-    seguindo a nomenclatura baseada nas configurações atuais.
+    Encontra o melhor modelo CNN treinado com base no desempenho registrado em 'model_performance_summary.csv'.
 
     Args:
-        results_dir (str): Diretório base de resultados
-        cnn_model_name (str): Nome do modelo CNN (VGG19, Inception, etc.)
+        results_dir (str): Diretório base dos resultados
 
     Returns:
-        str: Caminho para o modelo CNN encontrado, ou None se não encontrado
+        str: Caminho para o modelo CNN com melhor desempenho, ou None se não encontrado
     """
     import os
-    import glob
+    import pandas as pd
 
-    base_pattern = f"cnn_classifier_{cnn_model_name}"
+    # Constrói o caminho base
+    base_dir = os.path.join(
+        results_dir,
+        f"cnn_classifier_{CNN_MODEL}_" +
+        ("hair_removal_" if USE_HAIR_REMOVAL and USE_GRAPHIC_PREPROCESSING else "") +
+        ("contrast_" if USE_ENHANCED_CONTRAST and USE_GRAPHIC_PREPROCESSING  else "") +
+        ("use_augmentation_" if USE_DATA_AUGMENTATION else "")
+    )
 
-    if USE_GRAPHIC_PREPROCESSING:
-        if USE_HAIR_REMOVAL:
-            base_pattern += "_hair_removal"
-        if USE_ENHANCED_CONTRAST:
-            base_pattern += "_contrast"
+    final_models_dir = os.path.join(base_dir, "final_models")
+    summary_csv = os.path.join(final_models_dir, "model_performance_summary.csv")
 
-    if USE_DATA_AUGMENTATION:
-        base_pattern += "_use_augmentation"
+    # Verifica se existe o CSV de resumo de performance
+    if not os.path.isfile(summary_csv):
+        print(f"[ERRO] Arquivo de performance não encontrado: {summary_csv}")
+        return None
 
-     # Caminhos possíveis para modelos finais - com e sem sufixos adicionais
-    search_patterns = [
-        os.path.join(results_dir, base_pattern, "final_model", "final_cnn_model.h5"),
-        os.path.join(results_dir, base_pattern + "*", "final_model", "final_cnn_model.h5")
-    ]
+    # Lê o CSV de desempenho
+    df = pd.read_csv(summary_csv)
 
-    # Também busca em diretórios com sufixos parciais
-    partial_pattern = os.path.join(results_dir, f"cnn_classifier_{cnn_model_name}*", "final_model",
-                                   "final_cnn_model.h5")
-    search_patterns.append(partial_pattern)
+    if 'model_idx' not in df.columns or 'macro_avg_f1' not in df.columns:
+        print(f"[ERRO] Colunas necessárias não encontradas no CSV.")
+        return None
 
-    # Busca modelo final em cada padrão
-    for pattern in search_patterns:
-        print(f"Buscando modelo com padrão: {pattern}")
-        matching_models = glob.glob(pattern)
+        # Ordenar e pegar o melhor modelo
+    best_row = df.sort_values(by='macro_avg_f1', ascending=False).iloc[0]
+    best_model_idx = int(best_row['model_idx'])
 
-        if matching_models:
-            model_path = matching_models[0]
-            print(f"Modelo CNN final encontrado: {model_path}")
-            return model_path
+    # Construir caminho
+    best_model_dir = os.path.join(final_models_dir, f"model_{best_model_idx}")
+    best_model_path = os.path.join(best_model_dir, "final_cnn_model.h5")
 
-    print(f"Nenhum modelo CNN final para {cnn_model_name} encontrado.")
-    return None
+    if os.path.exists(best_model_path):
+        print(f"Melhor modelo CNN encontrado: {best_model_path}")
+        return best_model_path
+    else:
+        print(f"[ERRO] Modelo encontrado na planilha, mas arquivo não existe: {best_model_path}")
+        return None
 
 
 def get_feature_extractor_from_cnn(feature_extractor_save_path, cnn_model_path=None):

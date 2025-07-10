@@ -58,8 +58,7 @@ def create_result_directories(base_dir=RESULTS_DIR):
     str_contrast   = "contrast_" if USE_ENHANCED_CONTRAST else ""
     str_graphic    = f"{str_contrast}{str_hair}" if USE_GRAPHIC_PREPROCESSING else ""
     str_augment    = "use_augmentation_" if USE_DATA_AUGMENTATION else ""
-    str_preprocess = "use_feature_preprocess_" if USE_FEATURE_PREPROCESSING else ""
-    result_dir     = os.path.join(base_dir, f"cnn_classifier_{CNN_MODEL}_{str_graphic}{str_augment}{str_preprocess}")
+    result_dir     = os.path.join(base_dir, f"cnn_classifier_{CNN_MODEL}_{str_graphic}{str_augment}")
 
     # Create subdirectories
     os.makedirs(result_dir, exist_ok=True)
@@ -478,6 +477,8 @@ def run_kfold_cross_validation(all_paths, all_labels, result_dir, class_names=No
             'f1': avg_f1
         })
 
+        all_iterations_results['fold_results'].extend(fold_results)
+
     # Overall average across all iterations
     overall_avg_accuracy = np.mean([m['accuracy'] for m in iteration_metrics])
     overall_avg_precision = np.mean([m['precision'] for m in iteration_metrics])
@@ -795,7 +796,7 @@ def train_multiple_final_cnn_models(all_data_paths, all_data_labels, best_hyperp
             model_name=best_hyperparameters['model_name'],
             mode='classifier',
             fine_tune=best_hyperparameters.get('fine_tuning', USE_FINE_TUNING),
-            save_path=None  # Don't load existing
+            save_path=None
         )
 
         # Get callbacks

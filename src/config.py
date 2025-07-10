@@ -9,15 +9,13 @@ GPU_MEMORY_LIMIT = 0.9  # Fraction of GPU memory to use
 # Pipeline configuration
 USE_GRAPHIC_PREPROCESSING = False    # Apply hair removal, contrast enhancement, etc.
 USE_DATA_AUGMENTATION     = True    # Apply data augmentation during training
-USE_FEATURE_AUGMENTATION  = True
-USE_FEATURE_PREPROCESSING = True    # Apply feature pre-processing
+USE_FEATURE_AUGMENTATION  = False
+USE_FEATURE_PREPROCESSING = False    # Apply feature pre-processing
 USE_FINE_TUNING           = True     # Fine-tune pretrained CNN
 USE_METADATA              = True    # use Metadata (age, location, etc)
 
 USE_HAIR_REMOVAL          = True
 USE_ENHANCED_CONTRAST     = False
-
-FEATURE_PREPROCESSING_PRESET = 'medical_imaging'
 
 FINE_TUNING_AT_LAYER = {         # Layer index to start fine-tuning from
     'VGG19': 15,
@@ -34,8 +32,8 @@ NUM_ITERATIONS   = 2             # Number of iterations for cross-validation
 NUM_FINAL_MODELS = 10            # Number of final models to train
 
 # Model selection
-CNN_MODEL                  = 'VGG19'         # Options: 'VGG19', 'Inception', 'ResNet', 'Xception'
-CLASSICAL_CLASSIFIER_MODEL = 'XGBoost'  # Options: 'RandomForest', 'XGBoost', 'AdaBoost', 'ExtraTrees', 'SVM'
+CNN_MODEL                  = 'ResNet'         # Options: 'VGG19', 'Inception', 'ResNet', 'Xception'
+CLASSICAL_CLASSIFIER_MODEL = 'RandomForest'  # Options: 'RandomForest', 'XGBoost', 'AdaBoost', 'ExtraTrees', 'SVM'
 
 # Paths
 RESULTS_DIR      = './results'
