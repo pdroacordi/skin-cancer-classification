@@ -1,5 +1,8 @@
 from preprocessing.feature.base.algorithm import AlgorithmPreprocessingPipeline
-from preprocessing.feature.steps.balancing import ClassWeightBalancing
+from preprocessing.feature.steps.balancing import ClassWeightBalancing, TargetedSMOTEBalancing, SMOTEBalancing
+from preprocessing.feature.steps.dimensionality_reduction import DimensionalityReductionStep
+from preprocessing.feature.steps.normalization import NormalizationStep
+from preprocessing.feature.steps.outlier_detection import OutlierRemovalStep
 from preprocessing.feature.steps.selection import FeatureSelectionStep, CorrelationBasedSelection
 from preprocessing.feature.steps.threshold import VarianceThresholdStep
 
@@ -8,19 +11,17 @@ class XGBoostPipeline(AlgorithmPreprocessingPipeline):
     """Preprocessing pipeline optimized for XGBoost."""
 
     def _configure_pipeline(self):
-        self.steps.append(VarianceThresholdStep(threshold=0))
-
-        # 2. Remove only highly correlated features (>0.95 correlation)
-        self.steps.append(CorrelationBasedSelection(
-            correlation_threshold=0.95
-        ))
-
-        # 3. Use targeted SMOTE only for very small classes
-        from preprocessing.feature.steps.balancing import TargetedSMOTEBalancing
-        self.balancing_strategy = TargetedSMOTEBalancing(
-            minority_threshold=500,  # Only oversample classes with < 500 samples
-            k_neighbors=3,
-            random_state=42
+        self.steps += [
+            VarianceThresholdStep(0),
+            OutlierRemovalStep(contamination=0.05),
+            NormalizationStep('standard'),
+            DimensionalityReductionStep('pca', 0.95),
+            FeatureSelectionStep(method='mutual_info', percentile=90)
+        ]
+        # K-Means-SMOTE só para classes < 600
+        self.balancing_strategy = SMOTEBalancing(
+            method='smote_enn',  # melhor que smote puro
+            sampling_strategy='not majority'
         )
 
     def __init__(self, random_state: int = 42):

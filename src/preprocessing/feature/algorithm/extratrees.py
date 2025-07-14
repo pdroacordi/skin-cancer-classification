@@ -1,7 +1,9 @@
 from imblearn.over_sampling import SMOTE
 
 from preprocessing.feature.base.algorithm import AlgorithmPreprocessingPipeline
-from preprocessing.feature.steps.balancing import SMOTEBalancing, ClassWeightBalancing
+from preprocessing.feature.steps.balancing import SMOTEBalancing, ClassWeightBalancing, TargetedSMOTEBalancing
+from preprocessing.feature.steps.dimensionality_reduction import DimensionalityReductionStep
+from preprocessing.feature.steps.normalization import NormalizationStep
 from preprocessing.feature.steps.selection import FeatureSelectionStep
 from preprocessing.feature.steps.threshold import VarianceThresholdStep
 
@@ -10,17 +12,17 @@ class ExtraTreesPipeline(AlgorithmPreprocessingPipeline):
     """Preprocessing pipeline optimized for ExtraTrees."""
 
     def _configure_pipeline(self):
-        # 1. Remove low variance features
-        self.steps.append(VarianceThresholdStep(threshold=0))
+        self.steps += [
+            VarianceThresholdStep(0),
+            NormalizationStep('robust'),
+            FeatureSelectionStep(method='mutual_info', percentile=95)  # ou opção B
+        ]
 
-        # 2. Keep most features - ExtraTrees handles high dimensionality well
-        self.steps.append(FeatureSelectionStep(
-            method='importance_based',
-            percentile=90
-        ))
-
-        # 3. Use class weights instead of SMOTE-ENN
-        self.balancing_strategy = ClassWeightBalancing()
+        # Balanceamento sem KMeans (evita erro de cluster)
+        self.balancing_strategy = SMOTEBalancing(
+            method='smote_enn',  # gera sintéticos + remove ruído
+            sampling_strategy='not majority'
+        )
 
     def __init__(self, random_state: int = 42):
         super().__init__(random_state)
