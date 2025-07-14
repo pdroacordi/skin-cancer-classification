@@ -1,9 +1,6 @@
 from preprocessing.feature.base.algorithm import AlgorithmPreprocessingPipeline
-from preprocessing.feature.steps.balancing import SMOTEBalancing, TargetedSMOTEBalancing
-from preprocessing.feature.steps.dimensionality_reduction import DimensionalityReductionStep
-from preprocessing.feature.steps.normalization import NormalizationStep
-from preprocessing.feature.steps.outlier_detection import OutlierRemovalStep
-from preprocessing.feature.steps.selection import FeatureSelectionStep
+from preprocessing.feature.steps.balancing import ClassWeightBalancing
+from preprocessing.feature.steps.selection import FeatureSelectionStep, CorrelationBasedSelection
 from preprocessing.feature.steps.threshold import VarianceThresholdStep
 
 
@@ -13,14 +10,16 @@ class XGBoostPipeline(AlgorithmPreprocessingPipeline):
     def _configure_pipeline(self):
         self.steps.append(VarianceThresholdStep(threshold=0))
 
-        self.steps.append(FeatureSelectionStep(
-            method='importance_based',
-            percentile=95  # Very conservative - keep 95% of CNN features
+        # 2. Remove only highly correlated features (>0.95 correlation)
+        self.steps.append(CorrelationBasedSelection(
+            correlation_threshold=0.95
         ))
 
+        # 3. Use targeted SMOTE only for very small classes
+        from preprocessing.feature.steps.balancing import TargetedSMOTEBalancing
         self.balancing_strategy = TargetedSMOTEBalancing(
-            minority_threshold=2000,  # Only oversample classes with < 2000 samples
-            k_neighbors=3,  # Lower k for very small classes
+            minority_threshold=500,  # Only oversample classes with < 500 samples
+            k_neighbors=3,
             random_state=42
         )
 

@@ -7,16 +7,15 @@ class RandomForestPipeline(AlgorithmPreprocessingPipeline):
     """Preprocessing pipeline optimized for Random Forest."""
 
     def _configure_pipeline(self):
-        # 1. Remove low variance features
-        self.steps.append(VarianceThresholdStep(threshold=1e-6))
+        # ONLY remove exactly zero-variance features
+        # These are truly useless and just slow down training
+        self.steps.append(VarianceThresholdStep(threshold=0))
 
-        # 2. Feature selection with RFE
-        self.steps.append(FeatureSelectionStep(
-            method='rfe',
-            percentile=80
-        ))
+        # That's it! No feature selection - RF does this internally
+        # No normalization - RF doesn't need it
+        # No outlier removal - RF is robust to outliers
 
-        # 3. Use class weights for balancing
+        # Use class weights for balancing
         self.balancing_strategy = ClassWeightBalancing()
 
     def __init__(self, random_state: int = 42):

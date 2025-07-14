@@ -64,3 +64,48 @@ class FeatureSelectionStep(BasePreprocessingStep):
             'percentile': self.percentile,
             'n_features_selected': self.k
         }
+
+
+class CorrelationBasedSelection(BasePreprocessingStep):
+    """Remove highly correlated features to reduce redundancy."""
+
+    def __init__(self, correlation_threshold: float = 0.95):
+        self.correlation_threshold = correlation_threshold
+        self.features_to_keep = None
+
+    def fit(self, X: np.ndarray, y: Optional[np.ndarray] = None) -> 'CorrelationBasedSelection':
+        # Calculate correlation matrix
+        corr_matrix = np.corrcoef(X.T)
+
+        # Find highly correlated feature pairs
+        upper_triangle = np.triu(np.abs(corr_matrix), k=1)
+
+        # Features to remove
+        features_to_remove = set()
+
+        for i in range(len(upper_triangle)):
+            for j in range(i + 1, len(upper_triangle)):
+                if upper_triangle[i, j] > self.correlation_threshold:
+                    # Remove the feature with lower variance
+                    var_i = np.var(X[:, i])
+                    var_j = np.var(X[:, j])
+                    if var_i < var_j:
+                        features_to_remove.add(i)
+                    else:
+                        features_to_remove.add(j)
+
+        # Features to keep
+        all_features = set(range(X.shape[1]))
+        self.features_to_keep = sorted(list(all_features - features_to_remove))
+
+        return self
+
+    def transform(self, X: np.ndarray) -> np.ndarray:
+        if self.features_to_keep is None:
+            return X
+        return X[:, self.features_to_keep]
+
+    def get_params(self) -> Dict[str, Any]:
+        return {
+            'correlation_threshold': self.correlation_threshold
+        }

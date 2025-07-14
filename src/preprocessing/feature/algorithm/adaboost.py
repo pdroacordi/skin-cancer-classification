@@ -1,6 +1,5 @@
 from preprocessing.feature.base.algorithm import AlgorithmPreprocessingPipeline
-from preprocessing.feature.steps.balancing import SMOTEBalancing
-from preprocessing.feature.steps.outlier_detection import OutlierRemovalStep
+from preprocessing.feature.steps.balancing import ClassWeightBalancing
 from preprocessing.feature.steps.selection import FeatureSelectionStep
 from preprocessing.feature.steps.threshold import VarianceThresholdStep
 
@@ -8,26 +7,23 @@ class AdaBoostPipeline(AlgorithmPreprocessingPipeline):
     """Preprocessing pipeline optimized for AdaBoost."""
 
     def _configure_pipeline(self):
-        # 1. Remove outliers (AdaBoost is VERY sensitive)
-        self.steps.append(OutlierRemovalStep(
-            method='isolation_forest',
-            contamination=0.05
+        # 1. Soft outlier handling instead of removal
+        self.steps.append(SoftOutlierHandling(
+            contamination=0.01,  # Much lower threshold
+            method='downweight'  # Downweight instead of remove
         ))
 
-        # 2. Remove low variance features
-        self.steps.append(VarianceThresholdStep(threshold=1e-5))
+        # 2. Remove zero variance features
+        self.steps.append(VarianceThresholdStep(threshold=0))
 
-        # 3. Fast feature selection with F-score
+        # 3. Conservative feature selection
         self.steps.append(FeatureSelectionStep(
             method='f_score',
-            percentile=80
+            percentile=85  # Keep 85% instead of 80%
         ))
 
-        # 4. Standard SMOTE for balancing
-        self.balancing_strategy = SMOTEBalancing(
-            method='smote',
-            k_neighbors=5
-        )
+        # 4. Use class weights instead of SMOTE
+        self.balancing_strategy = ClassWeightBalancing()
 
     def __init__(self, random_state: int = 42):
         super().__init__(random_state)
