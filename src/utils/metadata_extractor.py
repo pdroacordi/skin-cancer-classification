@@ -1,7 +1,11 @@
 """
 Metadata feature extraction for HAM10000 dataset.
-Extracts and encodes clinical metadata (age, sex, localization, dx_type)
+Extracts and encodes clinical metadata (age, sex, localization)
 to be combined with CNN features.
+
+Note: dx_type is intentionally excluded. It encodes how the ground-truth
+diagnosis was confirmed (biopsy, consensus, follow-up), which is unavailable
+at clinical prediction time and constitutes target leakage.
 """
 
 import os
@@ -21,14 +25,12 @@ class MetadataFeatureExtractor:
     - Age (normalized)
     - Sex (one-hot encoded)
     - Localization (one-hot encoded)
-    - dx_type (one-hot encoded)
     """
 
     def __init__(self):
         self.age_scaler = StandardScaler()
         self.sex_encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
         self.localization_encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
-        self.dx_type_encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
 
         self.is_fitted = False
         self.feature_names = []
@@ -39,7 +41,7 @@ class MetadataFeatureExtractor:
         Fit the encoders on the metadata.
 
         Args:
-            metadata_df: DataFrame containing the metadata
+            metadata_df: DataFrame containing the metadata (train+val only — never full dataset)
         """
         # Handle missing values
         metadata_df = self._handle_missing_values(metadata_df)
@@ -51,7 +53,6 @@ class MetadataFeatureExtractor:
         # Fit categorical encoders
         self.sex_encoder.fit(metadata_df[['sex']])
         self.localization_encoder.fit(metadata_df[['localization']])
-        self.dx_type_encoder.fit(metadata_df[['dx_type']])
 
         # Build feature names
         self._build_feature_names()
@@ -88,10 +89,6 @@ class MetadataFeatureExtractor:
         loc_features = self.localization_encoder.transform(metadata_df[['localization']])
         features.append(loc_features)
 
-        # dx_type features (one-hot)
-        dx_type_features = self.dx_type_encoder.transform(metadata_df[['dx_type']])
-        features.append(dx_type_features)
-
         # Additional engineered features
         eng_features = self._extract_engineered_features(metadata_df)
         features.append(eng_features)
@@ -114,7 +111,7 @@ class MetadataFeatureExtractor:
             df['age'] = df['age'].fillna(median_age)
 
         # Categorical: fill with 'unknown'
-        for col in ['sex', 'localization', 'dx_type']:
+        for col in ['sex', 'localization']:
             if col in df.columns:
                 df[col] = df[col].fillna('unknown')
 
@@ -167,14 +164,6 @@ class MetadataFeatureExtractor:
         ]).astype(float).values.reshape(-1, 1)
         features.append(trunk)
 
-        # Clinical diagnosis confidence (histo > follow_up > consensus > single)
-        dx_confidence = np.zeros((len(df), 1))
-        dx_confidence[df['dx_type'] == 'histo'] = 1.0
-        dx_confidence[df['dx_type'] == 'follow_up'] = 0.75
-        dx_confidence[df['dx_type'] == 'consensus'] = 0.5
-        dx_confidence[df['dx_type'] == 'confocal'] = 0.5
-        features.append(dx_confidence)
-
         return np.hstack(features)
 
     def _build_feature_names(self):
@@ -197,17 +186,12 @@ class MetadataFeatureExtractor:
         loc_categories = self.localization_encoder.categories_[0]
         self.feature_names.extend([f'loc_{cat}' for cat in loc_categories])
 
-        # dx_type features
-        dx_categories = self.dx_type_encoder.categories_[0]
-        self.feature_names.extend([f'dx_type_{cat}' for cat in dx_categories])
-
         # Engineered features
         self.feature_names.extend([
             'high_risk_age',
             'sun_exposed_area',
             'extremities',
             'trunk_area',
-            'dx_confidence'
         ])
 
         # Build feature indices for easy access
@@ -233,7 +217,6 @@ class MetadataFeatureExtractor:
             'age_scaler': self.age_scaler,
             'sex_encoder': self.sex_encoder,
             'localization_encoder': self.localization_encoder,
-            'dx_type_encoder': self.dx_type_encoder,
             'is_fitted': self.is_fitted,
             'feature_names': self.feature_names,
             'feature_indices': self.feature_indices
@@ -249,7 +232,6 @@ class MetadataFeatureExtractor:
         extractor.age_scaler = save_data['age_scaler']
         extractor.sex_encoder = save_data['sex_encoder']
         extractor.localization_encoder = save_data['localization_encoder']
-        extractor.dx_type_encoder = save_data['dx_type_encoder']
         extractor.is_fitted = save_data['is_fitted']
         extractor.feature_names = save_data['feature_names']
         extractor.feature_indices = save_data['feature_indices']
