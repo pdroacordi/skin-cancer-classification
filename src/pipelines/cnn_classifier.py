@@ -44,33 +44,15 @@ from models.cnn_models import (load_or_create_cnn, get_callbacks, create_model_n
                                save_gradcam_visualizations)
 from utils.fold_utils import save_fold_results
 from utils.calibration import expected_calibration_error
-
-
-def setup_gpu_memory():
-    """Set up GPU memory growth to avoid OOM errors."""
-    gpus = tf.config.experimental.list_physical_devices('GPU')
-    if gpus:
-        try:
-            # Memory growth must be set before GPUs have been initialized
-            for gpu in gpus:
-                tf.config.experimental.set_memory_growth(gpu, True)
-            print(f"Found {len(gpus)} GPU(s). Memory growth enabled.")
-        except RuntimeError as e:
-            print(f"GPU memory configuration error: {e}")
+from utils.gpu_utils import setup_gpu_memory
+from utils.result_naming import cnn_result_dir
 
 
 def create_result_directories(base_dir=RESULTS_DIR):
     """Create directories for saving results."""
-    str_hair       = "hair_removal_" if USE_HAIR_REMOVAL else ""
-    str_contrast   = "contrast_" if USE_ENHANCED_CONTRAST else ""
-    str_graphic    = f"{str_contrast}{str_hair}" if USE_GRAPHIC_PREPROCESSING else ""
-    str_augment    = "use_augmentation_" if USE_DATA_AUGMENTATION else ""
-    result_dir     = os.path.join(base_dir, f"cnn_classifier_{CNN_MODEL}_{str_graphic}{str_augment}")
-
-    # Create subdirectories
+    result_dir = cnn_result_dir(base_dir)
     os.makedirs(result_dir, exist_ok=True)
     os.makedirs(os.path.join(result_dir, "models"), exist_ok=True)
-
     return result_dir
 
 

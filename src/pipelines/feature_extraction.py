@@ -46,19 +46,8 @@ from models.cnn_models import get_feature_extractor_model, get_feature_extractor
 from models.classical_models import create_ml_pipeline, tune_hyperparameters, get_default_param_grid, save_model
 from utils.fold_utils import save_fold_results
 from preprocessing.feature.pipeline import apply_feature_preprocessing
-
-
-def setup_gpu_memory():
-    """Set up GPU memory growth to avoid OOM errors."""
-    gpus = tf.config.experimental.list_physical_devices('GPU')
-    if gpus:
-        try:
-            # Memory growth must be set before GPUs have been initialized
-            for gpu in gpus:
-                tf.config.experimental.set_memory_growth(gpu, True)
-            print(f"Found {len(gpus)} GPU(s). Memory growth enabled.")
-        except RuntimeError as e:
-            print(f"GPU memory configuration error: {e}")
+from utils.gpu_utils import setup_gpu_memory
+from utils.result_naming import feature_extraction_experiment_dir
 
 
 def create_feature_extraction_directories(base_dir=RESULTS_DIR, cnn_model_name=CNN_MODEL,
@@ -77,18 +66,7 @@ def create_feature_extraction_directories(base_dir=RESULTS_DIR, cnn_model_name=C
     Returns:
         dict: Dictionary with paths to created directories
     """
-    # Build feature extraction path components based on configuration
-    str_hair       = "hair_removal_" if USE_HAIR_REMOVAL else ""
-    str_contrast   = "contrast_" if USE_ENHANCED_CONTRAST else ""
-    str_graphic    = f"{str_contrast}{str_hair}" if USE_GRAPHIC_PREPROCESSING else ""
-    str_augment    = "use_augmentation_" if USE_DATA_AUGMENTATION else ""
-    str_preprocess = f"use_feature_preprocessing_" if USE_FEATURE_PREPROCESSING else ""
-    str_feature    = f"use_feature_augmentation_" if USE_FEATURE_AUGMENTATION else ""
-    str_meta       = "use_metadata_" if USE_METADATA else ""
-
-    # Create main result directory path
-    result_dir = os.path.join(base_dir,
-                              f"feature_extraction_{cnn_model_name}_{str_graphic}{str_augment}{str_feature}{str_preprocess}{str_meta}")
+    result_dir = feature_extraction_experiment_dir(base_dir, cnn_model_name)
 
     # Create base directory
     os.makedirs(result_dir, exist_ok=True)

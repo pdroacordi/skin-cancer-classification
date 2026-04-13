@@ -12,9 +12,6 @@ from tensorflow.keras.layers import GlobalAveragePooling2D, Dense, Dropout
 from tensorflow.keras.models import Model, load_model
 from tensorflow.keras.optimizers import Adam
 
-from skincancer.src.config import USE_DATA_AUGMENTATION, CNN_MODEL, USE_FINE_TUNING
-
-sys.path.append('..')
 from config import (
     NUM_CLASSES,
     IMG_SIZE,
@@ -22,7 +19,8 @@ from config import (
     REDUCE_LR_PATIENCE,
     REDUCE_LR_FACTOR,
     FINE_TUNING_AT_LAYER, USE_HAIR_REMOVAL, USE_ENHANCED_CONTRAST, USE_GRAPHIC_PREPROCESSING,
-    USE_FOCAL_LOSS, LABEL_SMOOTHING
+    USE_FOCAL_LOSS, LABEL_SMOOTHING,
+    USE_DATA_AUGMENTATION, CNN_MODEL, USE_FINE_TUNING,
 )
 
 
