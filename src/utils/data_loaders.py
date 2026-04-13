@@ -4,9 +4,7 @@ import cv2
 from tensorflow.keras.utils import to_categorical
 from pathlib import Path
 from typing import Tuple, Optional, Callable, Union, List
-import sys
 
-sys.path.append('..')
 from config import NUM_CLASSES, IMG_SIZE, USE_MIXUP
 
 

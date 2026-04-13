@@ -48,11 +48,24 @@ ALGORITHM_PIPELINE_CONFIGS = {
         ],
         'balancing': ('smote', {'method': 'smote_enn', 'sampling_strategy': 'not majority'}),
     },
-    'AdaBoost': {
+    # LightGBM: leaf-wise growth handles high-dimensional embeddings without PCA.
+    # Class_weight balancing is preferred over SMOTE because SMOTE generates synthetic
+    # points by interpolation in feature space — in CNN embedding space, interpolated
+    # points do not correspond to valid skin lesion images and can mislead the classifier.
+    'LightGBM': {
         'steps': [
-            ('outlier_removal',   {'contamination': 0.05}),
-            ('variance_threshold',{'threshold': 0}),
-            ('feature_selection', {'method': 'f_score', 'percentile': 85}),
+            ('variance_threshold', {'threshold': 0}),
+            ('normalization',      {'method': 'robust'}),
+            ('feature_selection',  {'method': 'mutual_info', 'percentile': 90}),
+        ],
+        'balancing': ('class_weight', {}),
+    },
+    # HistGradientBoosting: sklearn-native GBDT; same pipeline as LightGBM for fair comparison.
+    'HistGradientBoosting': {
+        'steps': [
+            ('variance_threshold', {'threshold': 0}),
+            ('normalization',      {'method': 'robust'}),
+            ('feature_selection',  {'method': 'mutual_info', 'percentile': 90}),
         ],
         'balancing': ('class_weight', {}),
     },

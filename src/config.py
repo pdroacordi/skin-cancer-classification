@@ -60,8 +60,18 @@ NUM_ITERATIONS   = 2             # Number of iterations for cross-validation
 NUM_FINAL_MODELS = 10            # Number of final models to train
 
 # Model selection
-CNN_MODEL                  = 'ResNet'         # Options: 'VGG19', 'Inception', 'ResNet', 'Xception', 'EfficientNet'
-CLASSICAL_CLASSIFIER_MODEL = 'ExtraTrees'  # Options: 'RandomForest', 'XGBoost', 'AdaBoost', 'ExtraTrees', 'SVM'
+CNN_MODEL                  = 'ResNet'       # Options: 'VGG19', 'Inception', 'ResNet', 'Xception', 'EfficientNet'
+CLASSICAL_CLASSIFIER_MODEL = 'ExtraTrees'  # Options: 'RandomForest', 'XGBoost', 'LightGBM', 'HistGradientBoosting', 'ExtraTrees', 'SVM'
+
+# Dynamic Ensemble Selection (DESlib integration)
+# When USE_DYNAMIC_ENSEMBLE=True, the feature-extraction pipeline trains a pool
+# of classifiers and uses DESlib for local classifier selection at prediction
+# time instead of a single CLASSICAL_CLASSIFIER_MODEL.
+USE_DYNAMIC_ENSEMBLE    = False
+DES_ALGORITHM           = 'knorau'    # 'knorau' | 'desmi' | 'metades' | 'singlebest'
+DES_POOL_CLASSIFIERS    = ['RandomForest', 'XGBoost', 'LightGBM', 'ExtraTrees']
+DES_DSEL_FRACTION       = 0.30        # Fraction of training data reserved for DES calibration
+DES_K_NEIGHBORS         = 7          # DSEL neighborhood size (7 = one neighbor per class)
 
 # IMG_SIZE derived from CNN_MODEL so each backbone uses its canonical resolution.
 IMG_SIZE = BACKBONE_IMG_SIZE.get(CNN_MODEL, (299, 299, 3))
@@ -117,6 +127,8 @@ def apply_cli_overrides(args):
         'use_tta':                  'USE_TTA',
         'use_mixup':                'USE_MIXUP',
         'use_mc_dropout':           'USE_MC_DROPOUT',
+        'use_dynamic_ensemble':     'USE_DYNAMIC_ENSEMBLE',
+        'des_algorithm':            'DES_ALGORITHM',
     }
 
     for arg_attr, cfg_name in _fields.items():
@@ -140,7 +152,7 @@ def validate_config():
     """Raise AssertionError when the current config state is inconsistent."""
     import os
     valid_backbones   = list(BACKBONE_IMG_SIZE)
-    valid_classifiers = ['RandomForest', 'XGBoost', 'AdaBoost', 'ExtraTrees', 'SVM']
+    valid_classifiers = ['RandomForest', 'XGBoost', 'LightGBM', 'HistGradientBoosting', 'ExtraTrees', 'SVM']
 
     assert CNN_MODEL in valid_backbones, (
         f"Unknown CNN_MODEL '{CNN_MODEL}'. Valid options: {valid_backbones}"
@@ -152,6 +164,17 @@ def validate_config():
         f"Unknown CLASSICAL_CLASSIFIER_MODEL '{CLASSICAL_CLASSIFIER_MODEL}'. "
         f"Valid options: {valid_classifiers}"
     )
+    valid_des_algorithms = ['knorau', 'desmi', 'metades', 'singlebest']
+    assert DES_ALGORITHM in valid_des_algorithms, (
+        f"Unknown DES_ALGORITHM '{DES_ALGORITHM}'. "
+        f"Valid options: {valid_des_algorithms}"
+    )
+    valid_pool_classifiers = set(valid_classifiers)
+    for clf in DES_POOL_CLASSIFIERS:
+        assert clf in valid_pool_classifiers, (
+            f"Unknown classifier '{clf}' in DES_POOL_CLASSIFIERS. "
+            f"Valid options: {valid_classifiers}"
+        )
     if USE_COLOR_NORMALIZATION:
         assert os.path.exists(COLOR_NORM_STATS_PATH), (
             f"USE_COLOR_NORMALIZATION=True but stats file not found: {COLOR_NORM_STATS_PATH}"

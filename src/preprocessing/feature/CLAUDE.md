@@ -38,11 +38,12 @@ Each pipeline calls `_configure_pipeline()` in its `__init__` to append steps:
 
 | Algorithm | Steps | Balancing |
 |---|---|---|
-| ExtraTrees | VarianceThreshold → RobustNorm → MutualInfo(95th pct) | ClassWeight |
-| RandomForest | VarianceThreshold → RobustNorm → MutualInfo(90th pct) | ClassWeight |
-| XGBoost | VarianceThreshold → RobustNorm → MutualInfo(85th pct) | ClassWeight |
-| AdaBoost | OutlierRemoval → VarianceThreshold → F-score(85th pct) | ClassWeight |
-| SVM | VarianceThreshold → StandardNorm → PCA(95% var) | ClassWeight |
+| ExtraTrees | VarianceThreshold → RobustNorm → MutualInfo(95th pct) | SMOTE-ENN |
+| RandomForest | VarianceThreshold → OutlierRemoval → StandardNorm → MutualInfo(95th pct) | SMOTE-ENN |
+| XGBoost | VarianceThreshold → OutlierRemoval → StandardNorm → PCA(95%) → MutualInfo(90th pct) | SMOTE-ENN |
+| LightGBM | VarianceThreshold → RobustNorm → MutualInfo(90th pct) | ClassWeight |
+| HistGradientBoosting | VarianceThreshold → RobustNorm → MutualInfo(90th pct) | ClassWeight |
+| SVM | OutlierRemoval → VarianceThreshold → StandardNorm → MutualInfo(60th pct) → PCA(95%) | ClassWeight |
 
 ## Fit / Transform Contract
 

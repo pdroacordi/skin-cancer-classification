@@ -63,7 +63,7 @@ All toggles and their defaults:
 | Key | CLI flag | Options/Notes |
 |---|---|---|
 | `CNN_MODEL` | `--cnn-model` | `VGG19` `Inception` `ResNet` `Xception` `EfficientNet` |
-| `CLASSICAL_CLASSIFIER_MODEL` | `--classifier` | `RandomForest` `XGBoost` `AdaBoost` `ExtraTrees` `SVM` |
+| `CLASSICAL_CLASSIFIER_MODEL` | `--classifier` | `RandomForest` `XGBoost` `LightGBM` `HistGradientBoosting` `ExtraTrees` `SVM` |
 | `BATCH_SIZE` | `--batch-size` | int |
 | `NUM_EPOCHS` | `--num-epochs` | int |
 | `NUM_KFOLDS` / `NUM_ITERATIONS` | `--num-kfolds` / `--num-iterations` | Cross-validation folds and repetitions |

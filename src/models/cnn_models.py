@@ -160,7 +160,7 @@ def load_or_create_cnn(model_name, mode='classifier', fine_tune=True,
         fine_tune_at = FINE_TUNING_AT_LAYER["Xception"]
     elif model_name == "EfficientNet":
         base_model = EfficientNetB4(weights=weights, include_top=False, input_shape=IMG_SIZE)
-        fine_tune_at = FINE_TUNING_AT_LAYER.get("EfficientNet", 0)
+        fine_tune_at = FINE_TUNING_AT_LAYER["EfficientNet"]
     else:
         raise ValueError(f"Unsupported model: {model_name}. Choose from 'VGG19', 'Inception', 'ResNet', 'Xception', or 'EfficientNet'")
 

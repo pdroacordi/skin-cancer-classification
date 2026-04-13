@@ -76,7 +76,7 @@ def _build_parser() -> argparse.ArgumentParser:
                         default=None, metavar="BACKBONE",
                         help="CNN backbone (default: config.CNN_MODEL)")
     parser.add_argument("--classifier",
-                        choices=["RandomForest", "XGBoost", "AdaBoost", "ExtraTrees", "SVM"],
+                        choices=["RandomForest", "XGBoost", "LightGBM", "HistGradientBoosting", "ExtraTrees", "SVM"],
                         default=None,
                         help="Classical ML classifier (default: config.CLASSICAL_CLASSIFIER_MODEL)")
 
@@ -118,6 +118,13 @@ def _build_parser() -> argparse.ArgumentParser:
     _bool("use-mixup",                 dest="use_mixup")
     _bool("use-mc-dropout",            dest="use_mc_dropout",
           help_text=f"MC-Dropout uncertainty ({_config.MC_DROPOUT_STEPS} passes)")
+    _bool("use-dynamic-ensemble",      dest="use_dynamic_ensemble",
+          help_text="Dynamic Ensemble Selection via DESlib (feature-extraction pipeline only)")
+
+    parser.add_argument("--des-algorithm",
+                        choices=["knorau", "desmi", "metades", "singlebest"],
+                        default=None,
+                        help="DES algorithm (default: config.DES_ALGORITHM)")
 
     return parser
 

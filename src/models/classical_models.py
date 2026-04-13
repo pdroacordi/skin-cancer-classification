@@ -7,12 +7,13 @@ from typing import Any, Dict, Optional, Tuple
 
 import joblib
 import numpy as np
-from sklearn.ensemble import AdaBoostClassifier, ExtraTreesClassifier, RandomForestClassifier
+from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.svm import SVC
 
-# Import lazily inside get_classifier() to avoid paying the XGBoost import
-# cost when it is not being used.
+# XGBoost and LightGBM are imported lazily inside get_classifier() to avoid
+# paying their import cost when they are not being used.
 
 # ---------------------------------------------------------------------------
 # Per-algorithm default hyperparameters
@@ -53,14 +54,37 @@ _XGB_PARAMS: Dict[str, Any] = {
     'eval_metric': 'mlogloss',
 }
 
-# AdaBoost: SAMME (discrete boosting) is used because the input features are
-# already continuous — SAMME.R sometimes diverges with CNN features.  Shallow
-# decision stumps (default base estimator) are intentional: boosting works by
-# combining many weak learners.
-_ADA_PARAMS: Dict[str, Any] = {
-    'n_estimators': 150,
-    'learning_rate': 0.1,
-    'algorithm': 'SAMME',   # SAMME.R can diverge with high-dimensional features
+# LightGBM: leaf-wise growth strategy explores deep trees more efficiently than
+# XGBoost's level-wise approach, giving better macro-F1 on imbalanced multiclass.
+# num_leaves=63 (~2^6-1) provides ample capacity for CNN embedding dimensions
+# (~2048) without depth-limit overhead.  Native class_weight avoids SMOTE,
+# which can produce noisy synthetic points in high-dimensional embedding spaces.
+# verbose=-1 suppresses per-iteration console output.
+_LGBM_PARAMS: Dict[str, Any] = {
+    'n_estimators':      300,
+    'learning_rate':     0.05,
+    'num_leaves':        63,      # Tree complexity controller for leaf-wise growth
+    'max_depth':         -1,      # Unlimited — num_leaves governs complexity instead
+    'min_child_samples': 20,      # Minimum leaf size; guards against tiny minority classes
+    'class_weight':      'balanced',
+    'objective':         'multiclass',
+    'n_jobs':            -1,
+    'verbose':           -1,      # Suppress per-tree output
+}
+
+# HistGradientBoosting: sklearn-native GBDT with native NaN handling and
+# class_weight support (added in sklearn 1.2).  Serves as a dependency-free
+# alternative to LightGBM, and as a cross-check since both use histogram-based
+# split-finding but differ in tree growth strategy (level-wise vs leaf-wise).
+# max_leaf_nodes=63 mirrors LightGBM's num_leaves for comparable capacity.
+_HGB_PARAMS: Dict[str, Any] = {
+    'max_iter':         300,
+    'learning_rate':    0.05,
+    'max_leaf_nodes':   63,       # Mirrors LightGBM num_leaves for comparable capacity
+    'max_depth':        None,     # Unlimited depth
+    'min_samples_leaf': 20,       # Consistent with LightGBM min_child_samples
+    'class_weight':     'balanced',
+    'early_stopping':   False,    # Explicit iteration control — no hold-out required
 }
 
 # ExtraTrees: randomised split thresholds make it faster than RandomForest and
@@ -92,8 +116,8 @@ def get_classifier(classifier_name: str, random_state: int = 42) -> Any:
     Instantiate a classifier by name.
 
     Args:
-        classifier_name: One of 'RandomForest', 'XGBoost', 'AdaBoost',
-                         'ExtraTrees', 'SVM'.
+        classifier_name: One of 'RandomForest', 'XGBoost', 'LightGBM',
+                         'HistGradientBoosting', 'ExtraTrees', 'SVM'.
         random_state:    Seed for reproducibility.
 
     Returns:
@@ -110,8 +134,12 @@ def get_classifier(classifier_name: str, random_state: int = 42) -> Any:
         from config import NUM_CLASSES  # lazy import — avoids TF/config side-effects at module load
         return XGBClassifier(**_XGB_PARAMS, num_class=NUM_CLASSES, random_state=random_state)
 
-    if classifier_name == "AdaBoost":
-        return AdaBoostClassifier(**_ADA_PARAMS, random_state=random_state)
+    if classifier_name == "LightGBM":
+        from lightgbm import LGBMClassifier  # lazy import — avoids cost when not in use
+        return LGBMClassifier(**_LGBM_PARAMS, random_state=random_state)
+
+    if classifier_name == "HistGradientBoosting":
+        return HistGradientBoostingClassifier(**_HGB_PARAMS, random_state=random_state)
 
     if classifier_name == "ExtraTrees":
         return ExtraTreesClassifier(**_ET_PARAMS, random_state=random_state)
@@ -121,7 +149,8 @@ def get_classifier(classifier_name: str, random_state: int = 42) -> Any:
 
     raise ValueError(
         f"Unsupported classifier: '{classifier_name}'. "
-        "Choose from 'RandomForest', 'XGBoost', 'AdaBoost', 'ExtraTrees', 'SVM'."
+        "Choose from 'RandomForest', 'XGBoost', 'LightGBM', "
+        "'HistGradientBoosting', 'ExtraTrees', 'SVM'."
     )
 
 
@@ -241,9 +270,17 @@ def get_default_param_grid(classifier_name: str) -> Dict[str, Any]:
             'classifier__subsample': [0.7, 0.8, 0.9],
             'classifier__colsample_bytree': [0.7, 0.8, 0.9],
         },
-        "AdaBoost": {
-            'classifier__n_estimators': [50, 100, 200],
-            'classifier__learning_rate': [0.01, 0.1, 1.0],
+        "LightGBM": {
+            'classifier__n_estimators':      [100, 200, 300],
+            'classifier__learning_rate':     [0.01, 0.05, 0.1],
+            'classifier__num_leaves':        [31, 63, 127],
+            'classifier__min_child_samples': [10, 20, 50],
+        },
+        "HistGradientBoosting": {
+            'classifier__max_iter':         [100, 200, 300],
+            'classifier__learning_rate':    [0.01, 0.05, 0.1],
+            'classifier__max_leaf_nodes':   [31, 63, 127],
+            'classifier__min_samples_leaf': [10, 20, 50],
         },
         "ExtraTrees": {
             'classifier__n_estimators': [50, 100, 200],

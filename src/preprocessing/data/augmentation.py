@@ -119,52 +119,46 @@ class AugmentationFactory:
             return int(np.ceil(len(self.x) / self.batch_size))
 
         def __getitem__(self, idx):
+            from config import IMG_SIZE  # lazy import — IMG_SIZE may be overridden by CLI at runtime
+
             # Get batch indices
             batch_indices = self.indices[idx * self.batch_size:(idx + 1) * self.batch_size]
             batch_x = self.x[batch_indices]
             batch_y = self.y[batch_indices]
 
+            expected_shape = IMG_SIZE  # e.g. (380, 380, 3) for EfficientNet, (299, 299, 3) for Inception
+
             # Apply augmentation
             augmented_batch = []
             for image in batch_x:
-                # Ensure image has the correct shape and type for augmentation
-                if image.shape == (299, 299, 3):  # Check expected dimensions
-                    try:
-                        # Convert to uint8 if needed (albumentations expects uint8)
-                        if image.dtype != np.uint8:
-                            # Normalize to 0-255 range for uint8 conversion
-                            if image.min() < 0 or image.max() > 1:
-                                # Already in another range, rescale appropriately
-                                image_uint8 = ((image - image.min()) / (image.max() - image.min()) * 255).astype(
-                                    np.uint8)
-                            else:
-                                # Assumed to be in 0-1 range
-                                image_uint8 = (image * 255).astype(np.uint8)
+                if image.shape != expected_shape:
+                    print(f"Skipping augmentation: image shape {image.shape} != expected {expected_shape}")
+                    augmented_batch.append(image)
+                    continue
+
+                try:
+                    # Convert to uint8 if needed (albumentations expects uint8)
+                    if image.dtype != np.uint8:
+                        if image.min() < 0 or image.max() > 1:
+                            image_uint8 = ((image - image.min()) / (image.max() - image.min()) * 255).astype(np.uint8)
                         else:
-                            image_uint8 = image
+                            image_uint8 = (image * 255).astype(np.uint8)
+                    else:
+                        image_uint8 = image
 
-                        # Apply augmentation
-                        augmented = self.augmentation(image=image_uint8)
-                        aug_image = augmented['image']
+                    aug_image = self.augmentation(image=image_uint8)['image']
 
-                        # Convert back to the original dtype and range if needed
-                        if image.dtype != np.uint8:
-                            if image.min() < 0 or image.max() > 1:
-                                # Rescale back to original range
-                                aug_image = (aug_image / 255.0) * (image.max() - image.min()) + image.min()
-                                aug_image = aug_image.astype(image.dtype)
-                            else:
-                                # Back to 0-1 range
-                                aug_image = (aug_image / 255.0).astype(image.dtype)
+                    # Convert back to the original dtype and range
+                    if image.dtype != np.uint8:
+                        if image.min() < 0 or image.max() > 1:
+                            aug_image = (aug_image / 255.0) * (image.max() - image.min()) + image.min()
+                            aug_image = aug_image.astype(image.dtype)
+                        else:
+                            aug_image = (aug_image / 255.0).astype(image.dtype)
 
-                        augmented_batch.append(aug_image)
-                    except Exception as e:
-                        # If augmentation fails, use original image
-                        print(f"Augmentation error: {e}. Using original image.")
-                        augmented_batch.append(image)
-                else:
-                    # Skip augmentation for images with unexpected dimensions
-                    print(f"Skipping augmentation for image with shape {image.shape}")
+                    augmented_batch.append(aug_image)
+                except Exception as e:
+                    print(f"Augmentation error: {e}. Using original image.")
                     augmented_batch.append(image)
 
             return np.array(augmented_batch), batch_y

@@ -46,7 +46,8 @@ Defines sklearn/XGBoost classifiers for the feature extraction pipeline.
 |---|---|
 | `RandomForest` | 200 trees, `class_weight='balanced'`, OOB scoring |
 | `XGBoost` | 200 trees, lr=0.05, max_depth=4, `tree_method='hist'` |
-| `AdaBoost` | 150 estimators, lr=0.1, `algorithm='SAMME'` |
+| `LightGBM` | 300 iters, lr=0.05, num_leaves=63, `class_weight='balanced'` |
+| `HistGradientBoosting` | 300 iters, lr=0.05, max_leaf_nodes=63, `class_weight='balanced'` |
 | `ExtraTrees` | 200 trees, `max_features='sqrt'`, `class_weight='balanced'` |
 | `SVM` | RBF kernel, C=10, γ=0.01, `class_weight='balanced'` |
 
@@ -55,3 +56,23 @@ Models are persisted/loaded via `joblib` (`save_model` / `load_model`).
 
 `tune_hyperparameters()` runs `GridSearchCV` on a stratified subsample (default 50%) 
 scored by `balanced_accuracy` — use sparingly as it is expensive.
+
+## dynamic_ensemble.py
+
+Wraps DESlib (0.3.7) in an sklearn-compatible interface for the feature extraction
+pipeline.  Enabled by `USE_DYNAMIC_ENSEMBLE=True` in `config.py`.
+
+**Class:** `DynamicEnsembleSelector(algorithm, k_neighbors)`
+
+| Algorithm | Description | When to use |
+|---|---|---|
+| `knorau` | KNN Oracle Union — selects classifiers correct on ≥1 DSEL neighbor | Default; robust |
+| `desmi` | DES Multiple Instances — designed for imbalanced multiclass | Best fit for HAM10000 |
+| `metades` | META-DES — meta-classifier learns local competence | Powerful; needs large DSEL |
+| `singlebest` | Static: picks globally best classifier on DSEL | Fast baseline |
+
+**Interface:** `fit(pool_classifiers, X_dsel, y_dsel)` · `predict(X)` · `predict_proba(X)` · `save(path)` · `load(path)`
+
+Pool classifiers are pre-fitted sklearn Pipelines (output of `create_ml_pipeline`).
+DSEL is a stratified 30% split of training data (configurable via `DES_DSEL_FRACTION`).
+Results are saved under `results/feature_extraction_.../dynamic_ensemble/`.

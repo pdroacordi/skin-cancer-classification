@@ -6,10 +6,9 @@ Handles training, evaluation, and K-fold cross-validation.
 import datetime
 import gc
 import math
+import numpy as np
 import os
 import sys
-
-import numpy as np
 import tensorflow as tf
 from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
 from sklearn.utils.class_weight import compute_class_weight

@@ -25,8 +25,9 @@ from tensorflow.keras.backend import clear_session
 
 from core.run_context import RunContext
 from core.types import EvalResult, FoldResult, RunArtifact
-from models.classical_models import save_model
+from models.classical_models import create_ml_pipeline, save_model
 from models.cnn_models import get_feature_extractor_from_cnn
+from models.dynamic_ensemble import DynamicEnsembleSelector
 from pipelines.feature_extraction.stages.evaluate import evaluate_classifier
 from pipelines.feature_extraction.stages.extract import load_or_extract_features
 from pipelines.feature_extraction.stages.train import train_classifier
@@ -89,7 +90,10 @@ def run_feature_extraction_pipeline(
     result_dir = Path(feature_extraction_experiment_dir())
     result_dir.mkdir(parents=True, exist_ok=True)
 
-    classifier_dir = result_dir / config.CLASSICAL_CLASSIFIER_MODEL.lower()
+    # When DES is active, results live under dynamic_ensemble/ so they are
+    # clearly distinguishable from single-classifier runs in aggregate_results.
+    subdir_name = "dynamic_ensemble" if config.USE_DYNAMIC_ENSEMBLE else config.CLASSICAL_CLASSIFIER_MODEL.lower()
+    classifier_dir = result_dir / subdir_name
     classifier_dir.mkdir(parents=True, exist_ok=True)
 
     ctx = RunContext.create(
@@ -285,8 +289,9 @@ def _run_kfold_cv(
                     metadata_features=val_meta,
                 )
 
-                # Feature preprocessing (optional per-algorithm pipeline)
-                if config.USE_FEATURE_PREPROCESSING:
+                # Feature preprocessing (optional per-algorithm pipeline).
+                # Skipped for DES: raw features preserve pool diversity.
+                if config.USE_FEATURE_PREPROCESSING and not config.USE_DYNAMIC_ENSEMBLE:
                     pipe_save_path = str(fold_dir / "models" / "feat_preprocessing.joblib")
                     train_feats, train_labs, feat_pipe = apply_feature_preprocessing(
                         features=train_feats,
@@ -297,20 +302,32 @@ def _run_kfold_cv(
                     )
                     val_feats, val_labs = feat_pipe.transform(val_feats, val_labs)
 
-                model, eval_result = train_classifier(
-                    train_features=train_feats,
-                    train_labels=train_labs,
-                    val_features=val_feats,
-                    val_labels=val_labs,
-                    classifier_name=config.CLASSICAL_CLASSIFIER_MODEL,
-                    tune_hyperparams=tune_hyperparams,
-                )
-
-                model_save_path = str(
-                    fold_dir / "models" /
-                    f"{config.CLASSICAL_CLASSIFIER_MODEL.lower()}_fold{fold}.joblib"
-                )
-                save_model(model, model_save_path)
+                if config.USE_DYNAMIC_ENSEMBLE:
+                    model, eval_result = _train_des_ensemble(
+                        train_feats=train_feats,
+                        train_labs=train_labs,
+                        val_feats=val_feats,
+                        val_labs=val_labs,
+                        config=config,
+                    )
+                    model_save_path = str(
+                        fold_dir / "models" / f"des_{config.DES_ALGORITHM}_fold{fold}.joblib"
+                    )
+                    model.save(model_save_path)
+                else:
+                    model, eval_result = train_classifier(
+                        train_features=train_feats,
+                        train_labels=train_labs,
+                        val_features=val_feats,
+                        val_labels=val_labs,
+                        classifier_name=config.CLASSICAL_CLASSIFIER_MODEL,
+                        tune_hyperparams=tune_hyperparams,
+                    )
+                    model_save_path = str(
+                        fold_dir / "models" /
+                        f"{config.CLASSICAL_CLASSIFIER_MODEL.lower()}_fold{fold}.joblib"
+                    )
+                    save_model(model, model_save_path)
 
                 fold_results.append(
                     FoldResult(
@@ -389,8 +406,12 @@ def _train_and_evaluate_final_models(
         metadata_features=test_meta,
     )
 
-    # Feature preprocessing for final models
-    if config.USE_FEATURE_PREPROCESSING:
+    # Feature preprocessing for final models.
+    # Skipped when USE_DYNAMIC_ENSEMBLE=True: the pool contains classifiers
+    # with different optimal preprocessing requirements, and applying a single
+    # algorithm-specific pipeline (based on CLASSICAL_CLASSIFIER_MODEL) could
+    # hurt pool diversity. Raw CNN features work well for all tree-based classifiers.
+    if config.USE_FEATURE_PREPROCESSING and not config.USE_DYNAMIC_ENSEMBLE:
         final_pipe_path = str(final_models_dir / "final_feat_preprocessing.joblib")
         train_feats, train_labs, feat_pipe = apply_feature_preprocessing(
             features=train_feats,
@@ -401,6 +422,19 @@ def _train_and_evaluate_final_models(
         )
         test_feats, test_labs = feat_pipe.transform(test_feats, test_labs)
 
+    # ---- DES branch: train pool + calibrate DES + evaluate ---- #
+    if config.USE_DYNAMIC_ENSEMBLE:
+        return _train_and_evaluate_des_final(
+            train_feats=train_feats,
+            train_labs=train_labs,
+            test_feats=test_feats,
+            test_labs=test_labs,
+            config=config,
+            class_names=class_names,
+            final_models_dir=final_models_dir,
+        ), final_models_dir
+
+    # ---- Single-classifier branch (original path) ---- #
     model_evals: List[EvalResult] = []
     best_model = None
 
@@ -465,9 +499,15 @@ def _compute_and_save_shap(
 ) -> None:
     """
     Compute TreeSHAP values for tree-based classifiers and save to .npy.
-    Skips silently for non-tree models (SVM) where TreeSHAP is unavailable.
+
+    Skipped when:
+    - USE_DYNAMIC_ENSEMBLE=True (DES is an ensemble; per-base SHAP is a separate analysis)
+    - Classifier is SVM or HistGradientBoosting (not supported by shap.TreeExplainer)
     """
-    tree_based = {"RandomForest", "XGBoost", "ExtraTrees", "AdaBoost"}
+    if config.USE_DYNAMIC_ENSEMBLE:
+        return  # DES: no single tree model to explain
+
+    tree_based = {"RandomForest", "XGBoost", "LightGBM", "ExtraTrees"}
     if config.CLASSICAL_CLASSIFIER_MODEL not in tree_based:
         return
 
@@ -548,7 +588,7 @@ def _build_config_snapshot(config) -> dict:
     """Capture all active experiment flags as a plain dict for metadata.json."""
     return {
         "cnn_model":                  config.CNN_MODEL,
-        "classifier":                 config.CLASSICAL_CLASSIFIER_MODEL,
+        "classifier":                 "dynamic_ensemble" if config.USE_DYNAMIC_ENSEMBLE else config.CLASSICAL_CLASSIFIER_MODEL,
         "batch_size":                 config.BATCH_SIZE,
         "num_kfolds":                 config.NUM_KFOLDS,
         "num_iterations":             config.NUM_ITERATIONS,
@@ -562,7 +602,171 @@ def _build_config_snapshot(config) -> dict:
         "use_enhanced_contrast":      config.USE_ENHANCED_CONTRAST,
         "use_color_normalization":    config.USE_COLOR_NORMALIZATION,
         "use_metadata":               config.USE_METADATA,
+        "use_dynamic_ensemble":       config.USE_DYNAMIC_ENSEMBLE,
+        "des_algorithm":              config.DES_ALGORITHM if config.USE_DYNAMIC_ENSEMBLE else None,
+        "des_pool_classifiers":       config.DES_POOL_CLASSIFIERS if config.USE_DYNAMIC_ENSEMBLE else None,
     }
+
+
+# ------------------------------------------------------------------ #
+#  DES helpers                                                         #
+# ------------------------------------------------------------------ #
+
+def _build_pool_classifiers(
+    X_tr: np.ndarray,
+    y_tr: np.ndarray,
+    pool_names: List[str],
+) -> List[Tuple[str, object]]:
+    """
+    Train each classifier in *pool_names* on (X_tr, y_tr).
+
+    Returns a list of (name, fitted_pipeline) tuples.  Each pipeline
+    contains a single 'classifier' step (from create_ml_pipeline).
+    class_weight='balanced' is embedded in every classifier's params,
+    so no separate sample_weight handling is needed here.
+    """
+    pool = []
+    for name in pool_names:
+        print(f"  Training pool classifier: {name}...")
+        clf = create_ml_pipeline(classifier_name=name)
+        clf.fit(X_tr.astype(np.float32), y_tr)
+        pool.append((name, clf))
+    return pool
+
+
+def _train_des_ensemble(
+    train_feats: np.ndarray,
+    train_labs: np.ndarray,
+    val_feats: np.ndarray,
+    val_labs: np.ndarray,
+    config,
+) -> Tuple[DynamicEnsembleSelector, EvalResult]:
+    """
+    Train DES pool on a stratified subset of (train_feats, train_labs) and
+    calibrate on the remaining DSEL split.  Evaluate on (val_feats, val_labs).
+
+    The DSEL split (DES_DSEL_FRACTION of the fold training data) is kept out
+    of pool-classifier training so DES competence estimates are unbiased.
+
+    Returns (fitted DynamicEnsembleSelector, EvalResult on val set).
+    """
+    from sklearn.model_selection import StratifiedShuffleSplit
+    from pipelines.feature_extraction.stages.evaluate import evaluate_classifier
+
+    print(f"  Building DES pool ({config.DES_ALGORITHM}, "
+          f"k={config.DES_K_NEIGHBORS}, "
+          f"dsel_frac={config.DES_DSEL_FRACTION})...")
+
+    # Split training data into pool-training (X_tr) and DSEL (X_dsel).
+    splitter = StratifiedShuffleSplit(
+        n_splits=1,
+        test_size=config.DES_DSEL_FRACTION,
+        random_state=42,
+    )
+    tr_idx, dsel_idx = next(splitter.split(train_feats, train_labs))
+    X_tr,   y_tr   = train_feats[tr_idx],   train_labs[tr_idx]
+    X_dsel, y_dsel = train_feats[dsel_idx], train_labs[dsel_idx]
+
+    print(f"  Pool training: {len(X_tr)} samples | DSEL: {len(X_dsel)} samples")
+
+    pool = _build_pool_classifiers(X_tr, y_tr, config.DES_POOL_CLASSIFIERS)
+
+    des = DynamicEnsembleSelector(
+        algorithm=config.DES_ALGORITHM,
+        k_neighbors=config.DES_K_NEIGHBORS,
+    )
+    des.fit(pool, X_dsel, y_dsel)
+
+    _, _, _, eval_result = evaluate_classifier(
+        model=des,
+        test_features=val_feats,
+        test_labels=val_labs,
+    )
+
+    print(f"  Val — acc={eval_result.accuracy:.4f}  "
+          f"macro-F1={eval_result.macro_f1:.4f}  "
+          f"AUC={eval_result.macro_auc_roc:.4f}")
+
+    return des, eval_result
+
+
+def _train_and_evaluate_des_final(
+    train_feats: np.ndarray,
+    train_labs: np.ndarray,
+    test_feats: np.ndarray,
+    test_labs: np.ndarray,
+    config,
+    class_names: Optional[List[str]],
+    final_models_dir: Path,
+) -> List[EvalResult]:
+    """
+    Train NUM_FINAL_MODELS DES ensembles on all training data and evaluate
+    on the test set.  Each model uses a fresh stratified DSEL split.
+
+    Multiple models are trained identically to the single-classifier path so
+    result variance can be measured across seeds.  Each DSEL split uses a
+    different random_state (42 + model_idx) to obtain distinct calibration sets.
+    """
+    from sklearn.model_selection import StratifiedShuffleSplit
+    from pipelines.feature_extraction.stages.evaluate import evaluate_classifier
+
+    print(f"\n{'=' * 60}")
+    print(f"Training {config.NUM_FINAL_MODELS} final DES "
+          f"({config.DES_ALGORITHM}) ensemble(s)")
+    print(f"Pool: {config.DES_POOL_CLASSIFIERS}")
+    print(f"{'=' * 60}")
+
+    model_evals: List[EvalResult] = []
+
+    for model_idx in range(1, config.NUM_FINAL_MODELS + 1):
+        print(f"\n--- Final DES model {model_idx}/{config.NUM_FINAL_MODELS} ---")
+
+        try:
+            # Use a different random_state per model so DSEL splits vary.
+            splitter = StratifiedShuffleSplit(
+                n_splits=1,
+                test_size=config.DES_DSEL_FRACTION,
+                random_state=42 + model_idx,
+            )
+            tr_idx, dsel_idx = next(splitter.split(train_feats, train_labs))
+            X_tr,   y_tr   = train_feats[tr_idx],   train_labs[tr_idx]
+            X_dsel, y_dsel = train_feats[dsel_idx], train_labs[dsel_idx]
+
+            print(f"  Pool training: {len(X_tr)} | DSEL: {len(X_dsel)}")
+
+            pool = _build_pool_classifiers(X_tr, y_tr, config.DES_POOL_CLASSIFIERS)
+
+            des = DynamicEnsembleSelector(
+                algorithm=config.DES_ALGORITHM,
+                k_neighbors=config.DES_K_NEIGHBORS,
+            )
+            des.fit(pool, X_dsel, y_dsel)
+
+            des_save_path = str(
+                final_models_dir / f"des_{config.DES_ALGORITHM}_model{model_idx}.joblib"
+            )
+            des.save(des_save_path)
+
+            _, _, _, eval_result = evaluate_classifier(
+                model=des,
+                test_features=test_feats,
+                test_labels=test_labs,
+                class_names=class_names,
+            )
+            model_evals.append(eval_result)
+
+            print(f"  Test — acc={eval_result.accuracy:.4f}  "
+                  f"macro-F1={eval_result.macro_f1:.4f}  "
+                  f"AUC={eval_result.macro_auc_roc:.4f}")
+
+        except Exception as exc:
+            print(f"Error training DES model {model_idx}: {exc}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            gc.collect()
+
+    return model_evals
 
 
 def _list_artifacts(ctx: RunContext, final_models_dir: Path) -> List[RunArtifact]:

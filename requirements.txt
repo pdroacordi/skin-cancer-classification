@@ -6,9 +6,11 @@ matplotlib
 numpy<2.0
 albumentations
 xgboost
+lightgbm==4.3.0
 imbalanced-learn
 seaborn
 scikit-image
 tqdm
 scikit-posthocs>=0.7
 tensorflow-addons
+deslib==0.3.7
