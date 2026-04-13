@@ -2,42 +2,31 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-from preprocessing.feature.algorithm.adaboost import AdaBoostPipeline
-from preprocessing.feature.algorithm.extratrees import ExtraTreesPipeline
-from preprocessing.feature.algorithm.randomforest import RandomForestPipeline
-from preprocessing.feature.algorithm.svm import SVMPipeline
-from preprocessing.feature.algorithm.xgboost import XGBoostPipeline
+from preprocessing.feature.algorithm.configurable import ConfigurablePreprocessingPipeline
+from preprocessing.feature.algorithm.configs import ALGORITHM_PIPELINE_CONFIGS
 from preprocessing.feature.base.algorithm import AlgorithmPreprocessingPipeline
 
 
 class PreprocessingPipelineFactory:
     """Factory class to create appropriate preprocessing pipelines."""
 
-    _pipelines = {
-        'XGBoost': XGBoostPipeline,
-        'RandomForest': RandomForestPipeline,
-        'ExtraTrees': ExtraTreesPipeline,
-        'AdaBoost': AdaBoostPipeline,
-        'SVM': SVMPipeline
-    }
-
     @classmethod
     def create_pipeline(cls, algorithm: str, **kwargs) -> AlgorithmPreprocessingPipeline:
         """Create a preprocessing pipeline for the specified algorithm."""
-        if algorithm not in cls._pipelines:
-            raise ValueError(f"Unknown algorithm: {algorithm}. "
-                             f"Choose from {list(cls._pipelines.keys())}")
-
-        return cls._pipelines[algorithm](**kwargs)
+        if algorithm not in ALGORITHM_PIPELINE_CONFIGS:
+            raise ValueError(
+                f"Unknown algorithm: {algorithm}. "
+                f"Choose from {list(ALGORITHM_PIPELINE_CONFIGS)}"
+            )
+        return ConfigurablePreprocessingPipeline(algorithm, **kwargs)
 
     @classmethod
     def register_pipeline(cls, algorithm: str, pipeline_class):
-        """Register a new pipeline class."""
-        cls._pipelines[algorithm] = pipeline_class
-
-PIPELINE_CLASS_MAP = {
-    cls.__name__: cls for cls in PreprocessingPipelineFactory._pipelines.values()
-}
+        """Register a custom pipeline class (overrides the config-driven default)."""
+        # Dynamic registration: store custom classes on the class object.
+        if not hasattr(cls, '_custom_pipelines'):
+            cls._custom_pipelines = {}
+        cls._custom_pipelines[algorithm] = pipeline_class
 
 
 # Convenience functions for integration

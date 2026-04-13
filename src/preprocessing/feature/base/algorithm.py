@@ -111,37 +111,62 @@ class AlgorithmPreprocessingPipeline(ABC):
         """Save the fitted pipeline."""
         if not self.is_fitted:
             raise ValueError("Cannot save unfitted pipeline")
-        
+
         save_data = {
             'class': self.__class__.__name__,
+            # Store algorithm name for ConfigurablePreprocessingPipeline reload.
+            'algorithm': getattr(self, 'algorithm', None),
             'steps': self.steps,
             'balancing_strategy': self.balancing_strategy,
             'feature_stats': self.feature_stats,
             'is_fitted': self.is_fitted,
-            'random_state': self.random_state
+            'random_state': self.random_state,
         }
-        
+
         joblib.dump(save_data, filepath)
         logger.info(f"Pipeline saved to {filepath}")
-    
+
     @classmethod
     def load(cls, filepath: str) -> 'AlgorithmPreprocessingPipeline':
-        """Load a fitted pipeline."""
+        """Load a fitted pipeline.
+
+        Supports both the current ``ConfigurablePreprocessingPipeline`` format
+        and the legacy per-algorithm class format (e.g. ``ExtraTreesPipeline``)
+        for backward compatibility with pipelines saved before the refactor.
+        """
         save_data = joblib.load(filepath)
         class_name = save_data['class']
+        algorithm  = save_data.get('algorithm')
 
-        from preprocessing.feature.pipeline import PIPELINE_CLASS_MAP
-        if class_name not in PIPELINE_CLASS_MAP:
-            raise ValueError(f"Pipeline class '{class_name}' not registered.")
+        from preprocessing.feature.algorithm.configurable import ConfigurablePreprocessingPipeline
+        from preprocessing.feature.algorithm.configs import ALGORITHM_PIPELINE_CONFIGS
 
-        pipeline_class = PIPELINE_CLASS_MAP[class_name]
-        pipeline = pipeline_class()
+        # Backward-compat map: old class names → algorithm config keys
+        _legacy_map = {
+            'ExtraTreesPipeline':  'ExtraTrees',
+            'RandomForestPipeline':'RandomForest',
+            'XGBoostPipeline':     'XGBoost',
+            'AdaBoostPipeline':    'AdaBoost',
+            'SVMPipeline':         'SVM',
+        }
 
+        if algorithm is None and class_name in _legacy_map:
+            algorithm = _legacy_map[class_name]
+
+        if algorithm is None or algorithm not in ALGORITHM_PIPELINE_CONFIGS:
+            raise ValueError(
+                f"Cannot reload pipeline: unknown class '{class_name}' / "
+                f"algorithm '{algorithm}'."
+            )
+
+        pipeline = ConfigurablePreprocessingPipeline(algorithm,
+                                                     save_data['random_state'])
+        # Overwrite steps with the fitted objects persisted in the file.
         pipeline.steps = save_data['steps']
         pipeline.balancing_strategy = save_data['balancing_strategy']
         pipeline.feature_stats = save_data['feature_stats']
         pipeline.is_fitted = save_data['is_fitted']
         pipeline.random_state = save_data['random_state']
-        
+
         logger.info(f"Pipeline loaded from {filepath}")
         return pipeline
