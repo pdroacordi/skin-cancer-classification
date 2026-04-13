@@ -72,6 +72,7 @@ def get_classifier(classifier_name, random_state=42):
             min_samples_split=2,
             min_samples_leaf=1,
             max_features='sqrt',
+            class_weight='balanced',
             random_state=random_state,
             n_jobs=-1
         )
