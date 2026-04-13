@@ -16,6 +16,7 @@ from .base.preprocessor import ImagePreprocessor
 from .config import PreprocessingConfig
 from .steps.contrast_enhancer import ContrastEnhancer
 from .steps.hair_removal import HairRemovalStep
+from .color_normalization import ColorNormalizationStep
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -33,6 +34,8 @@ class PreprocessingPipeline:
             self.steps.append(HairRemovalStep())
         if self.cfg.use_contrast_enhancement:
             self.steps.append(ContrastEnhancer(self.cfg))
+        if self.cfg.use_color_normalization:
+            self.steps.append(ColorNormalizationStep(self.cfg.color_norm_stats_path))
 
     def process(self, img: np.ndarray, visualize: bool = False) -> np.ndarray:
         out = img.copy()
@@ -54,25 +57,30 @@ class PreprocessingPipeline:
 
 # Convenience function matching original API
 def apply_graphic_preprocessing(image: np.ndarray,
-                              use_hair_removal: bool = True,
-                              use_contrast_enhancement: bool = True,
-                              visualize: bool = False) -> np.ndarray:
+                                use_hair_removal: bool = True,
+                                use_contrast_enhancement: bool = True,
+                                use_color_normalization: bool = False,
+                                color_norm_stats_path: str | None = None,
+                                visualize: bool = False) -> np.ndarray:
     """
-    Apply graphic preprocessing to dermoscopic image.
+    Apply graphic preprocessing to a dermoscopic image.
 
     Args:
-        image: Input BGR image
-        use_hair_removal: Whether to apply hair removal
-        use_contrast_enhancement: Whether to enhance contrast
-        use_segmentation: Whether to segment the lesion
-        visualize: Whether to visualize intermediate steps
+        image: Input BGR image.
+        use_hair_removal: Apply deep-learning hair removal.
+        use_contrast_enhancement: Apply CLAHE contrast enhancement.
+        use_color_normalization: Apply Reinhard LAB color normalization.
+        color_norm_stats_path: Path to fitted color normalization stats (joblib).
+        visualize: Show intermediate results (debugging).
 
     Returns:
-        Preprocessed image
+        Preprocessed BGR image.
     """
     config = PreprocessingConfig(
         use_hair_removal=use_hair_removal,
-        use_contrast_enhancement=use_contrast_enhancement
+        use_contrast_enhancement=use_contrast_enhancement,
+        use_color_normalization=use_color_normalization,
+        color_norm_stats_path=color_norm_stats_path
     )
 
     pipeline = PreprocessingPipeline(config)
