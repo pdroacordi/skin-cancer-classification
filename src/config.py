@@ -77,3 +77,86 @@ METADATA_PATH    = "./res/metadata.csv"
 EARLY_STOPPING_PATIENCE = 10
 REDUCE_LR_PATIENCE = 5
 REDUCE_LR_FACTOR = 0.5
+
+
+def apply_cli_overrides(args):
+    """Apply an argparse Namespace to this module's globals in-place.
+
+    Only fields whose value is not None are applied, so absent CLI flags
+    leave the default untouched.  Derived values (IMG_SIZE, data paths)
+    are recomputed after all overrides are applied.
+    """
+    import sys
+    m = sys.modules[__name__]
+
+    _fields = {
+        # str
+        'cnn_model':                'CNN_MODEL',
+        'classifier':               'CLASSICAL_CLASSIFIER_MODEL',
+        # int
+        'batch_size':               'BATCH_SIZE',
+        'num_epochs':               'NUM_EPOCHS',
+        'num_kfolds':               'NUM_KFOLDS',
+        'num_iterations':           'NUM_ITERATIONS',
+        'num_final_models':         'NUM_FINAL_MODELS',
+        'tta_n_steps':              'TTA_N_STEPS',
+        'mc_dropout_steps':         'MC_DROPOUT_STEPS',
+        # float
+        'label_smoothing':          'LABEL_SMOOTHING',
+        # bool  (BooleanOptionalAction yields None when flag is absent)
+        'use_fine_tuning':          'USE_FINE_TUNING',
+        'use_data_augmentation':    'USE_DATA_AUGMENTATION',
+        'use_feature_augmentation': 'USE_FEATURE_AUGMENTATION',
+        'use_feature_preprocessing':'USE_FEATURE_PREPROCESSING',
+        'use_graphic_preprocessing':'USE_GRAPHIC_PREPROCESSING',
+        'use_metadata':             'USE_METADATA',
+        'use_hair_removal':         'USE_HAIR_REMOVAL',
+        'use_enhanced_contrast':    'USE_ENHANCED_CONTRAST',
+        'use_color_normalization':  'USE_COLOR_NORMALIZATION',
+        'use_focal_loss':           'USE_FOCAL_LOSS',
+        'use_tta':                  'USE_TTA',
+        'use_mixup':                'USE_MIXUP',
+        'use_mc_dropout':           'USE_MC_DROPOUT',
+    }
+
+    for arg_attr, cfg_name in _fields.items():
+        val = getattr(args, arg_attr, None)
+        if val is not None:
+            setattr(m, cfg_name, val)
+
+    # Recompute derived values that depend on the overridden constants.
+    m.IMG_SIZE = m.BACKBONE_IMG_SIZE.get(m.CNN_MODEL, (299, 299, 3))
+    if m.USE_GRAPHIC_PREPROCESSING:
+        m.TRAIN_FILES_PATH = './res/preprocessed_train_files.txt'
+        m.VAL_FILES_PATH   = './res/preprocessed_val_files.txt'
+        m.TEST_FILES_PATH  = './res/preprocessed_test_files.txt'
+    else:
+        m.TRAIN_FILES_PATH = './res/train_files.txt'
+        m.VAL_FILES_PATH   = './res/val_files.txt'
+        m.TEST_FILES_PATH  = './res/test_files.txt'
+
+
+def validate_config():
+    """Raise AssertionError when the current config state is inconsistent."""
+    import os
+    valid_backbones   = list(BACKBONE_IMG_SIZE)
+    valid_classifiers = ['RandomForest', 'XGBoost', 'AdaBoost', 'ExtraTrees', 'SVM']
+
+    assert CNN_MODEL in valid_backbones, (
+        f"Unknown CNN_MODEL '{CNN_MODEL}'. Valid options: {valid_backbones}"
+    )
+    assert CNN_MODEL in FINE_TUNING_AT_LAYER, (
+        f"No FINE_TUNING_AT_LAYER entry for '{CNN_MODEL}'."
+    )
+    assert CLASSICAL_CLASSIFIER_MODEL in valid_classifiers, (
+        f"Unknown CLASSICAL_CLASSIFIER_MODEL '{CLASSICAL_CLASSIFIER_MODEL}'. "
+        f"Valid options: {valid_classifiers}"
+    )
+    if USE_COLOR_NORMALIZATION:
+        assert os.path.exists(COLOR_NORM_STATS_PATH), (
+            f"USE_COLOR_NORMALIZATION=True but stats file not found: {COLOR_NORM_STATS_PATH}"
+        )
+    if USE_HAIR_REMOVAL and USE_GRAPHIC_PREPROCESSING:
+        assert os.path.exists('./results/chimera/best_weights.h5'), (
+            "USE_HAIR_REMOVAL=True but weights not found at results/chimera/best_weights.h5"
+        )
