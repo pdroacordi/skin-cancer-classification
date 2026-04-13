@@ -2,102 +2,143 @@
 Feature selection steps following the same pattern as graphic/steps/
 """
 
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.feature_selection import (
-    SelectKBest, RFE, f_classif, mutual_info_classif
-)
+from sklearn.feature_selection import RFE, SelectKBest, f_classif, mutual_info_classif
 
 from ..base.step import BasePreprocessingStep
 
 
 class FeatureSelectionStep(BasePreprocessingStep):
-    """Select most relevant features."""
+    """Select the most relevant features from a CNN feature matrix.
 
-    def __init__(self, method: str = 'mutual_info', k: Optional[int] = None,
-                 percentile: float = 75):
+    Four methods are supported:
+
+    * ``mutual_info``   — SelectKBest with mutual information score.
+      Non-parametric; handles non-linear dependencies.  Preferred default.
+    * ``f_score``       — SelectKBest with ANOVA F-statistic.  Assumes linear
+      separability; faster than mutual_info on large feature sets.
+    * ``rfe``           — Recursive Feature Elimination backed by a lightweight
+      RandomForest (50 trees).  The shallow forest is intentional: RFE calls
+      ``fit`` ~1/step times, so a large estimator would be prohibitively slow.
+      50 trees gives a stable importance ranking without the full training cost.
+    * ``importance_based`` — Fit a full 100-tree RandomForest once, then keep the
+      top-k features by Gini importance.  Unlike RFE it is a single fit, so the
+      100-tree budget is justified for the more accurate importance estimate.
+    """
+
+    def __init__(
+        self,
+        method: str = 'mutual_info',
+        k: Optional[int] = None,
+        percentile: float = 75,
+    ):
+        """
+        Args:
+            method:     Selection algorithm (see class docstring).
+            k:          Exact number of features to select.  If ``None``,
+                        ``percentile`` is used to derive it from the input width.
+            percentile: Fraction of features to keep (0–100).  Ignored when
+                        ``k`` is given explicitly.
+        """
         self.method = method
         self.k = k
         self.percentile = percentile
         self.selector = None
-        self.selected_indices = None
+        self.selected_indices: Optional[np.ndarray] = None
 
     def fit(self, X: np.ndarray, y: Optional[np.ndarray] = None) -> 'FeatureSelectionStep':
         if y is None:
             raise ValueError("Feature selection requires labels")
 
-        # Calculate k from percentile if not provided
-        if self.k is None:
-            self.k = int(X.shape[1] * self.percentile / 100)
+        # Derive k from percentile on each fit call so the selector adapts if
+        # the input width changes between runs (e.g. after a prior pipeline step
+        # changes the feature count).  An explicitly-set self.k always wins.
+        k = self.k if self.k is not None else int(X.shape[1] * self.percentile / 100)
+        # Cache the resolved k so get_params() can report it.
+        self._resolved_k = k
 
         if self.method == 'mutual_info':
-            self.selector = SelectKBest(score_func=mutual_info_classif, k=self.k)
+            self.selector = SelectKBest(score_func=mutual_info_classif, k=k)
+            self.selector.fit(X, y)
+
         elif self.method == 'f_score':
-            self.selector = SelectKBest(score_func=f_classif, k=self.k)
+            self.selector = SelectKBest(score_func=f_classif, k=k)
+            self.selector.fit(X, y)
+
         elif self.method == 'rfe':
+            # 50-tree forest: enough for a stable feature ranking, much faster
+            # than a full forest because RFE refits it ~1/step iterations.
             estimator = RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=-1)
-            self.selector = RFE(estimator=estimator, n_features_to_select=self.k, step=0.1)
+            self.selector = RFE(estimator=estimator, n_features_to_select=k, step=0.1)
+            self.selector.fit(X, y)
+
         elif self.method == 'importance_based':
-            # Custom importance-based selection
+            # Single full fit (100 trees) gives a more accurate Gini importance
+            # estimate than the 50-tree RFE estimator.  We sort by importance and
+            # keep the top-k indices so transform() is a simple column slice.
             rf = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
             rf.fit(X, y)
-            importances = rf.feature_importances_
-            self.selected_indices = np.argsort(importances)[::-1][:self.k]
-            return self
+            self.selected_indices = np.argsort(rf.feature_importances_)[::-1][:k]
 
-        self.selector.fit(X, y)
+        else:
+            raise ValueError(
+                f"Unknown feature selection method: '{self.method}'. "
+                "Choose from 'mutual_info', 'f_score', 'rfe', 'importance_based'."
+            )
+
         return self
 
     def transform(self, X: np.ndarray) -> np.ndarray:
-        if self.method == 'importance_based' and self.selected_indices is not None:
+        if self.method == 'importance_based':
+            if self.selected_indices is None:
+                raise RuntimeError("Call fit() before transform()")
             return X[:, self.selected_indices]
-        elif self.selector is not None:
-            return self.selector.transform(X)
-        return X
+
+        if self.selector is None:
+            raise RuntimeError("Call fit() before transform()")
+        return self.selector.transform(X)
 
     def get_params(self) -> Dict[str, Any]:
         return {
             'method': self.method,
-            'k': self.k,
+            'k_configured': self.k,
             'percentile': self.percentile,
-            'n_features_selected': self.k
+            'n_features_selected': getattr(self, '_resolved_k', self.k),
         }
 
 
 class CorrelationBasedSelection(BasePreprocessingStep):
-    """Remove highly correlated features to reduce redundancy."""
+    """Remove highly correlated features to reduce redundancy.
+
+    For each pair of features whose absolute Pearson correlation exceeds
+    *correlation_threshold*, the feature with lower variance is discarded.
+    """
 
     def __init__(self, correlation_threshold: float = 0.95):
         self.correlation_threshold = correlation_threshold
-        self.features_to_keep = None
+        self.features_to_keep: Optional[list] = None
 
     def fit(self, X: np.ndarray, y: Optional[np.ndarray] = None) -> 'CorrelationBasedSelection':
-        # Calculate correlation matrix
         corr_matrix = np.corrcoef(X.T)
-
-        # Find highly correlated feature pairs
         upper_triangle = np.triu(np.abs(corr_matrix), k=1)
 
-        # Features to remove
-        features_to_remove = set()
+        features_to_remove: set = set()
+        n_features = X.shape[1]
 
-        for i in range(len(upper_triangle)):
-            for j in range(i + 1, len(upper_triangle)):
+        for i in range(n_features):
+            for j in range(i + 1, n_features):
                 if upper_triangle[i, j] > self.correlation_threshold:
-                    # Remove the feature with lower variance
-                    var_i = np.var(X[:, i])
-                    var_j = np.var(X[:, j])
-                    if var_i < var_j:
+                    # Keep the feature with higher variance (more informative).
+                    if np.var(X[:, i]) < np.var(X[:, j]):
                         features_to_remove.add(i)
                     else:
                         features_to_remove.add(j)
 
-        # Features to keep
-        all_features = set(range(X.shape[1]))
-        self.features_to_keep = sorted(list(all_features - features_to_remove))
-
+        all_features = set(range(n_features))
+        self.features_to_keep = sorted(all_features - features_to_remove)
         return self
 
     def transform(self, X: np.ndarray) -> np.ndarray:
@@ -107,5 +148,6 @@ class CorrelationBasedSelection(BasePreprocessingStep):
 
     def get_params(self) -> Dict[str, Any]:
         return {
-            'correlation_threshold': self.correlation_threshold
+            'correlation_threshold': self.correlation_threshold,
+            'n_features_kept': len(self.features_to_keep) if self.features_to_keep is not None else None,
         }
