@@ -85,15 +85,26 @@ def create_dataset_splits(metadata_path, image_dir_1, image_dir_2, output_dir='.
     class_to_label = {cls_name: idx for idx, cls_name in enumerate(class_names)}
     metadata['label'] = metadata['dx'].map(class_to_label)
 
-    # Split into train+val and test
-    train_val_metadata, test_metadata = train_test_split(
-        metadata, test_size=0.15, random_state=42, stratify=metadata['dx']
+    # Split at patient level (by lesion_id) to prevent patient-level leakage.
+    # HAM10000 has ~7,470 unique patients but 10,015 images; image-level splits
+    # allow the same patient to appear in both train and test sets.
+    unique_patients = (
+        metadata.groupby('lesion_id')['dx']
+        .first()
+        .reset_index()
+        .rename(columns={'dx': 'primary_dx'})
     )
-
-    # Split train+val into train and validation
-    train_metadata, val_metadata = train_test_split(
-        train_val_metadata, test_size=0.15, random_state=42, stratify=train_val_metadata['dx']
+    train_val_pts, test_pts = train_test_split(
+        unique_patients, test_size=0.15, random_state=42,
+        stratify=unique_patients['primary_dx']
     )
+    train_pts, val_pts = train_test_split(
+        train_val_pts, test_size=0.15, random_state=42,
+        stratify=train_val_pts['primary_dx']
+    )
+    train_metadata = metadata[metadata['lesion_id'].isin(train_pts['lesion_id'])]
+    val_metadata   = metadata[metadata['lesion_id'].isin(val_pts['lesion_id'])]
+    test_metadata  = metadata[metadata['lesion_id'].isin(test_pts['lesion_id'])]
 
     # Save splits to files
     train_metadata[['image_path', 'label']].to_csv(

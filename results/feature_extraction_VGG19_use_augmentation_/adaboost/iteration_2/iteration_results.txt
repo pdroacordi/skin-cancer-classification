@@ -1,0 +1,36 @@
+Classifier: AdaBoost
+Use PCA: False
+PCA Components: None
+Tune Hyperparameters: False
+Number of Folds: 5
+Iteration: 1
+Use Data Preprocessing: False
+Iteration 1 Average Metrics:
+Accuracy: 0.9484
+Precision: 0.6564
+Recall: 0.6289
+F1 Score: 0.6138
+
+Classification Report:
+              precision    recall  f1-score   support
+
+           0       0.98      0.39      0.56       278
+           1       0.99      0.99      0.99       437
+           2       0.84      0.99      0.91       934
+           3       1.00      0.01      0.02        98
+           4       0.83      0.98      0.90       946
+           5       0.99      0.99      0.99      5699
+           6       1.00      0.04      0.08       120
+
+    accuracy                           0.95      8512
+   macro avg       0.95      0.63      0.64      8512
+weighted avg       0.95      0.95      0.93      8512
+
+Confusion Matrix:
+[[ 109    5  164    0    0    0    0]
+ [   1  432    4    0    0    0    0]
+ [   0    0  926    0    4    4    0]
+ [   1    1    0    1   71   24    0]
+ [   0    0    7    0  930    9    0]
+ [   0    0    5    0   24 5670    0]
+ [   0    0    0    0   88   27    5]]
