@@ -3,14 +3,10 @@ Data augmentation strategies for skin cancer image classification.
 Provides various augmentation pipelines for different training scenarios.
 """
 
-import sys
-
 import albumentations as A
 import numpy as np
-from keras.utils import Sequence
+from tensorflow.keras.utils import Sequence
 from sklearn.utils import resample
-
-sys.path.append('../../..')
 
 
 class AugmentationFactory:
