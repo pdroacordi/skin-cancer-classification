@@ -7,7 +7,7 @@ from typing import Tuple, Optional, Callable, Union, List
 import sys
 
 sys.path.append('..')
-from config import NUM_CLASSES, IMG_SIZE
+from config import NUM_CLASSES, IMG_SIZE, USE_MIXUP
 
 
 def load_paths_labels(file_path: str) -> Tuple[np.ndarray, np.ndarray]:
@@ -93,6 +93,9 @@ def apply_model_preprocessing(image: np.ndarray, model_name: str) -> np.ndarray:
         return preprocess_input_resnet(image.copy())
     elif model_name == "Xception":
         return preprocess_input_xception(image.copy())
+    elif model_name == "EfficientNet":
+        from tensorflow.keras.applications.efficientnet import preprocess_input as preprocess_input_efficientnet
+        return preprocess_input_efficientnet(image.copy())
     else:
         raise ValueError(f"Unsupported model: {model_name}")
 
@@ -184,6 +187,16 @@ class MemoryEfficientDataGenerator:
 
         batch_images = np.array(batch_images, dtype=np.float32)
         batch_labels = to_categorical(batch_labels, NUM_CLASSES)
+
+        # Mixup augmentation (Zhang et al., 2018, ICLR).
+        # Creates convex combinations of two training samples, forcing smoother
+        # class boundaries and reducing overconfidence. Applied only during
+        # training (when augment_fn is set) and only when USE_MIXUP=True.
+        if USE_MIXUP and self.augment_fn is not None and len(batch_images) > 1:
+            lam = np.random.beta(0.4, 0.4)
+            perm = np.random.permutation(len(batch_images))
+            batch_images = lam * batch_images + (1 - lam) * batch_images[perm]
+            batch_labels = lam * batch_labels + (1 - lam) * batch_labels[perm]
 
         return batch_images, batch_labels
 
