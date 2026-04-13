@@ -11,7 +11,8 @@ import sys
 
 import numpy as np
 import tensorflow as tf
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
+from sklearn.utils.class_weight import compute_class_weight
 from tensorflow.keras.backend import clear_session
 
 sys.path.append('..')
@@ -30,13 +31,19 @@ from config import (
     FINE_TUNING_AT_LAYER,
     NUM_ITERATIONS,
     NUM_CLASSES,
-    NUM_FINAL_MODELS
+    NUM_FINAL_MODELS,
+    USE_TTA,
+    TTA_N_STEPS,
+    USE_MC_DROPOUT,
+    MC_DROPOUT_STEPS
 )
 
 from utils.data_loaders import load_paths_labels, MemoryEfficientDataGenerator
 from preprocessing.data.augmentation import AugmentationFactory
-from models.cnn_models import load_or_create_cnn, get_callbacks, create_model_name
+from models.cnn_models import (load_or_create_cnn, get_callbacks, create_model_name,
+                               save_gradcam_visualizations)
 from utils.fold_utils import save_fold_results
+from utils.calibration import expected_calibration_error
 
 
 def setup_gpu_memory():
@@ -127,6 +134,11 @@ def run_single_fold_training(train_paths, train_labels, val_paths, val_labels,
     if not loaded:
         print(f"Training CNN classifier...")
 
+        # Compute class weights to counter HAM10000's class imbalance (~67% nv)
+        classes = np.unique(train_labels)
+        weights = compute_class_weight('balanced', classes=classes, y=train_labels)
+        class_weight_dict = {int(c): float(w) for c, w in zip(classes, weights)}
+
         # Get callbacks
         callbacks = get_callbacks(model_save_path, log_dir)
 
@@ -138,6 +150,7 @@ def run_single_fold_training(train_paths, train_labels, val_paths, val_labels,
             validation_data=val_gen.get_keras_generator(),
             validation_steps=validation_steps,
             callbacks=callbacks,
+            class_weight=class_weight_dict,
             verbose=1
         )
 
@@ -162,7 +175,13 @@ def evaluate_model(model, test_paths, test_labels, result_dir, class_names=None)
         dict: Evaluation metrics.
     """
 
-    # Create test generator
+    if USE_TTA:
+        augmentation = AugmentationFactory.get_medium_augmentation()
+        tta_augment_fn = lambda img: augmentation(image=img)['image']
+    else:
+        tta_augment_fn = None
+
+    # Create test generator (no augmentation — or augmentation applied per TTA pass below)
     test_gen = MemoryEfficientDataGenerator(
         paths=test_paths,
         labels=test_labels,
@@ -184,8 +203,40 @@ def evaluate_model(model, test_paths, test_labels, result_dir, class_names=None)
         try:
             X_batch, y_batch = next(test_gen)
 
-            # Get predictions
-            pred_batch = model.predict(X_batch, verbose=0)
+            if USE_MC_DROPOUT:
+                # Monte Carlo Dropout: keep Dropout active at inference time.
+                # Mean gives the ensemble prediction; variance gives uncertainty.
+                # Gal & Ghahramani (2016, ICML, "Dropout as a Bayesian Approximation").
+                mc_preds = np.stack([
+                    model(X_batch, training=True).numpy()
+                    for _ in range(MC_DROPOUT_STEPS)
+                ], axis=0)  # (MC_DROPOUT_STEPS, batch, n_classes)
+                pred_batch = mc_preds.mean(axis=0)
+                # Per-sample predictive variance (uncertainty proxy)
+                uncertainty_batch = mc_preds.var(axis=0).mean(axis=1)  # (batch,)
+                if not hasattr(evaluate_model, '_uncertainty'):
+                    evaluate_model._uncertainty = []
+                evaluate_model._uncertainty.extend(uncertainty_batch.tolist())
+            elif USE_TTA:
+                # Average predictions over TTA_N_STEPS augmented copies
+                tta_gen = MemoryEfficientDataGenerator(
+                    paths=test_paths[i * BATCH_SIZE: (i + 1) * BATCH_SIZE],
+                    labels=test_labels[i * BATCH_SIZE: (i + 1) * BATCH_SIZE],
+                    batch_size=BATCH_SIZE,
+                    model_name=CNN_MODEL,
+                    augment_fn=tta_augment_fn,
+                    shuffle=False
+                )
+                tta_preds = [model.predict(X_batch, verbose=0)]
+                for _ in range(TTA_N_STEPS - 1):
+                    try:
+                        X_aug, _ = next(tta_gen)
+                        tta_preds.append(model.predict(X_aug, verbose=0))
+                    except StopIteration:
+                        break
+                pred_batch = np.mean(tta_preds, axis=0)
+            else:
+                pred_batch = model.predict(X_batch, verbose=0)
 
             # Convert one-hot encoded labels to class indices
             true_batch = np.argmax(y_batch, axis=1)
@@ -206,9 +257,25 @@ def evaluate_model(model, test_paths, test_labels, result_dir, class_names=None)
     # Calculate metrics
     report = classification_report(y_true, y_pred, output_dict=True)
 
+    # Macro-averaged AUC-ROC (standard metric in medical AI)
+    try:
+        from tensorflow.keras.utils import to_categorical
+        y_true_onehot = to_categorical(y_true, num_classes=y_pred_prob.shape[1])
+        macro_auc = roc_auc_score(y_true_onehot, y_pred_prob, multi_class='ovr', average='macro')
+    except Exception:
+        macro_auc = float('nan')
+
     # Print classification report
     print("\nTest Set Classification Report:")
     print(classification_report(y_true, y_pred))
+    print(f"Macro AUC-ROC: {macro_auc:.4f}")
+
+    # Expected Calibration Error (Guo et al., 2017)
+    try:
+        ece = expected_calibration_error(y_true, y_pred_prob)
+        print(f"Expected Calibration Error (ECE): {ece:.4f}")
+    except Exception:
+        ece = float('nan')
 
     # Save evaluation results
     results = {
@@ -216,6 +283,8 @@ def evaluate_model(model, test_paths, test_labels, result_dir, class_names=None)
         "macro_avg_precision": report["macro avg"]["precision"],
         "macro_avg_recall": report["macro avg"]["recall"],
         "macro_avg_f1": report["macro avg"]["f1-score"],
+        "macro_auc_roc": macro_auc,
+        "ece": ece,
         "class_report": report
     }
 
@@ -229,6 +298,30 @@ def evaluate_model(model, test_paths, test_labels, result_dir, class_names=None)
         f.write(classification_report(y_true, y_pred))
         f.write("\nConfusion Matrix:\n")
         f.write(str(confusion_matrix(y_true, y_pred)))
+
+    # Save MC Dropout uncertainty estimates
+    if USE_MC_DROPOUT and hasattr(evaluate_model, '_uncertainty'):
+        uncertainty = np.array(evaluate_model._uncertainty)
+        np.save(os.path.join(result_dir, "mc_dropout_uncertainty.npy"), uncertainty)
+        print(f"MC Dropout uncertainty: mean={uncertainty.mean():.4f}, "
+              f"max={uncertainty.max():.4f}")
+        # Clean up for next call
+        del evaluate_model._uncertainty
+
+    # Save Grad-CAM heatmap overlays for visual interpretability
+    try:
+        save_gradcam_visualizations(
+            model=model,
+            model_name=CNN_MODEL,
+            image_paths=test_paths,
+            y_true=y_true,
+            y_pred=y_pred,
+            y_pred_prob=y_pred_prob,
+            class_names=class_names,
+            result_dir=result_dir
+        )
+    except Exception as e:
+        print(f"Grad-CAM generation skipped: {e}")
 
     return results
 
@@ -610,6 +703,11 @@ def train_final_model_cnn(all_data_paths, all_data_labels, best_hyperparameters,
     # Get callbacks
     callbacks = get_callbacks(final_model_path, log_dir)
 
+    # Compute class weights to counter HAM10000's class imbalance (~67% nv)
+    classes = np.unique(all_data_labels)
+    weights = compute_class_weight('balanced', classes=classes, y=all_data_labels)
+    class_weight_dict = {int(c): float(w) for c, w in zip(classes, weights)}
+
     # Train the model on all data
     print(f"Training final CNN model on all {len(all_data_paths)} samples...")
     history = model.fit(
@@ -619,6 +717,7 @@ def train_final_model_cnn(all_data_paths, all_data_labels, best_hyperparameters,
         validation_data=val_gen.get_keras_generator(),
         validation_steps=validation_steps,
         callbacks=callbacks,
+        class_weight=class_weight_dict,
         verbose=1
     )
 
@@ -802,6 +901,11 @@ def train_multiple_final_cnn_models(all_data_paths, all_data_labels, best_hyperp
         # Get callbacks
         callbacks = get_callbacks(model_path, log_dir)
 
+        # Compute class weights to counter HAM10000's class imbalance (~67% nv)
+        classes = np.unique(all_data_labels)
+        weights = compute_class_weight('balanced', classes=classes, y=all_data_labels)
+        class_weight_dict = {int(c): float(w) for c, w in zip(classes, weights)}
+
         # Train the model
         print(f"Training model {model_idx + 1} on all {len(all_data_paths)} samples...")
         history = model.fit(
@@ -811,6 +915,7 @@ def train_multiple_final_cnn_models(all_data_paths, all_data_labels, best_hyperp
             validation_data=val_gen.get_keras_generator(),
             validation_steps=validation_steps,
             callbacks=callbacks,
+            class_weight=class_weight_dict,
             verbose=1
         )
 
@@ -888,6 +993,7 @@ def evaluate_multiple_final_cnn_models(trained_models, test_paths, test_labels,
         # Collect predictions
         y_true = []
         y_pred = []
+        y_pred_prob = []
 
         for i in range(test_steps):
             try:
@@ -899,14 +1005,24 @@ def evaluate_multiple_final_cnn_models(trained_models, test_paths, test_labels,
 
                 y_true.extend(true_batch)
                 y_pred.extend(pred_batch_cls)
+                y_pred_prob.extend(pred_batch)
             except StopIteration:
                 break
 
         y_true = np.array(y_true)
         y_pred = np.array(y_pred)
+        y_pred_prob = np.array(y_pred_prob)
 
         # Calculate metrics
         test_report = classification_report(y_true, y_pred, output_dict=True)
+
+        # Macro-averaged AUC-ROC (standard metric in medical AI)
+        try:
+            from tensorflow.keras.utils import to_categorical
+            y_true_onehot = to_categorical(y_true, num_classes=y_pred_prob.shape[1])
+            macro_auc = roc_auc_score(y_true_onehot, y_pred_prob, multi_class='ovr', average='macro')
+        except Exception:
+            macro_auc = float('nan')
 
         # Store predictions and metrics
         all_results['predictions'].append(y_pred)
@@ -914,6 +1030,7 @@ def evaluate_multiple_final_cnn_models(trained_models, test_paths, test_labels,
         all_results['f1_scores'].append(test_report['macro avg']['f1-score'])
         all_results['precisions'].append(test_report['macro avg']['precision'])
         all_results['recalls'].append(test_report['macro avg']['recall'])
+        all_results.setdefault('auc_roc_scores', []).append(macro_auc)
 
         # Store detailed metrics
         all_results['model_metrics'].append({
@@ -922,6 +1039,7 @@ def evaluate_multiple_final_cnn_models(trained_models, test_paths, test_labels,
             'macro_avg_precision': test_report['macro avg']['precision'],
             'macro_avg_recall': test_report['macro avg']['recall'],
             'macro_avg_f1': test_report['macro avg']['f1-score'],
+            'macro_auc_roc': macro_auc,
             'class_report': test_report
         })
 
@@ -1019,8 +1137,11 @@ def evaluate_multiple_final_cnn_models(trained_models, test_paths, test_labels,
 
     # Create DataFrames
     df_results = pd.DataFrame(all_results['model_metrics'])
-    df_summary = df_results[['model_idx', 'accuracy', 'macro_avg_precision',
-                             'macro_avg_recall', 'macro_avg_f1']]
+    summary_cols = ['model_idx', 'accuracy', 'macro_avg_precision',
+                    'macro_avg_recall', 'macro_avg_f1']
+    if 'macro_auc_roc' in df_results.columns:
+        summary_cols.append('macro_auc_roc')
+    df_summary = df_results[summary_cols]
 
     # Save as CSV
     csv_path = os.path.join(result_dir, "model_performance_summary.csv")

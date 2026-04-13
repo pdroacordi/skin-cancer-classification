@@ -11,7 +11,7 @@ from typing import Optional, Any, List, Tuple, Dict
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
 from tensorflow.keras.backend import clear_session
 
 from utils.metadata_extractor import (
@@ -19,6 +19,7 @@ from utils.metadata_extractor import (
     MetadataFeatureExtractor,
     combine_cnn_and_metadata_features
 )
+from utils.calibration import expected_calibration_error
 
 sys.path.append('..')
 from config import (
@@ -1036,6 +1037,13 @@ def run_kfold_cross_validation(all_features,
     """
     Run K-fold cross-validation for a classical ML model.
 
+    .. deprecated::
+        This is the legacy path that receives a **pre-augmented** feature matrix.
+        When USE_FEATURE_AUGMENTATION=True the matrix contains N copies of each
+        image, so K-fold splits will place augmented duplicates of the same image
+        in both train and val folds, causing ~99.66% memorization accuracy.
+        Use run_kfold_feature_extraction() + run_model_training_by_fold() instead.
+
     Args:
         all_features (numpy.array): Feature matrix.
         all_labels (numpy.array): Target labels.
@@ -1046,6 +1054,16 @@ def run_kfold_cross_validation(all_features,
     Returns:
         list: List of evaluation results for each fold.
     """
+    from config import USE_FEATURE_AUGMENTATION
+    if USE_FEATURE_AUGMENTATION:
+        raise RuntimeError(
+            "run_kfold_cross_validation() cannot be used with USE_FEATURE_AUGMENTATION=True. "
+            "It receives a pre-augmented feature matrix, so K-fold splits will place augmented "
+            "duplicates of the same image in both train and val folds (memorization, not "
+            "generalization). Use run_kfold_feature_extraction() + run_model_training_by_fold() "
+            "instead."
+        )
+
     # Initialize KFold
     from sklearn.model_selection import StratifiedKFold
     from config import NUM_KFOLDS, NUM_ITERATIONS
@@ -1496,12 +1514,26 @@ def evaluate_multiple_final_models(trained_models, test_features, test_labels,
         # Calculate metrics
         test_report = classification_report(test_labels, test_pred, output_dict=True)
 
+        # Macro-averaged AUC-ROC (standard metric in medical AI)
+        try:
+            test_prob = model.predict_proba(test_features)
+            from tensorflow.keras.utils import to_categorical
+            n_classes = test_prob.shape[1]
+            test_labels_onehot = to_categorical(test_labels, num_classes=n_classes)
+            macro_auc = roc_auc_score(test_labels_onehot, test_prob, multi_class='ovr', average='macro')
+            ece = expected_calibration_error(test_labels, test_prob)
+        except Exception:
+            macro_auc = float('nan')
+            ece = float('nan')
+
         # Store predictions and metrics
         all_results['predictions'].append(test_pred)
         all_results['accuracies'].append(test_report['accuracy'])
         all_results['f1_scores'].append(test_report['macro avg']['f1-score'])
         all_results['precisions'].append(test_report['macro avg']['precision'])
         all_results['recalls'].append(test_report['macro avg']['recall'])
+        all_results.setdefault('auc_roc_scores', []).append(macro_auc)
+        all_results.setdefault('ece_scores', []).append(ece)
 
         # Store detailed metrics
         all_results['model_metrics'].append({
@@ -1510,6 +1542,8 @@ def evaluate_multiple_final_models(trained_models, test_features, test_labels,
             'macro_avg_precision': test_report['macro avg']['precision'],
             'macro_avg_recall': test_report['macro avg']['recall'],
             'macro_avg_f1': test_report['macro avg']['f1-score'],
+            'macro_auc_roc': macro_auc,
+            'ece': ece,
             'class_report': test_report
         })
 
@@ -1536,6 +1570,27 @@ def evaluate_multiple_final_models(trained_models, test_features, test_labels,
             f.write(classification_report(test_labels, test_pred))
             f.write("\nConfusion Matrix:\n")
             f.write(str(confusion_matrix(test_labels, test_pred)))
+
+        # SHAP feature importance (TreeSHAP for tree-based models).
+        # Produces per-class mean |SHAP| values saved as shap_values.npy.
+        # When USE_METADATA=True the metadata feature slice will show which
+        # clinical variables (age, localization) drive each class prediction.
+        try:
+            import shap
+            classifier = model.named_steps['classifier'] if hasattr(model, 'named_steps') else model
+            explainer = shap.TreeExplainer(classifier)
+            # Use a subsample of test features to keep memory manageable
+            max_shap_samples = min(500, len(test_features))
+            shap_features = test_features[:max_shap_samples]
+            shap_vals = explainer.shap_values(shap_features)
+            # shap_vals: list of n_classes arrays, shape (n_samples, n_features)
+            mean_shap = np.abs(np.array(shap_vals)).mean(axis=1)  # (n_classes, n_features)
+            np.save(os.path.join(model_dir, "shap_values.npy"), mean_shap)
+            print(f"SHAP values saved to: {os.path.join(model_dir, 'shap_values.npy')}")
+        except ImportError:
+            print("shap not installed — skipping SHAP analysis (pip install shap)")
+        except Exception as e:
+            print(f"SHAP analysis skipped: {e}")
 
     # Statistical Analysis
     print("\n" + "=" * 50)
@@ -1603,8 +1658,12 @@ def evaluate_multiple_final_models(trained_models, test_features, test_labels,
 
     # Create a summary DataFrame
     df_results = pd.DataFrame(all_results['model_metrics'])
-    df_summary = df_results[['model_idx', 'accuracy', 'macro_avg_precision',
-                             'macro_avg_recall', 'macro_avg_f1']]
+    summary_cols = ['model_idx', 'accuracy', 'macro_avg_precision',
+                    'macro_avg_recall', 'macro_avg_f1']
+    for optional_col in ('macro_auc_roc', 'ece'):
+        if optional_col in df_results.columns:
+            summary_cols.append(optional_col)
+    df_summary = df_results[summary_cols]
 
     # Save as CSV
     csv_path = os.path.join(result_dir, "model_performance_summary.csv")
@@ -1714,8 +1773,15 @@ def run_feature_extraction_pipeline(train_files_path, val_files_path, test_files
             metadata_extractor = MetadataFeatureExtractor.load(metadata_extractor_path)
         else:
             print("Creating and fitting metadata extractor...")
+            # Fit only on train+val images to avoid test-set leakage into
+            # the StandardScaler (age) and OneHotEncoders (categorical fields).
+            train_val_ids = set(
+                os.path.splitext(os.path.basename(p))[0]
+                for p in list(train_paths) + list(val_paths)
+            )
+            train_val_meta = metadata_df[metadata_df['image_id'].isin(train_val_ids)]
             metadata_extractor = MetadataFeatureExtractor()
-            metadata_extractor.fit(metadata_df)
+            metadata_extractor.fit(train_val_meta)
             metadata_extractor.save(metadata_extractor_path)
     else:
         metadata_extractor = None
