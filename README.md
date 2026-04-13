@@ -22,14 +22,19 @@ src/
   │   │   ├── color_normalization.py     # Reinhard LAB color normalization
   │   │   └── steps/                     # Hair removal, contrast enhancement
   │   └── feature/
-  │       └── algorithm/                 # Per-algorithm preprocessing pipelines
+  │       └── algorithm/                 # configs.py (declarative specs) + configurable.py
   ├── utils/
   │   ├── data_loaders.py                # Image loading + Mixup augmentation
+  │   ├── gpu_utils.py                   # GPU memory-growth setup (shared)
+  │   ├── result_naming.py               # Canonical result directory name functions
   │   ├── metadata_extractor.py          # Patient metadata features
   │   ├── calibration.py                 # Expected Calibration Error (ECE)
   │   └── fold_utils.py                  # K-fold result persistence
-  └── analysis/
-      └── aggregate_results.py           # Consolidate results across experiments
+  ├── analysis/
+  │   └── aggregate_results.py           # Consolidate results across experiments
+  └── tests/
+      ├── test_config_overrides.py       # Tests for CLI config override system
+      └── test_result_naming.py          # Tests for result directory naming
 ```
 
 ## Requirements
@@ -91,71 +96,88 @@ This will create train/validation/test splits in the `res/` directory.
 
 ## Usage
 
+All commands are run from `src/`. Every config flag can be overridden on the command line — **no editing of `config.py` required between experiments**.
+
 ### Basic Usage
 
-Run both pipelines with default settings:
-
 ```bash
-python src/main.py
+cd src
+
+# Both pipelines, default config
+python main.py
+
+# CNN only / feature-extraction only
+python main.py --pipeline cnn
+python main.py --pipeline feature-extraction
+
+# K-fold cross-validation
+python main.py --cv
+
+# Skip training (evaluation only)
+python main.py --skip-train
 ```
 
-### Running Specific Pipeline
-
-Run only the CNN classifier pipeline:
+### Overriding Experiment Config
 
 ```bash
-python src/main.py --pipeline cnn
-```
+# Different backbone and classifier
+python main.py --cnn-model Xception --classifier RandomForest
 
-Run only the feature extraction + classical ML pipeline:
+# Enable focal loss with label smoothing
+python main.py --cnn-model EfficientNet --use-focal-loss --label-smoothing 0.1
 
-```bash
-python src/main.py --pipeline feature-extraction
-```
+# Scale down for quick iteration
+python main.py --batch-size 32 --num-epochs 20 --num-kfolds 3
 
-### Cross-Validation
+# Toggle boolean flags  (--flag / --no-flag)
+python main.py --use-augmentation --no-use-fine-tuning
+python main.py --use-tta --use-mc-dropout --use-metadata
 
-Run with k-fold cross-validation:
-
-```bash
-python src/main.py --cv
+# Full experiment specification
+python main.py --cnn-model ResNet --classifier ExtraTrees \
+  --use-augmentation --use-feature-preprocessing --num-kfolds 5 --num-iterations 2
 ```
 
 ### Custom Data Paths
 
-Specify custom paths to data files:
-
 ```bash
-python src/main.py --train-files path/to/train_files.txt \
+python main.py --train-files path/to/train_files.txt \
   --val-files path/to/val_files.txt \
   --test-files path/to/test_files.txt
 ```
 
+### Running Tests
+
+```bash
+cd src
+python -m pytest tests/ -v
+```
+
 ## Configuration
 
-All experiment toggles live in `src/config.py`:
+`src/config.py` holds all defaults. Every setting has a corresponding CLI flag:
 
-| Key | Options / Notes |
-|---|---|
-| `CNN_MODEL` | `'VGG19'`, `'Inception'`, `'ResNet'`, `'Xception'`, `'EfficientNet'` |
-| `CLASSICAL_CLASSIFIER_MODEL` | `'RandomForest'`, `'XGBoost'`, `'AdaBoost'`, `'ExtraTrees'`, `'SVM'` |
-| `BATCH_SIZE` / `NUM_EPOCHS` | Training hyperparameters |
-| `USE_FINE_TUNING` | Unfreeze CNN layers for fine-tuning |
-| `USE_GRAPHIC_PREPROCESSING` | Redirect data paths to `res/preprocessed_*` |
-| `USE_DATA_AUGMENTATION` | Image-level augmentation during CNN training |
-| `USE_FEATURE_AUGMENTATION` | Feature-space augmentation for classical ML |
-| `USE_FEATURE_PREPROCESSING` | Per-algorithm feature preprocessing pipeline |
-| `USE_METADATA` | Append patient metadata (age, location, sex) to features |
-| `USE_HAIR_REMOVAL` | Deep-learning hair removal (requires `USE_GRAPHIC_PREPROCESSING`) |
-| `USE_COLOR_NORMALIZATION` | Reinhard LAB color normalization across dermoscopes |
-| `USE_FOCAL_LOSS` | Focal loss instead of cross-entropy (addresses class imbalance) |
-| `LABEL_SMOOTHING` | Label smoothing value (0.1 recommended); `0.0` disables |
-| `USE_MIXUP` | Mixup augmentation during CNN training (Zhang et al., 2018) |
-| `USE_TTA` | Test-Time Augmentation: average N augmented predictions |
-| `TTA_N_STEPS` | Number of augmented copies for TTA (default 8) |
-| `USE_MC_DROPOUT` | Monte Carlo Dropout uncertainty quantification |
-| `MC_DROPOUT_STEPS` | Stochastic passes per sample for MC Dropout (default 50) |
-| `NUM_KFOLDS` / `NUM_ITERATIONS` | Cross-validation folds and repetitions |
+| Key | CLI flag | Options / Notes |
+|---|---|---|
+| `CNN_MODEL` | `--cnn-model` | `VGG19` `Inception` `ResNet` `Xception` `EfficientNet` |
+| `CLASSICAL_CLASSIFIER_MODEL` | `--classifier` | `RandomForest` `XGBoost` `AdaBoost` `ExtraTrees` `SVM` |
+| `BATCH_SIZE` / `NUM_EPOCHS` | `--batch-size` / `--num-epochs` | Training hyperparameters |
+| `NUM_KFOLDS` / `NUM_ITERATIONS` | `--num-kfolds` / `--num-iterations` | Cross-validation folds and repetitions |
+| `USE_FINE_TUNING` | `--use-fine-tuning` | Unfreeze CNN layers for fine-tuning |
+| `USE_GRAPHIC_PREPROCESSING` | `--use-graphic-preprocessing` | Redirect data paths to `res/preprocessed_*` |
+| `USE_DATA_AUGMENTATION` | `--use-augmentation` | Image-level augmentation during CNN training |
+| `USE_FEATURE_AUGMENTATION` | `--use-feature-augmentation` | Feature-space augmentation for classical ML |
+| `USE_FEATURE_PREPROCESSING` | `--use-feature-preprocessing` | Per-algorithm feature preprocessing pipeline |
+| `USE_METADATA` | `--use-metadata` | Append patient metadata (age, location, sex) to features |
+| `USE_HAIR_REMOVAL` | `--use-hair-removal` | Deep-learning hair removal (requires `USE_GRAPHIC_PREPROCESSING`) |
+| `USE_COLOR_NORMALIZATION` | `--use-color-normalization` | Reinhard LAB color normalization across dermoscopes |
+| `USE_FOCAL_LOSS` | `--use-focal-loss` | Focal loss instead of cross-entropy (addresses class imbalance) |
+| `LABEL_SMOOTHING` | `--label-smoothing` | float; `0.1` recommended, `0.0` disables |
+| `USE_MIXUP` | `--use-mixup` | Mixup augmentation during CNN training (Zhang et al., 2018) |
+| `USE_TTA` | `--use-tta` | Test-Time Augmentation: average N augmented predictions |
+| `TTA_N_STEPS` | `--tta-n-steps` | Number of augmented copies for TTA (default 8) |
+| `USE_MC_DROPOUT` | `--use-mc-dropout` | Monte Carlo Dropout uncertainty quantification |
+| `MC_DROPOUT_STEPS` | `--mc-dropout-steps` | Stochastic passes per sample for MC Dropout (default 50) |
 
 ## Results
 

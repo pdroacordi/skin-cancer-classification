@@ -7,13 +7,14 @@ This is the working directory for all commands. All modules use bare relative im
 
 | Module | Responsibility |
 |---|---|
-| `config.py` | Single source of truth for all experiment flags and hyperparameters |
-| `main.py` | CLI entry point — parses args, calls pipelines |
+| `config.py` | Default values for all experiment flags and hyperparameters; `apply_cli_overrides()` mutates these at runtime |
+| `main.py` | CLI entry point — parses all config flags as args, calls `apply_cli_overrides()` before importing pipelines |
 | `models/` | CNN architecture loading and classical ML classifiers |
 | `pipelines/` | End-to-end training loops (CNN classifier and feature extraction) |
 | `preprocessing/` | Image-level (graphic) and feature-level preprocessing |
-| `utils/` | Data loading, fold utilities, metadata extraction |
+| `utils/` | Data loading, GPU setup, result naming, fold utilities, metadata extraction |
 | `analysis/` | Results aggregation across experiments |
+| `tests/` | Pytest test suite — `python -m pytest tests/ -v` from `src/` |
 
 ## Import Convention
 
@@ -30,11 +31,16 @@ dots for top-level imports — it will break.
 
 ## Result Directory Naming
 
-Both pipelines auto-construct result directory names from active config flags:
+Both pipelines use `utils/result_naming.py` to build result directory paths from the active config flags:
 
 ```
-results/cnn_classifier_<MODEL>_[hair_removal_][contrast_][use_augmentation_]/
-results/feature_extraction_<MODEL>_[use_augmentation_][use_feature_augmentation_]/<classifier>/
+results/cnn_classifier_<MODEL>_[contrast_][hair_removal_][use_augmentation_]/
+results/feature_extraction_<MODEL>_[contrast_][hair_removal_][use_augmentation_][use_feature_augmentation_][use_feature_preprocessing_][use_metadata_]/<classifier>/
 ```
 
 Example: `results/feature_extraction_ResNet_use_augmentation_/extratrees/`
+
+Key functions:
+- `cnn_result_dir(base_dir=None)` — base dir for the CNN classifier pipeline
+- `feature_extraction_experiment_dir(base_dir=None, cnn_model=None)` — experiment dir (without classifier subdir)
+- `feature_extraction_result_dir(base_dir=None, cnn_model=None, classifier=None)` — full path including classifier subdir

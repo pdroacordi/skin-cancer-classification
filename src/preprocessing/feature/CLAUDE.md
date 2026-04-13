@@ -16,23 +16,19 @@ classical ML training. Enabled by `USE_FEATURE_PREPROCESSING=True` in `config.py
 ```
 feature/
   base/
-    algorithm.py   # AlgorithmPreprocessingPipeline (abstract base)
+    algorithm.py   # AlgorithmPreprocessingPipeline (abstract base; save/load with joblib)
     balancing.py   # BalancingStrategy interface
     step.py        # BasePreprocessingStep interface
   steps/
     balancing.py           # SMOTEBalancing, ClassWeightBalancing, TargetedSMOTEBalancing
     dimensionality_reduction.py  # PCA-based reduction
-    normalization.py       # StandardScaler / RobustScaler / MinMaxScaler
+    normalization.py       # StandardScaler / RobustScaler
     outlier_detection.py   # IsolationForest-based outlier removal
     selection.py           # FeatureSelectionStep (mutual_info / f_score / rfe / importance_based)
-                           # CorrelationBasedSelection
     threshold.py           # VarianceThresholdStep
   algorithm/
-    adaboost.py    # AdaBoostPipeline
-    extratrees.py  # ExtraTreesPipeline
-    randomforest.py# RandomForestPipeline
-    svm.py         # SVMPipeline
-    xgboost.py     # XGBoostPipeline
+    configs.py        # ALGORITHM_PIPELINE_CONFIGS — declarative step specs for all 5 algorithms
+    configurable.py   # ConfigurablePreprocessingPipeline — builds pipeline from configs.py
   pipeline.py      # PreprocessingPipelineFactory + apply_feature_preprocessing()
 ```
 
@@ -76,8 +72,16 @@ On inference (`training=False`) the function loads the saved pipeline from
 
 ## Adding a New Algorithm Pipeline
 
-1. Create `algorithm/<name>.py` subclassing `AlgorithmPreprocessingPipeline`.
-2. Implement `_configure_pipeline()` to populate `self.steps` and optionally
-   `self.balancing_strategy`.
-3. Register in `PreprocessingPipelineFactory._pipelines` in `pipeline.py`.
-4. Add it to `PIPELINE_CLASS_MAP` (auto-derived from the dict, no manual step needed).
+1. Add a new key to `ALGORITHM_PIPELINE_CONFIGS` in `algorithm/configs.py`:
+   ```python
+   'MyAlgorithm': {
+       'steps': [
+           ('variance_threshold', {'threshold': 0}),
+           ('normalization',      {'method': 'robust'}),
+           ('feature_selection',  {'method': 'mutual_info', 'percentile': 90}),
+       ],
+       'balancing': ('class_weight', {}),
+   },
+   ```
+2. If the step name is new, add its instantiation to `_build_step()` in `algorithm/configurable.py`.
+3. No other file changes required — `PreprocessingPipelineFactory` picks it up automatically.
