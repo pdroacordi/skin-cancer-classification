@@ -6,7 +6,7 @@ import os
 import sys
 
 import tensorflow as tf
-from tensorflow.keras.applications import VGG19, InceptionV3, ResNet50, Xception
+from tensorflow.keras.applications import VGG19, InceptionV3, ResNet50, Xception, EfficientNetB4
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint, TensorBoard
 from tensorflow.keras.layers import GlobalAveragePooling2D, Dense, Dropout
 from tensorflow.keras.models import Model, load_model
@@ -21,8 +21,35 @@ from config import (
     EARLY_STOPPING_PATIENCE,
     REDUCE_LR_PATIENCE,
     REDUCE_LR_FACTOR,
-    FINE_TUNING_AT_LAYER, USE_HAIR_REMOVAL, USE_ENHANCED_CONTRAST, USE_GRAPHIC_PREPROCESSING
+    FINE_TUNING_AT_LAYER, USE_HAIR_REMOVAL, USE_ENHANCED_CONTRAST, USE_GRAPHIC_PREPROCESSING,
+    USE_FOCAL_LOSS, LABEL_SMOOTHING
 )
+
+
+def focal_loss(gamma=2.0, alpha=None):
+    """
+    Focal Loss for multi-class classification (Lin et al., 2017 – RetinaNet).
+
+    Down-weights easy (high-confidence) examples and focuses learning on hard
+    (low-confidence) examples. Effective for HAM10000's severe class imbalance
+    (~67% nv class). Use via USE_FOCAL_LOSS=True in config.py.
+
+    Args:
+        gamma: Focusing parameter (typical range 0.5–5.0; 2.0 is the default).
+        alpha: Optional per-class weight tensor of shape (NUM_CLASSES,).
+               Pass class-balanced weights to further address imbalance.
+
+    Returns:
+        Keras loss function.
+    """
+    def loss_fn(y_true, y_pred):
+        y_pred = tf.clip_by_value(y_pred, 1e-8, 1.0)
+        ce = -y_true * tf.math.log(y_pred)
+        weight = tf.pow(1.0 - y_pred, gamma)
+        if alpha is not None:
+            weight = weight * alpha
+        return tf.reduce_mean(tf.reduce_sum(weight * ce, axis=1))
+    return loss_fn
 
 
 def get_callbacks(save_path, tensorboard_log_dir=None):
@@ -133,8 +160,11 @@ def load_or_create_cnn(model_name, mode='classifier', fine_tune=True,
     elif model_name == "Xception":
         base_model = Xception(weights=weights, include_top=False, input_shape=IMG_SIZE)
         fine_tune_at = FINE_TUNING_AT_LAYER["Xception"]
+    elif model_name == "EfficientNet":
+        base_model = EfficientNetB4(weights=weights, include_top=False, input_shape=IMG_SIZE)
+        fine_tune_at = FINE_TUNING_AT_LAYER.get("EfficientNet", 0)
     else:
-        raise ValueError(f"Unsupported model: {model_name}. Choose from 'VGG19', 'Inception', 'ResNet', or 'Xception'")
+        raise ValueError(f"Unsupported model: {model_name}. Choose from 'VGG19', 'Inception', 'ResNet', 'Xception', or 'EfficientNet'")
 
     # Apply fine-tuning strategy
     if fine_tune:
@@ -158,9 +188,15 @@ def load_or_create_cnn(model_name, mode='classifier', fine_tune=True,
 
         # Compile the model
         optimizer = Adam(learning_rate=0.0001)
+        if USE_FOCAL_LOSS:
+            loss_fn = focal_loss(gamma=2.0)
+        elif LABEL_SMOOTHING > 0:
+            loss_fn = tf.keras.losses.CategoricalCrossentropy(label_smoothing=LABEL_SMOOTHING)
+        else:
+            loss_fn = 'categorical_crossentropy'
         model.compile(
             optimizer=optimizer,
-            loss='categorical_crossentropy',
+            loss=loss_fn,
             metrics=['accuracy', tf.keras.metrics.Recall(), tf.keras.metrics.Precision()]
         )
     else:  # Feature extractor mode
@@ -189,7 +225,8 @@ def create_feature_extractor(model, model_name):
         "VGG19": "block5_pool",
         "Inception": "mixed10",
         "ResNet": "avg_pool",
-        "Xception": "avg_pool"
+        "Xception": "avg_pool",
+        "EfficientNet": "top_activation"
     }.get(model_name)
 
     if not extraction_layer:
@@ -450,3 +487,119 @@ def fine_tune_feature_extractor(feature_extractor, X_train, y_train, X_val, y_va
         fine_tuned_feature_extractor.save(save_path)
 
     return fine_tuned_feature_extractor
+
+
+# ---------------------------------------------------------------------------
+# Grad-CAM – Gradient-weighted Class Activation Mapping
+# Selvaraju et al. (2017, ICCV). Produces spatial heatmaps that show which
+# image regions drove a specific class prediction.
+# ---------------------------------------------------------------------------
+
+GRADCAM_LAYER = {
+    "VGG19":       "block5_conv4",
+    "Inception":   "mixed10",
+    "ResNet":      "conv5_block3_out",
+    "Xception":    "block14_sepconv2_act",
+    "EfficientNet": "top_activation",
+}
+
+
+def compute_gradcam(model, img_array, class_idx, model_name):
+    """
+    Compute a Grad-CAM heatmap for the given image and class.
+
+    Args:
+        model: Trained Keras classifier model.
+        img_array: Input image as float32 array of shape (1, H, W, 3) in [0,1].
+        class_idx: Integer index of the target class.
+        model_name: One of 'VGG19', 'Inception', 'ResNet', 'Xception', 'EfficientNet'.
+
+    Returns:
+        2-D numpy array in [0, 1] — the normalized CAM heatmap.
+    """
+    layer_name = GRADCAM_LAYER.get(model_name)
+    if layer_name is None:
+        raise ValueError(f"No Grad-CAM layer configured for model '{model_name}'")
+
+    grad_model = tf.keras.Model(
+        inputs=model.inputs,
+        outputs=[model.get_layer(layer_name).output, model.output]
+    )
+
+    with tf.GradientTape() as tape:
+        img_tensor = tf.cast(img_array, tf.float32)
+        conv_outputs, predictions = grad_model(img_tensor)
+        loss = predictions[:, class_idx]
+
+    grads = tape.gradient(loss, conv_outputs)
+    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
+    cam = tf.reduce_sum(conv_outputs[0] * pooled_grads, axis=-1)
+    cam = tf.nn.relu(cam)
+    cam_max = tf.reduce_max(cam)
+    return (cam / (cam_max + 1e-8)).numpy()
+
+
+def save_gradcam_visualizations(model, model_name, image_paths, y_true, y_pred,
+                                y_pred_prob, class_names, result_dir, n_per_class=3):
+    """
+    Save Grad-CAM heatmap overlays for the highest-confidence correct and incorrect
+    predictions, one set per class.
+
+    Args:
+        model: Trained Keras classifier.
+        model_name: Backbone name (e.g. 'ResNet').
+        image_paths: Array of test image paths.
+        y_true: True class indices (1-D int array).
+        y_pred: Predicted class indices (1-D int array).
+        y_pred_prob: Softmax probabilities (2-D float array, n_samples × n_classes).
+        class_names: List of class name strings.
+        result_dir: Directory where gradcam/ sub-folder will be created.
+        n_per_class: How many examples to save per class (default: 3).
+    """
+    import cv2
+    import numpy as np
+
+    gradcam_dir = os.path.join(result_dir, "gradcam")
+    os.makedirs(gradcam_dir, exist_ok=True)
+
+    n_classes = len(class_names) if class_names else int(y_pred_prob.shape[1])
+
+    for class_idx in range(n_classes):
+        class_label = class_names[class_idx] if class_names else str(class_idx)
+
+        # Correct predictions for this class, sorted by confidence (descending)
+        correct_mask = (y_true == class_idx) & (y_pred == class_idx)
+        wrong_mask   = (y_true == class_idx) & (y_pred != class_idx)
+
+        for subset_name, mask in [("correct", correct_mask), ("wrong", wrong_mask)]:
+            indices = np.where(mask)[0]
+            if len(indices) == 0:
+                continue
+            # Sort by confidence of the predicted class
+            conf = y_pred_prob[indices, y_pred[indices]]
+            top_indices = indices[np.argsort(conf)[::-1][:n_per_class]]
+
+            for rank, idx in enumerate(top_indices):
+                path = image_paths[idx]
+                img_bgr = cv2.imread(str(path))
+                if img_bgr is None:
+                    continue
+                h, w = IMG_SIZE[:2]
+                img_bgr = cv2.resize(img_bgr, (w, h))
+                img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+                img_array = img_rgb.astype(np.float32) / 255.0
+                img_input = np.expand_dims(img_array, axis=0)
+
+                try:
+                    cam = compute_gradcam(model, img_input, class_idx, model_name)
+                    cam_resized = cv2.resize(cam, (w, h))
+                    heatmap = cv2.applyColorMap(
+                        np.uint8(255 * cam_resized), cv2.COLORMAP_JET
+                    )
+                    overlay = cv2.addWeighted(img_bgr, 0.6, heatmap, 0.4, 0)
+                    fname = f"{class_label}_{subset_name}_rank{rank + 1}.jpg"
+                    cv2.imwrite(os.path.join(gradcam_dir, fname), overlay)
+                except Exception as e:
+                    print(f"Grad-CAM failed for {path}: {e}")
+
+    print(f"Grad-CAM overlays saved to: {gradcam_dir}")
