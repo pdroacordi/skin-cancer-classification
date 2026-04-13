@@ -1,5 +1,6 @@
 from preprocessing.feature.base.algorithm import AlgorithmPreprocessingPipeline
 from preprocessing.feature.steps.balancing import ClassWeightBalancing
+from preprocessing.feature.steps.outlier_detection import OutlierRemovalStep
 from preprocessing.feature.steps.selection import FeatureSelectionStep
 from preprocessing.feature.steps.threshold import VarianceThresholdStep
 
@@ -8,10 +9,7 @@ class AdaBoostPipeline(AlgorithmPreprocessingPipeline):
 
     def _configure_pipeline(self):
         # 1. Soft outlier handling instead of removal
-        self.steps.append(SoftOutlierHandling(
-            contamination=0.01,  # Much lower threshold
-            method='downweight'  # Downweight instead of remove
-        ))
+        self.steps.append(OutlierRemovalStep(contamination=0.05))
 
         # 2. Remove zero variance features
         self.steps.append(VarianceThresholdStep(threshold=0))
