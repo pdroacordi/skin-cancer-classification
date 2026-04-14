@@ -17,37 +17,26 @@ Result directory conventions:
 
 import os
 
-from config import (
-    CNN_MODEL,
-    CLASSICAL_CLASSIFIER_MODEL,
-    RESULTS_DIR,
-    USE_HAIR_REMOVAL,
-    USE_ENHANCED_CONTRAST,
-    USE_GRAPHIC_PREPROCESSING,
-    USE_DATA_AUGMENTATION,
-    USE_FEATURE_AUGMENTATION,
-    USE_FEATURE_PREPROCESSING,
-    USE_METADATA,
-)
+from config import cfg
 
 
 def _graphic_suffix() -> str:
     """Return the preprocessing flag string common to both pipelines."""
-    if not USE_GRAPHIC_PREPROCESSING:
+    if not cfg.use_graphic_preprocessing:
         return ""
-    contrast = "contrast_" if USE_ENHANCED_CONTRAST else ""
-    hair     = "hair_removal_" if USE_HAIR_REMOVAL else ""
+    contrast = "contrast_"    if cfg.use_enhanced_contrast else ""
+    hair     = "hair_removal_" if cfg.use_hair_removal      else ""
     return f"{contrast}{hair}"
 
 
 def cnn_result_dir(base_dir: str = None) -> str:
     """Return the base result directory path for the CNN classifier pipeline."""
-    base_dir = base_dir or RESULTS_DIR
+    base_dir = base_dir or cfg.results_dir
     suffix = (
         _graphic_suffix()
-        + ("use_augmentation_" if USE_DATA_AUGMENTATION else "")
+        + ("use_augmentation_" if cfg.use_data_augmentation else "")
     )
-    return os.path.join(base_dir, f"cnn_classifier_{CNN_MODEL}_{suffix}")
+    return os.path.join(base_dir, f"cnn_classifier_{cfg.cnn_model}_{suffix}")
 
 
 def feature_extraction_experiment_dir(base_dir: str = None,
@@ -59,14 +48,14 @@ def feature_extraction_experiment_dir(base_dir: str = None,
 
         results/feature_extraction_ResNet_use_augmentation_/
     """
-    base_dir  = base_dir  or RESULTS_DIR
-    cnn_model = cnn_model or CNN_MODEL
+    base_dir  = base_dir  or cfg.results_dir
+    cnn_model = cnn_model or cfg.cnn_model
     suffix = (
         _graphic_suffix()
-        + ("use_augmentation_"          if USE_DATA_AUGMENTATION    else "")
-        + ("use_feature_augmentation_"  if USE_FEATURE_AUGMENTATION  else "")
-        + ("use_feature_preprocessing_" if USE_FEATURE_PREPROCESSING else "")
-        + ("use_metadata_"              if USE_METADATA               else "")
+        + ("use_augmentation_"          if cfg.use_data_augmentation    else "")
+        + ("use_feature_augmentation_"  if cfg.use_feature_augmentation  else "")
+        + ("use_feature_preprocessing_" if cfg.use_feature_preprocessing else "")
+        + ("use_metadata_"              if cfg.use_metadata               else "")
     )
     return os.path.join(base_dir, f"feature_extraction_{cnn_model}_{suffix}")
 
@@ -80,6 +69,6 @@ def feature_extraction_result_dir(base_dir: str = None,
 
         results/feature_extraction_<MODEL>_<flags>/<classifier>/
     """
-    classifier = classifier or CLASSICAL_CLASSIFIER_MODEL
+    classifier = classifier or cfg.classical_classifier_model
     exp_dir    = feature_extraction_experiment_dir(base_dir, cnn_model)
     return os.path.join(exp_dir, classifier.lower())

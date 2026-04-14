@@ -45,6 +45,10 @@ Each pipeline calls `_configure_pipeline()` in its `__init__` to append steps:
 | HistGradientBoosting | VarianceThreshold → RobustNorm → MutualInfo(90th pct) | ClassWeight |
 | SVM | OutlierRemoval → VarianceThreshold → StandardNorm → MutualInfo(60th pct) → PCA(95%) | ClassWeight |
 
+**Available selection steps** (in `steps/selection.py`):
+`FeatureSelectionStep` — supports `mutual_info`, `f_score`, `rfe`, `importance_based`.
+`CorrelationBasedSelection` has been removed.
+
 ## Fit / Transform Contract
 
 - `fit(X, y)` — fits all steps sequentially on training data; outlier removal also

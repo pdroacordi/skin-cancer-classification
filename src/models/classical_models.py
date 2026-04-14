@@ -131,8 +131,8 @@ def get_classifier(classifier_name: str, random_state: int = 42) -> Any:
 
     if classifier_name == "XGBoost":
         from xgboost import XGBClassifier
-        from config import NUM_CLASSES  # lazy import — avoids TF/config side-effects at module load
-        return XGBClassifier(**_XGB_PARAMS, num_class=NUM_CLASSES, random_state=random_state)
+        from config import cfg
+        return XGBClassifier(**_XGB_PARAMS, num_class=cfg.num_classes, random_state=random_state)
 
     if classifier_name == "LightGBM":
         from lightgbm import LGBMClassifier  # lazy import — avoids cost when not in use

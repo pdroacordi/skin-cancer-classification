@@ -22,6 +22,7 @@ import numpy as np
 from sklearn.model_selection import StratifiedKFold
 from tensorflow.keras.backend import clear_session
 
+from config import cfg
 from core.run_context import RunContext
 from core.types import EvalResult, FoldResult, RunArtifact
 from models.cnn_models import (
@@ -63,13 +64,11 @@ def run_cnn_classifier_pipeline(
                           final models.
         class_names:      Optional list of class label strings.
         skip_training:    When True, skip K-fold and go straight to training
-                          NUM_FINAL_MODELS on all train+val data.
+                          cfg.num_final_models on all train+val data.
 
     Returns:
         Dict with keys: fold_results, final_metrics, result_dir.
     """
-    import config  # lazy import ensures apply_cli_overrides() has already run
-
     setup_gpu_memory()
 
     train_paths, train_labels = load_paths_labels(train_files_path)
@@ -82,7 +81,7 @@ def run_cnn_classifier_pipeline(
     ctx = RunContext.create(
         pipeline="cnn_classifier",
         result_dir=str(result_dir),
-        config_snapshot=_build_config_snapshot(config),
+        config_snapshot=_build_config_snapshot(),
     )
     print(f"Results will be saved to: {result_dir}")
     print(f"Run ID: {ctx.run_id}")
@@ -94,9 +93,7 @@ def run_cnn_classifier_pipeline(
         all_cv_paths  = np.concatenate([train_paths, val_paths])
         all_cv_labels = np.concatenate([train_labels, val_labels])
 
-        fold_results = _run_kfold_cv(
-            all_cv_paths, all_cv_labels, ctx, config, class_names
-        )
+        fold_results = _run_kfold_cv(all_cv_paths, all_cv_labels, ctx, class_names)
 
         save_fold_results(
             fold_results=[fr.to_legacy_dict() for fr in fold_results],
@@ -109,10 +106,10 @@ def run_cnn_classifier_pipeline(
     all_labels = np.concatenate([train_labels, val_labels])
 
     model_evals, final_models_dir = _train_and_evaluate_final_models(
-        all_paths, all_labels, test_paths, test_labels, ctx, config, class_names
+        all_paths, all_labels, test_paths, test_labels, ctx, class_names
     )
 
-    # Aggregate across NUM_FINAL_MODELS
+    # Aggregate across num_final_models
     final_metrics = aggregate_eval_results(model_evals)
 
     # Persist statistical summary for multiple models
@@ -144,15 +141,14 @@ def _run_kfold_cv(
     all_paths: np.ndarray,
     all_labels: np.ndarray,
     ctx: RunContext,
-    config,
     class_names: Optional[List[str]],
 ) -> List[FoldResult]:
-    """Run NUM_ITERATIONS × NUM_KFOLDS folds and return all FoldResult objects."""
+    """Run cfg.num_iterations × cfg.num_kfolds folds and return all FoldResult objects."""
     fold_results: List[FoldResult] = []
 
-    for iteration in range(config.NUM_ITERATIONS):
+    for iteration in range(cfg.num_iterations):
         print(f"\n{'=' * 50}")
-        print(f"Iteration {iteration + 1}/{config.NUM_ITERATIONS}")
+        print(f"Iteration {iteration + 1}/{cfg.num_iterations}")
         print(f"{'=' * 50}")
 
         iter_dir = ctx.result_dir / f"iteration_{iteration + 1}"
@@ -160,7 +156,7 @@ def _run_kfold_cv(
 
         # Different random state per iteration for independent splits
         skf = StratifiedKFold(
-            n_splits=config.NUM_KFOLDS, shuffle=True, random_state=42 + iteration
+            n_splits=cfg.num_kfolds, shuffle=True, random_state=42 + iteration
         )
 
         # StratifiedKFold requires integer labels
@@ -174,28 +170,28 @@ def _run_kfold_cv(
             skf.split(all_paths, stratify_labels), start=1
         ):
             print(f"\n{'=' * 40}")
-            print(f"Iteration {iteration + 1}, Fold {fold}/{config.NUM_KFOLDS}")
+            print(f"Iteration {iteration + 1}, Fold {fold}/{cfg.num_kfolds}")
             print(f"{'=' * 40}")
 
             fold_dir = iter_dir / f"fold_{fold}"
             fold_dir.mkdir(parents=True, exist_ok=True)
 
             model_name = create_model_name(
-                base_model_name=config.CNN_MODEL,
+                base_model_name=cfg.cnn_model,
                 mode="classifier",
-                use_fine_tuning=config.USE_FINE_TUNING,
-                use_preprocessing=config.USE_GRAPHIC_PREPROCESSING,
-            )
-            model_save_path = str(
-                iter_dir / "models" / f"{model_name}_iter{iteration+1}_fold{fold}.h5"
+                use_fine_tuning=cfg.use_fine_tuning,
+                use_preprocessing=cfg.use_graphic_preprocessing,
             )
             (iter_dir / "models").mkdir(parents=True, exist_ok=True)
+            model_save_path = str(
+                iter_dir / "models" / f"{model_name}_iter{iteration+1}_fold{fold}.keras"
+            )
 
             log_dir = str(
                 fold_dir / "logs" / datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
             )
 
-            augment_fn = _make_augment_fn(config.USE_DATA_AUGMENTATION)
+            augment_fn = _make_augment_fn(cfg.use_data_augmentation)
 
             try:
                 model, _ = train_one_fold(
@@ -205,10 +201,10 @@ def _run_kfold_cv(
                     val_labels=all_labels[val_idx],
                     model_save_path=model_save_path,
                     log_dir=log_dir,
-                    cnn_model=config.CNN_MODEL,
-                    batch_size=config.BATCH_SIZE,
-                    num_epochs=config.NUM_EPOCHS,
-                    use_fine_tuning=config.USE_FINE_TUNING,
+                    cnn_model=cfg.cnn_model,
+                    batch_size=cfg.batch_size,
+                    num_epochs=cfg.num_epochs,
+                    use_fine_tuning=cfg.use_fine_tuning,
                     augment_fn=augment_fn,
                 )
 
@@ -217,8 +213,8 @@ def _run_kfold_cv(
                     model=model,
                     paths=all_paths[val_idx],
                     labels=all_labels[val_idx],
-                    cnn_model=config.CNN_MODEL,
-                    batch_size=config.BATCH_SIZE,
+                    cnn_model=cfg.cnn_model,
+                    batch_size=cfg.batch_size,
                 )
 
                 eval_result = evaluate_predictions(y_true, y_pred, y_prob, class_names)
@@ -257,37 +253,34 @@ def _train_and_evaluate_final_models(
     test_paths: np.ndarray,
     test_labels: np.ndarray,
     ctx: RunContext,
-    config,
     class_names: Optional[List[str]],
 ) -> Tuple[List[EvalResult], Path]:
     """
-    Train NUM_FINAL_MODELS CNNs on all train+val data, evaluate each on the
+    Train cfg.num_final_models CNNs on all train+val data, evaluate each on the
     test set, and save Grad-CAM visualizations for the last model.
 
     Returns (list_of_eval_results, final_models_dir).
     """
     print(f"\n{'=' * 60}")
-    print(f"Training {config.NUM_FINAL_MODELS} final CNN model(s)")
+    print(f"Training {cfg.num_final_models} final CNN model(s)")
     print(f"{'=' * 60}")
 
     final_models_dir = ctx.result_dir / "final_models"
     final_models_dir.mkdir(parents=True, exist_ok=True)
 
-    augment_fn = _make_augment_fn(config.USE_DATA_AUGMENTATION)
-    tta_augment_fn = (
-        _make_augment_fn(True) if config.USE_TTA else None
-    )
+    augment_fn = _make_augment_fn(cfg.use_data_augmentation)
+    tta_augment_fn = _make_augment_fn(True) if cfg.use_tta else None
 
     model_evals: List[EvalResult] = []
 
-    for model_idx in range(1, config.NUM_FINAL_MODELS + 1):
+    for model_idx in range(1, cfg.num_final_models + 1):
         print(f"\n{'=' * 50}")
-        print(f"Final model {model_idx}/{config.NUM_FINAL_MODELS}")
+        print(f"Final model {model_idx}/{cfg.num_final_models}")
         print(f"{'=' * 50}")
 
         model_dir = final_models_dir / f"model_{model_idx}"
         model_dir.mkdir(parents=True, exist_ok=True)
-        model_save_path = str(model_dir / "final_cnn_model.h5")
+        model_save_path = str(model_dir / "final_cnn_model.keras")
         log_dir = str(model_dir / "logs" / datetime.datetime.now().strftime("%Y%m%dT%H%M%S"))
 
         # Use a small validation subset from training data to monitor progress.
@@ -306,10 +299,10 @@ def _train_and_evaluate_final_models(
                 val_labels=monitor_labels,
                 model_save_path=model_save_path,
                 log_dir=log_dir,
-                cnn_model=config.CNN_MODEL,
-                batch_size=config.BATCH_SIZE,
-                num_epochs=config.NUM_EPOCHS,
-                use_fine_tuning=config.USE_FINE_TUNING,
+                cnn_model=cfg.cnn_model,
+                batch_size=cfg.batch_size,
+                num_epochs=cfg.num_epochs,
+                use_fine_tuning=cfg.use_fine_tuning,
                 augment_fn=augment_fn,
             )
 
@@ -317,12 +310,12 @@ def _train_and_evaluate_final_models(
                 model=model,
                 paths=test_paths,
                 labels=test_labels,
-                cnn_model=config.CNN_MODEL,
-                batch_size=config.BATCH_SIZE,
-                use_mc_dropout=config.USE_MC_DROPOUT,
-                mc_dropout_steps=config.MC_DROPOUT_STEPS,
-                use_tta=config.USE_TTA,
-                tta_n_steps=config.TTA_N_STEPS,
+                cnn_model=cfg.cnn_model,
+                batch_size=cfg.batch_size,
+                use_mc_dropout=cfg.use_mc_dropout,
+                mc_dropout_steps=cfg.mc_dropout_steps,
+                use_tta=cfg.use_tta,
+                tta_n_steps=cfg.tta_n_steps,
                 tta_augment_fn=tta_augment_fn,
             )
 
@@ -340,11 +333,11 @@ def _train_and_evaluate_final_models(
 
             # Grad-CAM visualizations for interpretability
             # Only run for the last model to avoid redundant computation
-            if model_idx == config.NUM_FINAL_MODELS:
+            if model_idx == cfg.num_final_models:
                 try:
                     save_gradcam_visualizations(
                         model=model,
-                        model_name=config.CNN_MODEL,
+                        model_name=cfg.cnn_model,
                         image_paths=test_paths,
                         y_true=y_true,
                         y_pred=y_pred,
@@ -379,28 +372,28 @@ def _make_augment_fn(enabled: bool) -> Optional[callable]:
     return lambda img: augmentation(image=img)["image"]
 
 
-def _build_config_snapshot(config) -> dict:
+def _build_config_snapshot() -> dict:
     """Capture all active experiment flags as a plain dict for metadata.json."""
     return {
-        "cnn_model":                  config.CNN_MODEL,
-        "batch_size":                 config.BATCH_SIZE,
-        "num_epochs":                 config.NUM_EPOCHS,
-        "num_kfolds":                 config.NUM_KFOLDS,
-        "num_iterations":             config.NUM_ITERATIONS,
-        "num_final_models":           config.NUM_FINAL_MODELS,
-        "use_fine_tuning":            config.USE_FINE_TUNING,
-        "use_data_augmentation":      config.USE_DATA_AUGMENTATION,
-        "use_graphic_preprocessing":  config.USE_GRAPHIC_PREPROCESSING,
-        "use_hair_removal":           config.USE_HAIR_REMOVAL,
-        "use_enhanced_contrast":      config.USE_ENHANCED_CONTRAST,
-        "use_color_normalization":    config.USE_COLOR_NORMALIZATION,
-        "use_focal_loss":             config.USE_FOCAL_LOSS,
-        "label_smoothing":            config.LABEL_SMOOTHING,
-        "use_mixup":                  config.USE_MIXUP,
-        "use_tta":                    config.USE_TTA,
-        "tta_n_steps":                config.TTA_N_STEPS,
-        "use_mc_dropout":             config.USE_MC_DROPOUT,
-        "mc_dropout_steps":           config.MC_DROPOUT_STEPS,
+        "cnn_model":                  cfg.cnn_model,
+        "batch_size":                 cfg.batch_size,
+        "num_epochs":                 cfg.num_epochs,
+        "num_kfolds":                 cfg.num_kfolds,
+        "num_iterations":             cfg.num_iterations,
+        "num_final_models":           cfg.num_final_models,
+        "use_fine_tuning":            cfg.use_fine_tuning,
+        "use_data_augmentation":      cfg.use_data_augmentation,
+        "use_graphic_preprocessing":  cfg.use_graphic_preprocessing,
+        "use_hair_removal":           cfg.use_hair_removal,
+        "use_enhanced_contrast":      cfg.use_enhanced_contrast,
+        "use_color_normalization":    cfg.use_color_normalization,
+        "use_focal_loss":             cfg.use_focal_loss,
+        "label_smoothing":            cfg.label_smoothing,
+        "use_mixup":                  cfg.use_mixup,
+        "use_tta":                    cfg.use_tta,
+        "tta_n_steps":                cfg.tta_n_steps,
+        "use_mc_dropout":             cfg.use_mc_dropout,
+        "mc_dropout_steps":           cfg.mc_dropout_steps,
     }
 
 
@@ -423,7 +416,7 @@ def _list_artifacts(ctx: RunContext, final_models_dir: Path) -> List[RunArtifact
     if final_models_dir.exists():
         artifacts.append(RunArtifact(
             path=str(final_models_dir.relative_to(ctx.result_dir)),
-            description="Trained final CNN model checkpoints (.h5)",
+            description="Trained final CNN model checkpoints (.keras)",
         ))
 
     return artifacts

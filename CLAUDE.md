@@ -30,14 +30,12 @@ python main.py --create-splits --metadata path/to/HAM10000_metadata.csv \
 
 # Aggregate all experiment results into summary CSVs (res/all_models_general.csv, res/all_models_per_class.csv)
 python -m analysis.aggregate_results
-
-# Run tests
-python -m pytest tests/ -v
 ```
 
 ## Configuration
 
-`src/config.py` holds all defaults. Every flag can be overridden at runtime via CLI — **no file editing required between experiments**:
+`src/config.py` exposes a single `cfg` dataclass instance. Every field can be overridden at
+runtime via CLI — **no file editing required between experiments**:
 
 ```bash
 # Switch backbone and classifier
@@ -60,26 +58,26 @@ python main.py --cnn-model ResNet --classifier ExtraTrees \
 
 All toggles and their defaults:
 
-| Key | CLI flag | Options/Notes |
+| `cfg` field | CLI flag | Options/Notes |
 |---|---|---|
-| `CNN_MODEL` | `--cnn-model` | `VGG19` `Inception` `ResNet` `Xception` `EfficientNet` |
-| `CLASSICAL_CLASSIFIER_MODEL` | `--classifier` | `RandomForest` `XGBoost` `LightGBM` `HistGradientBoosting` `ExtraTrees` `SVM` |
-| `BATCH_SIZE` | `--batch-size` | int |
-| `NUM_EPOCHS` | `--num-epochs` | int |
-| `NUM_KFOLDS` / `NUM_ITERATIONS` | `--num-kfolds` / `--num-iterations` | Cross-validation folds and repetitions |
-| `USE_DATA_AUGMENTATION` | `--use-augmentation` / `--no-use-augmentation` | Image-level augmentation during CNN training |
-| `USE_FEATURE_AUGMENTATION` | `--use-feature-augmentation` | Feature-space augmentation for classical ML |
-| `USE_FEATURE_PREPROCESSING` | `--use-feature-preprocessing` | Algorithm-specific feature preprocessing pipeline |
-| `USE_GRAPHIC_PREPROCESSING` | `--use-graphic-preprocessing` | Hair removal / contrast enhancement (switches data file paths to `preprocessed_*`) |
-| `USE_HAIR_REMOVAL` | `--use-hair-removal` | Requires `USE_GRAPHIC_PREPROCESSING=True` |
-| `USE_COLOR_NORMALIZATION` | `--use-color-normalization` | Reinhard LAB color normalization; requires pre-fitted `COLOR_NORM_STATS_PATH` |
-| `USE_FINE_TUNING` | `--use-fine-tuning` | Unfreeze CNN layers for fine-tuning |
-| `USE_METADATA` | `--use-metadata` | Append patient metadata (age, location, sex) to CNN features |
-| `USE_FOCAL_LOSS` | `--use-focal-loss` | Replace cross-entropy with focal loss (Lin et al., 2017) |
-| `LABEL_SMOOTHING` | `--label-smoothing` | float; `0.1` recommended, `0.0` disables |
-| `USE_MIXUP` | `--use-mixup` | Mixup augmentation during CNN batch training (Zhang et al., 2018) |
-| `USE_TTA` | `--use-tta` | Test-Time Augmentation: average `TTA_N_STEPS` augmented predictions |
-| `USE_MC_DROPOUT` | `--use-mc-dropout` | Monte Carlo Dropout uncertainty quantification at inference |
+| `cnn_model` | `--cnn-model` | `VGG19` `Inception` `ResNet` `Xception` `EfficientNet` |
+| `classical_classifier_model` | `--classifier` | `RandomForest` `XGBoost` `LightGBM` `HistGradientBoosting` `ExtraTrees` `SVM` |
+| `batch_size` | `--batch-size` | int |
+| `num_epochs` | `--num-epochs` | int |
+| `num_kfolds` / `num_iterations` | `--num-kfolds` / `--num-iterations` | Cross-validation folds and repetitions |
+| `use_data_augmentation` | `--use-augmentation` / `--no-use-augmentation` | Image-level augmentation during CNN training |
+| `use_feature_augmentation` | `--use-feature-augmentation` | Feature-space augmentation for classical ML |
+| `use_feature_preprocessing` | `--use-feature-preprocessing` | Algorithm-specific feature preprocessing pipeline |
+| `use_graphic_preprocessing` | `--use-graphic-preprocessing` | Hair removal / contrast enhancement (switches data file paths to `preprocessed_*`) |
+| `use_hair_removal` | `--use-hair-removal` | Requires `use_graphic_preprocessing=True` |
+| `use_color_normalization` | `--use-color-normalization` | Reinhard LAB color normalization; requires pre-fitted `color_norm_stats_path` |
+| `use_fine_tuning` | `--use-fine-tuning` | Unfreeze CNN layers for fine-tuning |
+| `use_metadata` | `--use-metadata` | Append patient metadata (age, location, sex) to CNN features |
+| `use_focal_loss` | `--use-focal-loss` | Replace cross-entropy with focal loss (Lin et al., 2017) |
+| `label_smoothing` | `--label-smoothing` | float; `0.1` recommended, `0.0` disables |
+| `use_mixup` | `--use-mixup` | Mixup augmentation during CNN batch training (Zhang et al., 2018) |
+| `use_tta` | `--use-tta` | Test-Time Augmentation: average `tta_n_steps` augmented predictions |
+| `use_mc_dropout` | `--use-mc-dropout` | Monte Carlo Dropout uncertainty quantification at inference |
 
 ## Architecture
 
@@ -91,29 +89,42 @@ res/train_files.txt  (tab-separated: image_path \t label)
         v
 utils/data_loaders.py  ->  MemoryEfficientDataGenerator (CNN) or batch numpy loading (FE)
         |
-        +---> pipelines/cnn_classifier.py       (end-to-end CNN training + eval)
+        +---> pipelines/cnn/runner.py               (end-to-end CNN training + eval)
         |
-        +---> pipelines/feature_extraction.py   (CNN feature extraction -> classical ML)
+        +---> pipelines/feature_extraction/runner.py (CNN feature extraction -> classical ML)
 ```
 
 ### Two Pipelines
 
-**`cnn_classifier`**: Loads images via `MemoryEfficientDataGenerator`, trains a pretrained CNN (VGG19/Inception/ResNet/Xception/EfficientNet) with optional fine-tuning and class-weighted loss. Saves models and metrics under `results/cnn_classifier_<MODEL>_<flags>/`.
+**`cnn_classifier`**: Loads images via `MemoryEfficientDataGenerator`, trains a pretrained CNN (VGG19/Inception/ResNet/Xception/EfficientNet) with optional fine-tuning and class-weighted loss. Saves models as `.keras` under `results/cnn_classifier_<MODEL>_<flags>/`.
 
 **`feature_extraction`**: Uses the same CNN as a frozen feature extractor (removes the classification head), feeds the extracted feature vectors into a classical ML model. Optionally appends metadata features. Saves under `results/feature_extraction_<MODEL>_<flags>/<classifier>/`.
 
 Result directory names are built automatically from config flags, e.g.:
 `results/feature_extraction_ResNet_use_augmentation_use_feature_augmentation_/extratrees/`
 
+### Config Access Pattern
+
+`config.py` exposes a single mutable singleton `cfg = Config()`. All modules import it as:
+
+```python
+from config import cfg
+# then access: cfg.cnn_model, cfg.batch_size, cfg.use_fine_tuning, etc.
+```
+
+`apply_cli_overrides(args)` mutates `cfg` in-place before any pipeline module runs.
+Derived values (`cfg.img_size`, `cfg.train_files_path`, etc.) are `@property` and
+recompute automatically when base fields change — no stale bindings.
+
 ### Feature Preprocessing Pipeline
 
 Each classical ML algorithm's pipeline is declared as a dict entry in `src/preprocessing/feature/algorithm/configs.py` (`ALGORITHM_PIPELINE_CONFIGS`). `ConfigurablePreprocessingPipeline` (in `algorithm/configurable.py`) reads that dict and instantiates the appropriate step objects. To add or modify an algorithm's preprocessing, edit `configs.py` only — no new file required.
 
-The factory `PreprocessingPipelineFactory` (in `src/preprocessing/feature/pipeline.py`) instantiates the correct pipeline for `CLASSICAL_CLASSIFIER_MODEL`. Fitted pipelines are saved with `joblib` and reloaded during inference.
+The factory `PreprocessingPipelineFactory` (in `src/preprocessing/feature/pipeline.py`) instantiates the correct pipeline for `cfg.classical_classifier_model`. Fitted pipelines are saved with `joblib` and reloaded during inference.
 
 ### Graphic Preprocessing Pipeline
 
-`src/preprocessing/graphic/pipeline.py` chains steps (hair removal, contrast enhancement, Reinhard color normalization) and is applied offline before training. When `USE_GRAPHIC_PREPROCESSING=True`, `config.py` automatically redirects data paths to `res/preprocessed_*_files.txt`.
+`src/preprocessing/graphic/pipeline.py` chains steps (hair removal, contrast enhancement, Reinhard color normalization) and is applied offline before training. When `cfg.use_graphic_preprocessing=True`, `cfg.train_files_path` / `val_files_path` / `test_files_path` automatically resolve to `res/preprocessed_*_files.txt`.
 
 ### Analysis / Results Aggregation
 
@@ -125,13 +136,12 @@ The factory `PreprocessingPipelineFactory` (in `src/preprocessing/feature/pipeli
 
 | Path | Purpose |
 |---|---|
-| `src/config.py` | All experiment hyperparameters and flags (defaults); override via CLI |
-| `src/main.py` | CLI entry point — accepts all config flags as arguments |
-| `src/tests/` | Test suite — run with `python -m pytest tests/ -v` from `src/` |
+| `src/config.py` | `Config` dataclass + `cfg` singleton; all hyperparameters and flags |
+| `src/main.py` | CLI entry point — accepts all config fields as arguments |
 | `res/` | Dataset split files and aggregated CSVs |
 | `results/` | Per-experiment outputs (models, metrics, plots) |
-| `results/chimera/best_weights.h5` | Hair removal model weights (must exist before `USE_HAIR_REMOVAL=True`) |
-| `res/color_norm_stats.joblib` | Fitted Reinhard stats (must exist before `USE_COLOR_NORMALIZATION=True`) |
+| `results/chimera/best_weights.h5` | Hair removal model weights (must exist before `--use-hair-removal`) |
+| `res/color_norm_stats.joblib` | Fitted Reinhard stats (must exist before `--use-color-normalization`) |
 | `src/models/cnn_models.py` | CNN architecture loading, focal loss, Grad-CAM |
 | `src/models/classical_models.py` | Classical classifier definitions and hyperparameters |
 | `src/utils/gpu_utils.py` | `setup_gpu_memory()` — shared TF memory-growth setup |
@@ -140,7 +150,7 @@ The factory `PreprocessingPipelineFactory` (in `src/preprocessing/feature/pipeli
 | `src/utils/metadata_extractor.py` | Extracts patient metadata features from `res/metadata.csv` |
 | `src/utils/calibration.py` | Expected Calibration Error (ECE) computation |
 | `src/preprocessing/graphic/color_normalization.py` | Reinhard LAB color normalization step |
-| `src/preprocessing/feature/algorithm/configs.py` | Declarative step configs for all 5 classifiers |
+| `src/preprocessing/feature/algorithm/configs.py` | Declarative step configs for all 6 classifiers |
 | `src/preprocessing/feature/algorithm/configurable.py` | `ConfigurablePreprocessingPipeline` — builds from `configs.py` |
 
 ## Sub-module Documentation
@@ -157,7 +167,7 @@ Detailed CLAUDE.md files exist for each major sub-module:
 
 ## Prerequisites
 
-Before running with `USE_HAIR_REMOVAL=True`, the hair removal model weights must be
+Before running with `--use-hair-removal`, the hair removal model weights must be
 available at `results/chimera/best_weights.h5`. Train it via:
 
 ```bash
@@ -167,7 +177,7 @@ python -m preprocessing.graphic.hair_removal.training.trainer
 
 Or place pre-trained weights at that path directly.
 
-Before running with `USE_COLOR_NORMALIZATION=True`, fit reference LAB statistics on
+Before running with `--use-color-normalization`, fit reference LAB statistics on
 training images and save to `res/color_norm_stats.joblib`:
 
 ```python

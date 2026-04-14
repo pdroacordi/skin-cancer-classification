@@ -367,7 +367,7 @@ class Plotter:
 
         # Prepare data - match exact CSV structure
         networks = ['Inception', 'Resnet', 'Vgg19', 'Xception']  # Match CSV naming
-        algorithms = ['adaboost', 'extratrees', 'randomforest', 'xgboost']
+        algorithms = ['extratrees', 'randomforest', 'xgboost', 'lightgbm']
 
         bar_width = 0.15
         x_pos = np.arange(len(networks))
@@ -399,8 +399,8 @@ class Plotter:
                 colors.append(COLOR_PALETTE.get('RandomForest', '#17becf'))
             elif alg == 'xgboost':
                 colors.append(COLOR_PALETTE.get('XGBoost', '#bcbd22'))
-            elif alg == 'adaboost':
-                colors.append(COLOR_PALETTE.get('AdaBoost', '#ff9500'))
+            elif alg == 'lightgbm':
+                colors.append(COLOR_PALETTE.get('LightGBM', '#aec7e8'))
             elif alg == 'extratrees':
                 colors.append(COLOR_PALETTE.get('ExtraTrees', '#e377c2'))
             else:
@@ -451,7 +451,7 @@ class Plotter:
         """Best performing CNN for each ensemble algorithm."""
         fig, ax = plt.subplots(figsize=DEFAULT_FIGSIZE)
 
-        algorithms = ['adaboost', 'extratrees', 'randomforest', 'xgboost']
+        algorithms = ['extratrees', 'randomforest', 'xgboost', 'lightgbm']
         networks = ['Inception', 'Resnet', 'Vgg19', 'Xception']
 
         best_scores = []
@@ -476,12 +476,12 @@ class Plotter:
             best_stds.append(best_std)
 
         # Map algorithm names to proper display names and colors
-        display_names = ['AdaBoost', 'ExtraTrees', 'RandomForest', 'XGBoost']
+        display_names = ['ExtraTrees', 'RandomForest', 'XGBoost', 'LightGBM']
         alg_to_color = {
-            "AdaBoost": COLOR_PALETTE["AdaBoost"],
             "ExtraTrees": COLOR_PALETTE["ExtraTrees"],
             "RandomForest": COLOR_PALETTE["RandomForest"],
             "XGBoost": COLOR_PALETTE["XGBoost"],
+            "LightGBM": COLOR_PALETTE["LightGBM"],
         }
         colors = [alg_to_color[alg] for alg in display_names]
 
@@ -598,13 +598,13 @@ class Plotter:
     def _fig_05_alg_aug_vs_noaug(self):
         """
         4 sub-plots (Inception, ResNet, VGG19, Xception) – comparação NoAug × Aug
-        para cada algoritmo (AdaBoost, ExtraTrees, RandomForest, XGBoost),
+        para cada algoritmo (ExtraTrees, RandomForest, XGBoost, LightGBM),
         com rótulos “valor ± std”.
-        """
-        nets = ["Inception", "Resnet", "Vgg19", "Xception"]
-        algs = ["adaboost", "extratrees", "randomforest", "xgboost"]
-        names = dict(adaboost="AdaBoost", extratrees="ExtraTrees",
-                     randomforest="RandomForest", xgboost="XGBoost")
+        “””
+        nets = [“Inception”, “Resnet”, “Vgg19”, “Xception”]
+        algs = [“extratrees”, “randomforest”, “xgboost”, “lightgbm”]
+        names = dict(extratrees=”ExtraTrees”, randomforest=”RandomForest”,
+                     xgboost=”XGBoost”, lightgbm=”LightGBM”)
 
         def _val(mid):  # -> (mean, std)
             return self._get_metric_stats(mid, "macro_avg_f1")
@@ -727,8 +727,11 @@ class Plotter:
                 alg_display = {
                     'randomforest': 'RandomForest',
                     'xgboost': 'XGBoost',
-                    'adaboost': 'AdaBoost',
-                    'extratrees': 'ExtraTrees'
+                    'lightgbm': 'LightGBM',
+                    'histgradientboosting': 'HistGradientBoosting',
+                    'extratrees': 'ExtraTrees',
+                    'svm': 'SVM',
+                    'dynamic_ensemble': 'DynamicEnsemble',
                 }.get(algorithm, algorithm.title())
                 return f"{net_display}+{alg_display}"
 

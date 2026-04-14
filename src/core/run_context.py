@@ -56,7 +56,7 @@ class RunContext:
         The hash is derived from the config snapshot, so identical configs
         on the same second produce the same run_id (idempotent reruns).
         """
-        timestamp = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+        timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
         config_str = json.dumps(config_snapshot, sort_keys=True, default=str)
         short_hash = hashlib.md5(config_str.encode()).hexdigest()[:6]
         run_id = f"{pipeline}_{timestamp}_{short_hash}"
@@ -103,7 +103,7 @@ class RunContext:
 
         metadata: Dict[str, Any] = {
             "run_id": self.run_id,
-            "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "pipeline": self.pipeline,
             "status": status,
             "parameters": self.config_snapshot,

@@ -19,12 +19,12 @@ EfficientNetB4).
 | Xception | `avg_pool` | 299×299 |
 | EfficientNet | `top_activation` | 380×380 |
 
-**Loss function:** controlled by config flags evaluated at compile time.
-- `USE_FOCAL_LOSS=True` → focal loss (Lin et al., 2017) with γ=2.0.
-- `LABEL_SMOOTHING > 0` → `CategoricalCrossentropy(label_smoothing=...)`.
+**Loss function:** resolved at `load_or_create_cnn()` call time from `cfg`:
+- `cfg.use_focal_loss=True` → focal loss (Lin et al., 2017) with γ=2.0.
+- `cfg.label_smoothing > 0` → `CategoricalCrossentropy(label_smoothing=...)`.
 - Otherwise → plain `'categorical_crossentropy'`.
 
-**Fine-tuning:** layers before `FINE_TUNING_AT_LAYER[model]` are frozen; later layers are trainable. Set `fine_tune=False` to freeze the entire base model.
+**Fine-tuning:** layers before `FINE_TUNING_AT_LAYER[model]` (module-level constant in `config.py`) are frozen; later layers are trainable. Set `fine_tune=False` to freeze the entire base model.
 
 **Key functions:**
 - `load_or_create_cnn(model_name, mode, fine_tune, save_path)` — loads from disk if `save_path` exists, otherwise creates fresh.
@@ -60,7 +60,7 @@ scored by `balanced_accuracy` — use sparingly as it is expensive.
 ## dynamic_ensemble.py
 
 Wraps DESlib (0.3.7) in an sklearn-compatible interface for the feature extraction
-pipeline.  Enabled by `USE_DYNAMIC_ENSEMBLE=True` in `config.py`.
+pipeline.  Enabled by `cfg.use_dynamic_ensemble=True` (CLI: `--use-dynamic-ensemble`).
 
 **Class:** `DynamicEnsembleSelector(algorithm, k_neighbors)`
 
@@ -74,5 +74,5 @@ pipeline.  Enabled by `USE_DYNAMIC_ENSEMBLE=True` in `config.py`.
 **Interface:** `fit(pool_classifiers, X_dsel, y_dsel)` · `predict(X)` · `predict_proba(X)` · `save(path)` · `load(path)`
 
 Pool classifiers are pre-fitted sklearn Pipelines (output of `create_ml_pipeline`).
-DSEL is a stratified 30% split of training data (configurable via `DES_DSEL_FRACTION`).
+DSEL is a stratified 30% split of training data (configurable via `cfg.des_dsel_fraction`).
 Results are saved under `results/feature_extraction_.../dynamic_ensemble/`.

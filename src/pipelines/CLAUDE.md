@@ -1,77 +1,107 @@
 # src/pipelines/CLAUDE.md
 
-## cnn_classifier.py
+## Structure
 
-End-to-end CNN training pipeline. Entry point: called from `main.py`.
+Each pipeline lives in its own sub-package with three stages plus a runner:
+
+```
+pipelines/
+  cnn/
+    runner.py          ← public entry point called by main.py
+    stages/
+      train.py         ← train_one_fold()
+      predict.py       ← predict_batch() (TTA, MC Dropout)
+      evaluate.py      ← evaluate_predictions()
+  feature_extraction/
+    runner.py          ← public entry point called by main.py
+    stages/
+      extract.py       ← load_or_extract_features()
+      train.py         ← train_classifier()
+      evaluate.py      ← evaluate_classifier()
+```
+
+## cnn/runner.py
+
+End-to-end CNN training pipeline.
 
 **Training flow:**
 1. `setup_gpu_memory()` — enables memory growth to avoid OOM.
-2. `create_result_directories()` — builds the output path from config flags.
-3. K-fold cross-validation loop (`NUM_ITERATIONS × NUM_KFOLDS` folds total):
-   - Images are loaded lazily via `MemoryEfficientDataGenerator` (never all in RAM).
-   - Class weights computed via `sklearn.utils.class_weight.compute_class_weight('balanced')` and passed to `model.fit()`.
+2. `cnn_result_dir()` — builds the output path from `cfg` flags.
+3. Optional K-fold CV (`cfg.num_iterations × cfg.num_kfolds` folds total):
+   - Images are loaded lazily via `MemoryEfficientDataGenerator`.
+   - Class weights computed via `sklearn.utils.class_weight.compute_class_weight('balanced')`.
    - Each fold trains with EarlyStopping + ReduceLROnPlateau + ModelCheckpoint.
-   - Per-fold metrics saved by `save_fold_results()` → `iteration_results.txt`.
-4. After CV, trains `NUM_FINAL_MODELS` on the full train set and selects the best
-   by macro-F1; summary written to `final_models/model_performance_summary.csv`.
+4. Trains `cfg.num_final_models` on the full train+val set; Grad-CAM run on the last model.
+5. All results written via `save_run_results()`.
 
-**Evaluation features** (in `evaluate_model()`):
-- Macro AUC-ROC via `roc_auc_score` (one-vs-rest, macro average).
-- Expected Calibration Error (ECE) from `utils.calibration`.
-- **TTA** (`USE_TTA=True`): averages `TTA_N_STEPS` augmented predictions per sample.
-- **MC Dropout** (`USE_MC_DROPOUT=True`): `MC_DROPOUT_STEPS` stochastic forward passes; per-sample uncertainty saved to `mc_dropout_uncertainty.npy`.
+**Model checkpoints** are saved as `.keras` (not `.h5`).
+
+**Evaluation features** (in `predict_batch()`):
+- **TTA** (`cfg.use_tta=True`): averages `cfg.tta_n_steps` augmented predictions per sample.
+- **MC Dropout** (`cfg.use_mc_dropout=True`): `cfg.mc_dropout_steps` stochastic forward passes; per-sample uncertainty saved to `mc_dropout_uncertainty.npy`.
 - **Grad-CAM**: saves heatmap overlays per class to `gradcam/` subdirectory.
 
 **Output structure:**
 ```
 results/cnn_classifier_<MODEL>_<flags>/
-    models/                        # per-fold checkpoints
+    iteration_<i>/
+        fold_<j>/
+            logs/
+        models/                        # per-fold checkpoints (.keras)
     final_models/
-        model_<i>/final_cnn_model.h5
+        model_<i>/
+            final_cnn_model.keras
+            mc_dropout_uncertainty.npy  (if use_mc_dropout=True)
+            logs/
         model_performance_summary.csv
-    model_performance_summary.csv  # CV aggregated metrics (includes macro_auc_roc, ece)
+    fold_results_summary.csv
     per_class_metrics.csv
-    gradcam/                       # Grad-CAM overlays per class
-    mc_dropout_uncertainty.npy     # (if USE_MC_DROPOUT=True)
+    gradcam/                           # Grad-CAM overlays per class
+    metadata.json                      # full config snapshot + metrics
 ```
 
-## feature_extraction.py
+## feature_extraction/runner.py
 
-CNN feature extraction → classical ML pipeline. Entry point: called from `main.py`.
+CNN feature extraction → classical ML pipeline.
 
 **Training flow:**
 1. Loads (or creates) a feature extractor via `get_feature_extractor_from_cnn()`.
-   - Prefers a CNN already trained by `cnn_classifier.py`; falls back to ImageNet weights.
-2. Extracts feature vectors from train/val/test images (batch inference, no full-image RAM load).
-3. When `USE_METADATA=True`: `MetadataFeatureExtractor.fit()` is called **only on train+val images** to prevent scaler leakage, then appended via `combine_cnn_and_metadata_features()`.
-4. If `USE_FEATURE_PREPROCESSING=True`, runs `apply_feature_preprocessing()` (per-algorithm pipeline).
-5. If `USE_FEATURE_AUGMENTATION=True`, applies feature-space augmentation before fitting.
-6. Trains the classical ML classifier; evaluates on test set; saves model with `joblib`.
-
-**Evaluation features:**
-- Macro AUC-ROC and ECE computed alongside accuracy/F1.
-- **SHAP**: TreeSHAP values computed after training and saved as `shap_values.npy`.
-
-**Legacy guard:** `run_kfold_cross_validation()` raises `RuntimeError` when
-`USE_FEATURE_AUGMENTATION=True` to prevent the 68k-row memorisation bug (augmented
-duplicates leaking across K-fold splits).
+   - Prefers a CNN already trained by the CNN pipeline; falls back to ImageNet weights.
+2. Fits `MetadataFeatureExtractor` **only on train+val images** when `cfg.use_metadata=True`.
+3. Optional K-fold CV: extract per-fold features → preprocess → train → evaluate.
+   - Feature augmentation is **disabled** during K-fold to prevent augmented-duplicate leakage.
+4. Trains `cfg.num_final_models` final classifiers on all train+val data → evaluate on test.
+5. SHAP analysis (TreeSHAP) on the best final model for tree-based classifiers.
+6. When `cfg.use_dynamic_ensemble=True`, trains a DES pool instead of a single classifier.
 
 **Output structure:**
 ```
-results/feature_extraction_<CNN>_<flags>/<classifier>/
-    iteration_<i>/
-        fold_<j>/
-            classifier.joblib
-            feature_preprocessing_pipeline.joblib
-            iteration_results.txt
-    model_performance_summary.csv  # includes macro_auc_roc, ece
-    per_class_metrics.csv
-    shap_values.npy
+results/feature_extraction_<CNN>_<flags>/
+    models/
+        <cnn>_feature_extractor.keras
+    <classifier>/                       # or dynamic_ensemble/
+        iteration_<i>/
+            fold_<j>/
+                models/
+                    <classifier>_fold<j>.joblib
+                    feat_preprocessing.joblib  (if use_feature_preprocessing=True)
+        features/
+            all_features.npz
+            test_features.npz
+        final_models/
+            <classifier>_model<i>.joblib
+            final_feat_preprocessing.joblib
+            shap_values.npy
+        fold_results_summary.csv
+        model_performance_summary.csv
+        per_class_metrics.csv
+        metadata.json
 ```
 
 ## Shared behaviour
 
-- Both pipelines call `save_fold_results()` from `utils/fold_utils.py` to persist
+- Both runners call `save_fold_results()` from `utils/fold_utils.py` to persist
   per-fold metrics in a standard format consumed by `analysis/aggregate_results.py`.
-- GPU memory growth is configured identically in both pipelines at startup.
+- GPU memory growth is configured at startup via `setup_gpu_memory()`.
 - `clear_session()` and `gc.collect()` are called between folds to free Keras/GPU memory.
+- `_build_config_snapshot()` in each runner captures `cfg` at run time into `metadata.json`.

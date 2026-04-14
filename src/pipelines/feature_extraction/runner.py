@@ -23,6 +23,7 @@ import pandas as pd
 from sklearn.model_selection import StratifiedKFold
 from tensorflow.keras.backend import clear_session
 
+from config import cfg
 from core.run_context import RunContext
 from core.types import EvalResult, FoldResult, RunArtifact
 from models.classical_models import create_ml_pipeline, save_model
@@ -64,7 +65,7 @@ def run_feature_extraction_pipeline(
     1. Load feature extractor (from trained CNN or ImageNet weights).
     2. Fit metadata extractor on train+val (prevents test-set leakage).
     3. K-fold CV: extract per-fold features → preprocess → train → evaluate.
-    4. Train NUM_FINAL_MODELS on all train+val data → evaluate on test.
+    4. Train cfg.num_final_models on all train+val data → evaluate on test.
     5. SHAP analysis on best final model.
     6. Write all results via save_run_results().
 
@@ -79,8 +80,6 @@ def run_feature_extraction_pipeline(
     Returns:
         Dict with keys: fold_results, final_metrics, result_dir.
     """
-    import config  # lazy import ensures apply_cli_overrides() has already run
-
     setup_gpu_memory()
 
     train_paths, train_labels = load_paths_labels(train_files_path)
@@ -92,41 +91,43 @@ def run_feature_extraction_pipeline(
 
     # When DES is active, results live under dynamic_ensemble/ so they are
     # clearly distinguishable from single-classifier runs in aggregate_results.
-    subdir_name = "dynamic_ensemble" if config.USE_DYNAMIC_ENSEMBLE else config.CLASSICAL_CLASSIFIER_MODEL.lower()
+    subdir_name = (
+        "dynamic_ensemble" if cfg.use_dynamic_ensemble
+        else cfg.classical_classifier_model.lower()
+    )
     classifier_dir = result_dir / subdir_name
     classifier_dir.mkdir(parents=True, exist_ok=True)
 
     ctx = RunContext.create(
         pipeline="feature_extraction",
         result_dir=str(classifier_dir),
-        config_snapshot=_build_config_snapshot(config),
+        config_snapshot=_build_config_snapshot(),
     )
     print(f"Results will be saved to: {classifier_dir}")
     print(f"Run ID: {ctx.run_id}")
 
     # ---- Load or create feature extractor ---- #
-    extractor_path = str(result_dir / "models" / f"{config.CNN_MODEL.lower()}_feature_extractor.h5")
+    extractor_path = str(
+        result_dir / "models" / f"{cfg.cnn_model.lower()}_feature_extractor.keras"
+    )
     (result_dir / "models").mkdir(parents=True, exist_ok=True)
     feature_extractor, _ = get_feature_extractor_from_cnn(extractor_path)
 
     # ---- Metadata extractor (fit on train+val only) ---- #
-    metadata_extractor, metadata_df = _setup_metadata_extractor(
-        train_paths, val_paths, config
-    )
+    metadata_extractor, metadata_df = _setup_metadata_extractor(train_paths, val_paths)
 
     # ---- Augmentation pipelines (for K-fold feature extraction) ---- #
     # Feature augmentation is disabled during K-fold to prevent the
     # augmented-duplicate data-leakage bug: if augmented copies of the
     # same image appear in both train and val splits, the classifier
     # memorises the duplicates rather than learning generalizable features.
-    aug_pipelines_for_kfold: Optional[List] = None
     aug_pipelines_for_final = (
         AugmentationFactory.get_feature_extraction_augmentation()
-        if config.USE_FEATURE_AUGMENTATION
+        if cfg.use_feature_augmentation
         else None
     )
 
-    img_size = tuple(config.IMG_SIZE[:2])
+    img_size = tuple(cfg.img_size[:2])
 
     # ---- K-fold cross-validation ---- #
     fold_results: List[FoldResult] = []
@@ -139,12 +140,10 @@ def run_feature_extraction_pipeline(
             all_paths=all_paths,
             all_labels=all_labels,
             ctx=ctx,
-            config=config,
             feature_extractor=feature_extractor,
             metadata_extractor=metadata_extractor,
             metadata_df=metadata_df,
             img_size=img_size,
-            aug_pipelines=aug_pipelines_for_kfold,
             tune_hyperparams=tune_hyperparams,
             class_names=class_names,
         )
@@ -152,7 +151,7 @@ def run_feature_extraction_pipeline(
         save_fold_results(
             fold_results=[fr.to_legacy_dict() for fr in fold_results],
             result_dir=str(ctx.result_dir),
-            classifier_name=config.CLASSICAL_CLASSIFIER_MODEL,
+            classifier_name=cfg.classical_classifier_model,
         )
 
     # ---- Train final models ---- #
@@ -165,7 +164,6 @@ def run_feature_extraction_pipeline(
         test_paths=test_paths,
         test_labels=test_labels,
         ctx=ctx,
-        config=config,
         feature_extractor=feature_extractor,
         metadata_extractor=metadata_extractor,
         metadata_df=metadata_df,
@@ -207,16 +205,14 @@ def _run_kfold_cv(
     all_paths: np.ndarray,
     all_labels: np.ndarray,
     ctx: RunContext,
-    config,
     feature_extractor,
     metadata_extractor: Optional[MetadataFeatureExtractor],
     metadata_df: Optional[pd.DataFrame],
     img_size: Tuple,
-    aug_pipelines: Optional[List],
     tune_hyperparams: bool,
     class_names: Optional[List[str]],
 ) -> List[FoldResult]:
-    """Run NUM_ITERATIONS × NUM_KFOLDS folds and return all FoldResult objects."""
+    """Run cfg.num_iterations × cfg.num_kfolds folds and return all FoldResult objects."""
     fold_results: List[FoldResult] = []
     features_dir = ctx.result_dir / "features_by_fold"
     features_dir.mkdir(parents=True, exist_ok=True)
@@ -227,9 +223,9 @@ def _run_kfold_cv(
         else all_labels
     )
 
-    for iteration in range(config.NUM_ITERATIONS):
+    for iteration in range(cfg.num_iterations):
         print(f"\n{'=' * 50}")
-        print(f"Iteration {iteration + 1}/{config.NUM_ITERATIONS}")
+        print(f"Iteration {iteration + 1}/{cfg.num_iterations}")
         print(f"{'=' * 50}")
 
         iter_dir = ctx.result_dir / f"iteration_{iteration + 1}"
@@ -238,14 +234,14 @@ def _run_kfold_cv(
         iter_features_dir.mkdir(parents=True, exist_ok=True)
 
         skf = StratifiedKFold(
-            n_splits=config.NUM_KFOLDS, shuffle=True, random_state=42 + iteration
+            n_splits=cfg.num_kfolds, shuffle=True, random_state=42 + iteration
         )
 
         for fold, (train_idx, val_idx) in enumerate(
             skf.split(all_paths, stratify_labels), start=1
         ):
             print(f"\n{'=' * 40}")
-            print(f"Iteration {iteration + 1}, Fold {fold}/{config.NUM_KFOLDS}")
+            print(f"Iteration {iteration + 1}, Fold {fold}/{cfg.num_kfolds}")
             print(f"{'=' * 40}")
 
             fold_dir = iter_dir / f"fold_{fold}"
@@ -268,8 +264,8 @@ def _run_kfold_cv(
                     paths=all_paths[train_idx],
                     labels=all_labels[train_idx],
                     img_size=img_size,
-                    model_name=config.CNN_MODEL,
-                    batch_size=config.BATCH_SIZE,
+                    model_name=cfg.cnn_model,
+                    batch_size=cfg.batch_size,
                     features_save_path=train_cache,
                     apply_augmentation=False,  # augmentation disabled in K-fold
                     augmentation_pipelines=None,
@@ -281,8 +277,8 @@ def _run_kfold_cv(
                     paths=all_paths[val_idx],
                     labels=all_labels[val_idx],
                     img_size=img_size,
-                    model_name=config.CNN_MODEL,
-                    batch_size=config.BATCH_SIZE,
+                    model_name=cfg.cnn_model,
+                    batch_size=cfg.batch_size,
                     features_save_path=val_cache,
                     apply_augmentation=False,
                     augmentation_pipelines=None,
@@ -291,27 +287,26 @@ def _run_kfold_cv(
 
                 # Feature preprocessing (optional per-algorithm pipeline).
                 # Skipped for DES: raw features preserve pool diversity.
-                if config.USE_FEATURE_PREPROCESSING and not config.USE_DYNAMIC_ENSEMBLE:
+                if cfg.use_feature_preprocessing and not cfg.use_dynamic_ensemble:
                     pipe_save_path = str(fold_dir / "models" / "feat_preprocessing.joblib")
                     train_feats, train_labs, feat_pipe = apply_feature_preprocessing(
                         features=train_feats,
                         labels=train_labs,
-                        algorithm=config.CLASSICAL_CLASSIFIER_MODEL,
+                        algorithm=cfg.classical_classifier_model,
                         training=True,
                         save_path=pipe_save_path,
                     )
                     val_feats, val_labs = feat_pipe.transform(val_feats, val_labs)
 
-                if config.USE_DYNAMIC_ENSEMBLE:
+                if cfg.use_dynamic_ensemble:
                     model, eval_result = _train_des_ensemble(
                         train_feats=train_feats,
                         train_labs=train_labs,
                         val_feats=val_feats,
                         val_labs=val_labs,
-                        config=config,
                     )
                     model_save_path = str(
-                        fold_dir / "models" / f"des_{config.DES_ALGORITHM}_fold{fold}.joblib"
+                        fold_dir / "models" / f"des_{cfg.des_algorithm}_fold{fold}.joblib"
                     )
                     model.save(model_save_path)
                 else:
@@ -320,12 +315,12 @@ def _run_kfold_cv(
                         train_labels=train_labs,
                         val_features=val_feats,
                         val_labels=val_labs,
-                        classifier_name=config.CLASSICAL_CLASSIFIER_MODEL,
+                        classifier_name=cfg.classical_classifier_model,
                         tune_hyperparams=tune_hyperparams,
                     )
                     model_save_path = str(
                         fold_dir / "models" /
-                        f"{config.CLASSICAL_CLASSIFIER_MODEL.lower()}_fold{fold}.joblib"
+                        f"{cfg.classical_classifier_model.lower()}_fold{fold}.joblib"
                     )
                     save_model(model, model_save_path)
 
@@ -359,7 +354,6 @@ def _train_and_evaluate_final_models(
     test_paths: np.ndarray,
     test_labels: np.ndarray,
     ctx: RunContext,
-    config,
     feature_extractor,
     metadata_extractor: Optional[MetadataFeatureExtractor],
     metadata_df: Optional[pd.DataFrame],
@@ -368,27 +362,27 @@ def _train_and_evaluate_final_models(
     tune_hyperparams: bool,
     class_names: Optional[List[str]],
 ) -> Tuple[List[EvalResult], Path]:
-    """Train NUM_FINAL_MODELS classifiers on all data and evaluate on test."""
+    """Train cfg.num_final_models classifiers on all data and evaluate on test."""
     print(f"\n{'=' * 60}")
-    print(f"Training {config.NUM_FINAL_MODELS} final {config.CLASSICAL_CLASSIFIER_MODEL} model(s)")
+    print(f"Training {cfg.num_final_models} final {cfg.classical_classifier_model} model(s)")
     print(f"{'=' * 60}")
 
     final_models_dir = ctx.result_dir / "final_models"
     final_models_dir.mkdir(parents=True, exist_ok=True)
 
-    # Extract training features once; reused for all NUM_FINAL_MODELS
-    all_meta   = _get_metadata_features(all_paths, metadata_df, metadata_extractor)
-    test_meta  = _get_metadata_features(test_paths, metadata_df, metadata_extractor)
+    # Extract training features once; reused for all num_final_models
+    all_meta  = _get_metadata_features(all_paths, metadata_df, metadata_extractor)
+    test_meta = _get_metadata_features(test_paths, metadata_df, metadata_extractor)
 
     train_feats, train_labs = load_or_extract_features(
         feature_extractor=feature_extractor,
         paths=all_paths,
         labels=all_labels,
         img_size=img_size,
-        model_name=config.CNN_MODEL,
-        batch_size=config.BATCH_SIZE,
+        model_name=cfg.cnn_model,
+        batch_size=cfg.batch_size,
         features_save_path=str(ctx.result_dir / "features" / "all_features.npz"),
-        apply_augmentation=config.USE_FEATURE_AUGMENTATION,
+        apply_augmentation=cfg.use_feature_augmentation,
         augmentation_pipelines=aug_pipelines,
         metadata_features=all_meta,
     )
@@ -398,8 +392,8 @@ def _train_and_evaluate_final_models(
         paths=test_paths,
         labels=test_labels,
         img_size=img_size,
-        model_name=config.CNN_MODEL,
-        batch_size=config.BATCH_SIZE,
+        model_name=cfg.cnn_model,
+        batch_size=cfg.batch_size,
         features_save_path=str(ctx.result_dir / "features" / "test_features.npz"),
         apply_augmentation=False,
         augmentation_pipelines=None,
@@ -407,42 +401,40 @@ def _train_and_evaluate_final_models(
     )
 
     # Feature preprocessing for final models.
-    # Skipped when USE_DYNAMIC_ENSEMBLE=True: the pool contains classifiers
+    # Skipped when use_dynamic_ensemble=True: the pool contains classifiers
     # with different optimal preprocessing requirements, and applying a single
-    # algorithm-specific pipeline (based on CLASSICAL_CLASSIFIER_MODEL) could
-    # hurt pool diversity. Raw CNN features work well for all tree-based classifiers.
-    if config.USE_FEATURE_PREPROCESSING and not config.USE_DYNAMIC_ENSEMBLE:
+    # algorithm-specific pipeline could hurt pool diversity.
+    if cfg.use_feature_preprocessing and not cfg.use_dynamic_ensemble:
         final_pipe_path = str(final_models_dir / "final_feat_preprocessing.joblib")
         train_feats, train_labs, feat_pipe = apply_feature_preprocessing(
             features=train_feats,
             labels=train_labs,
-            algorithm=config.CLASSICAL_CLASSIFIER_MODEL,
+            algorithm=cfg.classical_classifier_model,
             training=True,
             save_path=final_pipe_path,
         )
         test_feats, test_labs = feat_pipe.transform(test_feats, test_labs)
 
-    # ---- DES branch: train pool + calibrate DES + evaluate ---- #
-    if config.USE_DYNAMIC_ENSEMBLE:
+    # ---- DES branch ---- #
+    if cfg.use_dynamic_ensemble:
         return _train_and_evaluate_des_final(
             train_feats=train_feats,
             train_labs=train_labs,
             test_feats=test_feats,
             test_labs=test_labs,
-            config=config,
             class_names=class_names,
             final_models_dir=final_models_dir,
         ), final_models_dir
 
-    # ---- Single-classifier branch (original path) ---- #
+    # ---- Single-classifier branch ---- #
     model_evals: List[EvalResult] = []
     best_model = None
 
-    for model_idx in range(1, config.NUM_FINAL_MODELS + 1):
-        print(f"\n--- Final model {model_idx}/{config.NUM_FINAL_MODELS} ---")
+    for model_idx in range(1, cfg.num_final_models + 1):
+        print(f"\n--- Final model {model_idx}/{cfg.num_final_models} ---")
 
         model_path = str(
-            final_models_dir / f"{config.CLASSICAL_CLASSIFIER_MODEL.lower()}_model{model_idx}.joblib"
+            final_models_dir / f"{cfg.classical_classifier_model.lower()}_model{model_idx}.joblib"
         )
 
         try:
@@ -451,7 +443,7 @@ def _train_and_evaluate_final_models(
                 train_labels=train_labs,
                 val_features=test_feats,   # val is test for final models
                 val_labels=test_labs,
-                classifier_name=config.CLASSICAL_CLASSIFIER_MODEL,
+                classifier_name=cfg.classical_classifier_model,
                 tune_hyperparams=tune_hyperparams,
             )
             save_model(model, model_path)
@@ -482,7 +474,7 @@ def _train_and_evaluate_final_models(
 
     # SHAP analysis on the best final model
     if best_model is not None:
-        _compute_and_save_shap(best_model, test_feats, final_models_dir, config)
+        _compute_and_save_shap(best_model, test_feats, final_models_dir)
 
     return model_evals, final_models_dir
 
@@ -495,26 +487,24 @@ def _compute_and_save_shap(
     model,
     test_features: np.ndarray,
     output_dir: Path,
-    config,
 ) -> None:
     """
     Compute TreeSHAP values for tree-based classifiers and save to .npy.
 
     Skipped when:
-    - USE_DYNAMIC_ENSEMBLE=True (DES is an ensemble; per-base SHAP is a separate analysis)
+    - use_dynamic_ensemble=True (DES is an ensemble; per-base SHAP is a separate analysis)
     - Classifier is SVM or HistGradientBoosting (not supported by shap.TreeExplainer)
     """
-    if config.USE_DYNAMIC_ENSEMBLE:
-        return  # DES: no single tree model to explain
+    if cfg.use_dynamic_ensemble:
+        return
 
     tree_based = {"RandomForest", "XGBoost", "LightGBM", "ExtraTrees"}
-    if config.CLASSICAL_CLASSIFIER_MODEL not in tree_based:
+    if cfg.classical_classifier_model not in tree_based:
         return
 
     try:
         import shap
         print("\nComputing SHAP values...")
-        # Use a background sample to keep computation tractable
         n_background = min(100, len(test_features))
         background = shap.sample(test_features, n_background)
         explainer = shap.TreeExplainer(model, background)
@@ -532,7 +522,6 @@ def _compute_and_save_shap(
 def _setup_metadata_extractor(
     train_paths: np.ndarray,
     val_paths: np.ndarray,
-    config,
 ) -> Tuple[Optional[MetadataFeatureExtractor], Optional[pd.DataFrame]]:
     """
     Load or fit the metadata extractor.
@@ -540,13 +529,13 @@ def _setup_metadata_extractor(
     The extractor is fitted ONLY on train+val image IDs to prevent the
     StandardScaler (age normalization) from seeing test-set statistics.
     """
-    if not config.USE_METADATA:
+    if not cfg.use_metadata:
         return None, None
 
-    metadata_df = pd.read_csv(config.METADATA_PATH)
+    metadata_df = pd.read_csv(cfg.metadata_path)
 
     extractor_path = os.path.join(
-        config.RESULTS_DIR, "metadata_extractor", "metadata_extractor.joblib"
+        cfg.results_dir, "metadata_extractor", "metadata_extractor.joblib"
     )
 
     if os.path.exists(extractor_path):
@@ -584,27 +573,27 @@ def _get_metadata_features(
     )
 
 
-def _build_config_snapshot(config) -> dict:
+def _build_config_snapshot() -> dict:
     """Capture all active experiment flags as a plain dict for metadata.json."""
     return {
-        "cnn_model":                  config.CNN_MODEL,
-        "classifier":                 "dynamic_ensemble" if config.USE_DYNAMIC_ENSEMBLE else config.CLASSICAL_CLASSIFIER_MODEL,
-        "batch_size":                 config.BATCH_SIZE,
-        "num_kfolds":                 config.NUM_KFOLDS,
-        "num_iterations":             config.NUM_ITERATIONS,
-        "num_final_models":           config.NUM_FINAL_MODELS,
-        "use_fine_tuning":            config.USE_FINE_TUNING,
-        "use_data_augmentation":      config.USE_DATA_AUGMENTATION,
-        "use_feature_augmentation":   config.USE_FEATURE_AUGMENTATION,
-        "use_feature_preprocessing":  config.USE_FEATURE_PREPROCESSING,
-        "use_graphic_preprocessing":  config.USE_GRAPHIC_PREPROCESSING,
-        "use_hair_removal":           config.USE_HAIR_REMOVAL,
-        "use_enhanced_contrast":      config.USE_ENHANCED_CONTRAST,
-        "use_color_normalization":    config.USE_COLOR_NORMALIZATION,
-        "use_metadata":               config.USE_METADATA,
-        "use_dynamic_ensemble":       config.USE_DYNAMIC_ENSEMBLE,
-        "des_algorithm":              config.DES_ALGORITHM if config.USE_DYNAMIC_ENSEMBLE else None,
-        "des_pool_classifiers":       config.DES_POOL_CLASSIFIERS if config.USE_DYNAMIC_ENSEMBLE else None,
+        "cnn_model":                  cfg.cnn_model,
+        "classifier":                 "dynamic_ensemble" if cfg.use_dynamic_ensemble else cfg.classical_classifier_model,
+        "batch_size":                 cfg.batch_size,
+        "num_kfolds":                 cfg.num_kfolds,
+        "num_iterations":             cfg.num_iterations,
+        "num_final_models":           cfg.num_final_models,
+        "use_fine_tuning":            cfg.use_fine_tuning,
+        "use_data_augmentation":      cfg.use_data_augmentation,
+        "use_feature_augmentation":   cfg.use_feature_augmentation,
+        "use_feature_preprocessing":  cfg.use_feature_preprocessing,
+        "use_graphic_preprocessing":  cfg.use_graphic_preprocessing,
+        "use_hair_removal":           cfg.use_hair_removal,
+        "use_enhanced_contrast":      cfg.use_enhanced_contrast,
+        "use_color_normalization":    cfg.use_color_normalization,
+        "use_metadata":               cfg.use_metadata,
+        "use_dynamic_ensemble":       cfg.use_dynamic_ensemble,
+        "des_algorithm":              cfg.des_algorithm if cfg.use_dynamic_ensemble else None,
+        "des_pool_classifiers":       cfg.des_pool_classifiers if cfg.use_dynamic_ensemble else None,
     }
 
 
@@ -639,28 +628,25 @@ def _train_des_ensemble(
     train_labs: np.ndarray,
     val_feats: np.ndarray,
     val_labs: np.ndarray,
-    config,
 ) -> Tuple[DynamicEnsembleSelector, EvalResult]:
     """
     Train DES pool on a stratified subset of (train_feats, train_labs) and
     calibrate on the remaining DSEL split.  Evaluate on (val_feats, val_labs).
 
-    The DSEL split (DES_DSEL_FRACTION of the fold training data) is kept out
-    of pool-classifier training so DES competence estimates are unbiased.
+    The DSEL split (cfg.des_dsel_fraction of the fold training data) is kept
+    out of pool-classifier training so DES competence estimates are unbiased.
 
     Returns (fitted DynamicEnsembleSelector, EvalResult on val set).
     """
     from sklearn.model_selection import StratifiedShuffleSplit
-    from pipelines.feature_extraction.stages.evaluate import evaluate_classifier
 
-    print(f"  Building DES pool ({config.DES_ALGORITHM}, "
-          f"k={config.DES_K_NEIGHBORS}, "
-          f"dsel_frac={config.DES_DSEL_FRACTION})...")
+    print(f"  Building DES pool ({cfg.des_algorithm}, "
+          f"k={cfg.des_k_neighbors}, "
+          f"dsel_frac={cfg.des_dsel_fraction})...")
 
-    # Split training data into pool-training (X_tr) and DSEL (X_dsel).
     splitter = StratifiedShuffleSplit(
         n_splits=1,
-        test_size=config.DES_DSEL_FRACTION,
+        test_size=cfg.des_dsel_fraction,
         random_state=42,
     )
     tr_idx, dsel_idx = next(splitter.split(train_feats, train_labs))
@@ -669,11 +655,11 @@ def _train_des_ensemble(
 
     print(f"  Pool training: {len(X_tr)} samples | DSEL: {len(X_dsel)} samples")
 
-    pool = _build_pool_classifiers(X_tr, y_tr, config.DES_POOL_CLASSIFIERS)
+    pool = _build_pool_classifiers(X_tr, y_tr, cfg.des_pool_classifiers)
 
     des = DynamicEnsembleSelector(
-        algorithm=config.DES_ALGORITHM,
-        k_neighbors=config.DES_K_NEIGHBORS,
+        algorithm=cfg.des_algorithm,
+        k_neighbors=cfg.des_k_neighbors,
     )
     des.fit(pool, X_dsel, y_dsel)
 
@@ -695,37 +681,30 @@ def _train_and_evaluate_des_final(
     train_labs: np.ndarray,
     test_feats: np.ndarray,
     test_labs: np.ndarray,
-    config,
     class_names: Optional[List[str]],
     final_models_dir: Path,
 ) -> List[EvalResult]:
     """
-    Train NUM_FINAL_MODELS DES ensembles on all training data and evaluate
+    Train cfg.num_final_models DES ensembles on all training data and evaluate
     on the test set.  Each model uses a fresh stratified DSEL split.
-
-    Multiple models are trained identically to the single-classifier path so
-    result variance can be measured across seeds.  Each DSEL split uses a
-    different random_state (42 + model_idx) to obtain distinct calibration sets.
     """
     from sklearn.model_selection import StratifiedShuffleSplit
-    from pipelines.feature_extraction.stages.evaluate import evaluate_classifier
 
     print(f"\n{'=' * 60}")
-    print(f"Training {config.NUM_FINAL_MODELS} final DES "
-          f"({config.DES_ALGORITHM}) ensemble(s)")
-    print(f"Pool: {config.DES_POOL_CLASSIFIERS}")
+    print(f"Training {cfg.num_final_models} final DES "
+          f"({cfg.des_algorithm}) ensemble(s)")
+    print(f"Pool: {cfg.des_pool_classifiers}")
     print(f"{'=' * 60}")
 
     model_evals: List[EvalResult] = []
 
-    for model_idx in range(1, config.NUM_FINAL_MODELS + 1):
-        print(f"\n--- Final DES model {model_idx}/{config.NUM_FINAL_MODELS} ---")
+    for model_idx in range(1, cfg.num_final_models + 1):
+        print(f"\n--- Final DES model {model_idx}/{cfg.num_final_models} ---")
 
         try:
-            # Use a different random_state per model so DSEL splits vary.
             splitter = StratifiedShuffleSplit(
                 n_splits=1,
-                test_size=config.DES_DSEL_FRACTION,
+                test_size=cfg.des_dsel_fraction,
                 random_state=42 + model_idx,
             )
             tr_idx, dsel_idx = next(splitter.split(train_feats, train_labs))
@@ -734,16 +713,16 @@ def _train_and_evaluate_des_final(
 
             print(f"  Pool training: {len(X_tr)} | DSEL: {len(X_dsel)}")
 
-            pool = _build_pool_classifiers(X_tr, y_tr, config.DES_POOL_CLASSIFIERS)
+            pool = _build_pool_classifiers(X_tr, y_tr, cfg.des_pool_classifiers)
 
             des = DynamicEnsembleSelector(
-                algorithm=config.DES_ALGORITHM,
-                k_neighbors=config.DES_K_NEIGHBORS,
+                algorithm=cfg.des_algorithm,
+                k_neighbors=cfg.des_k_neighbors,
             )
             des.fit(pool, X_dsel, y_dsel)
 
             des_save_path = str(
-                final_models_dir / f"des_{config.DES_ALGORITHM}_model{model_idx}.joblib"
+                final_models_dir / f"des_{cfg.des_algorithm}_model{model_idx}.joblib"
             )
             des.save(des_save_path)
 

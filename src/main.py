@@ -14,16 +14,14 @@ config.py required between experiments.  Example:
 import argparse
 import gc
 import os
+import random
 
 import numpy as np
 import pandas as pd
 import tensorflow as tf
 from sklearn.model_selection import train_test_split
 
-# Only the module is imported here so that apply_cli_overrides() can mutate
-# its globals before any pipeline module is imported (pipeline modules bind
-# config values at their own import time).
-import config as _config
+from config import cfg, apply_cli_overrides, validate_config
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -74,11 +72,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cnn-model",
                         choices=["VGG19", "Inception", "ResNet", "Xception", "EfficientNet"],
                         default=None, metavar="BACKBONE",
-                        help="CNN backbone (default: config.CNN_MODEL)")
+                        help=f"CNN backbone (default: {cfg.cnn_model})")
     parser.add_argument("--classifier",
                         choices=["RandomForest", "XGBoost", "LightGBM", "HistGradientBoosting", "ExtraTrees", "SVM"],
                         default=None,
-                        help="Classical ML classifier (default: config.CLASSICAL_CLASSIFIER_MODEL)")
+                        help=f"Classical ML classifier (default: {cfg.classical_classifier_model})")
 
     # ------------------------------------------------------------------ #
     # Numeric hyperparameters                                              #
@@ -114,35 +112,27 @@ def _build_parser() -> argparse.ArgumentParser:
     _bool("use-color-normalization",   dest="use_color_normalization")
     _bool("use-focal-loss",            dest="use_focal_loss")
     _bool("use-tta",                   dest="use_tta",
-          help_text=f"Test-Time Augmentation (default steps: {_config.TTA_N_STEPS})")
+          help_text=f"Test-Time Augmentation (default steps: {cfg.tta_n_steps})")
     _bool("use-mixup",                 dest="use_mixup")
     _bool("use-mc-dropout",            dest="use_mc_dropout",
-          help_text=f"MC-Dropout uncertainty ({_config.MC_DROPOUT_STEPS} passes)")
+          help_text=f"MC-Dropout uncertainty ({cfg.mc_dropout_steps} passes)")
     _bool("use-dynamic-ensemble",      dest="use_dynamic_ensemble",
           help_text="Dynamic Ensemble Selection via DESlib (feature-extraction pipeline only)")
 
     parser.add_argument("--des-algorithm",
                         choices=["knorau", "desmi", "metades", "singlebest"],
                         default=None,
-                        help="DES algorithm (default: config.DES_ALGORITHM)")
+                        help=f"DES algorithm (default: {cfg.des_algorithm})")
 
     return parser
 
 
-def setup_environment():
-    """Configure GPU and set random seeds."""
-    gpus = tf.config.experimental.list_physical_devices('GPU')
-    if gpus:
-        try:
-            for gpu in gpus:
-                tf.config.experimental.set_memory_growth(gpu, True)
-            print(f"Found {len(gpus)} GPU(s). Memory growth enabled.")
-        except RuntimeError as e:
-            print(f"GPU configuration error: {e}")
-    else:
-        print("No GPUs found. Running on CPU.")
+def setup_environment() -> None:
+    """Set random seeds for reproducibility."""
+    random.seed(42)
     np.random.seed(42)
     tf.random.set_seed(42)
+    os.environ['PYTHONHASHSEED'] = '42'
 
 
 def create_dataset_splits(metadata_path, image_dir_1, image_dir_2, output_dir='./res'):
@@ -230,44 +220,38 @@ def get_class_names(class_names_path):
         return None
 
 
-def print_experiment_configuration():
+def print_experiment_configuration() -> None:
     """Print the active configuration (after any CLI overrides)."""
-    import config as cfg
     print("\nExperiment Configuration:")
-    print(f"  CNN Model:              {cfg.CNN_MODEL}")
-    print(f"  Classical Classifier:   {cfg.CLASSICAL_CLASSIFIER_MODEL}")
-    print(f"  Image size:             {cfg.IMG_SIZE[:2]}")
-    print(f"  Batch size:             {cfg.BATCH_SIZE}")
-    print(f"  Epochs:                 {cfg.NUM_EPOCHS}")
-    print(f"  K-folds × iterations:   {cfg.NUM_KFOLDS} × {cfg.NUM_ITERATIONS}")
-    print(f"  Fine-tuning:            {cfg.USE_FINE_TUNING}")
-    print(f"  Data augmentation:      {cfg.USE_DATA_AUGMENTATION}")
-    print(f"  Graphic preprocessing:  {cfg.USE_GRAPHIC_PREPROCESSING}")
-    print(f"  Focal loss:             {cfg.USE_FOCAL_LOSS}  label_smoothing={cfg.LABEL_SMOOTHING}")
-    print(f"  TTA:                    {cfg.USE_TTA}  (steps={cfg.TTA_N_STEPS})")
-    print(f"  MC Dropout:             {cfg.USE_MC_DROPOUT}  (steps={cfg.MC_DROPOUT_STEPS})")
-    print(f"  Mixup:                  {cfg.USE_MIXUP}")
-    print(f"  Metadata:               {cfg.USE_METADATA}")
-    print(f"  Feature preprocessing:  {cfg.USE_FEATURE_PREPROCESSING}")
-    print(f"  Feature augmentation:   {cfg.USE_FEATURE_AUGMENTATION}")
+    print(f"  CNN Model:              {cfg.cnn_model}")
+    print(f"  Classical Classifier:   {cfg.classical_classifier_model}")
+    print(f"  Image size:             {cfg.img_size[:2]}")
+    print(f"  Batch size:             {cfg.batch_size}")
+    print(f"  Epochs:                 {cfg.num_epochs}")
+    print(f"  K-folds × iterations:   {cfg.num_kfolds} × {cfg.num_iterations}")
+    print(f"  Fine-tuning:            {cfg.use_fine_tuning}")
+    print(f"  Data augmentation:      {cfg.use_data_augmentation}")
+    print(f"  Graphic preprocessing:  {cfg.use_graphic_preprocessing}")
+    print(f"  Focal loss:             {cfg.use_focal_loss}  label_smoothing={cfg.label_smoothing}")
+    print(f"  TTA:                    {cfg.use_tta}  (steps={cfg.tta_n_steps})")
+    print(f"  MC Dropout:             {cfg.use_mc_dropout}  (steps={cfg.mc_dropout_steps})")
+    print(f"  Mixup:                  {cfg.use_mixup}")
+    print(f"  Metadata:               {cfg.use_metadata}")
+    print(f"  Feature preprocessing:  {cfg.use_feature_preprocessing}")
+    print(f"  Feature augmentation:   {cfg.use_feature_augmentation}")
 
 
 def main():
     parser = _build_parser()
     args = parser.parse_args()
 
-    # Apply CLI overrides to config module globals BEFORE any pipeline module
-    # is imported, so pipeline-level `from config import X` binds the
-    # overridden values.
-    import config as cfg
-    cfg.apply_cli_overrides(args)
-    cfg.validate_config()
-
-    # NOW it is safe to import pipelines (after overrides are applied).
-    from pipelines.cnn.runner import run_cnn_classifier_pipeline
-    from pipelines.feature_extraction.runner import run_feature_extraction_pipeline
+    apply_cli_overrides(args)
+    validate_config()
 
     setup_environment()
+
+    from pipelines.cnn.runner import run_cnn_classifier_pipeline
+    from pipelines.feature_extraction.runner import run_feature_extraction_pipeline
 
     if args.create_splits:
         if not (args.metadata and args.images_dir1 and args.images_dir2):
@@ -279,9 +263,9 @@ def main():
         )
 
     # Resolve data paths: explicit CLI paths override config defaults.
-    train_files = args.train_files or cfg.TRAIN_FILES_PATH
-    val_files   = args.val_files   or cfg.VAL_FILES_PATH
-    test_files  = args.test_files  or cfg.TEST_FILES_PATH
+    train_files = args.train_files or cfg.train_files_path
+    val_files   = args.val_files   or cfg.val_files_path
+    test_files  = args.test_files  or cfg.test_files_path
 
     class_names_path = os.path.join(os.path.dirname(train_files), "class_names.txt")
     class_names = get_class_names(class_names_path)

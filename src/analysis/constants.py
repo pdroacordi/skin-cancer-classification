@@ -4,14 +4,19 @@ from pathlib import Path
 from typing import List, Dict
 
 # Model groups ---------------------------------------------------------------
-CNN_MODELS: List[str] = ["VGG19", "Inception", "ResNet", "Xception"]
-ML_CLASSIFIERS: List[str] = ["RandomForest", "XGBoost", "AdaBoost", "ExtraTrees"]
+CNN_MODELS: List[str] = ["VGG19", "Inception", "ResNet", "Xception", "EfficientNet"]
+ML_CLASSIFIERS: List[str] = [
+    "RandomForest", "XGBoost", "LightGBM", "HistGradientBoosting", "ExtraTrees", "SVM"
+]
 
 ALG_NICE = dict(
-    adaboost="AdaBoost",
     extratrees="ExtraTrees",
     randomforest="RandomForest",
     xgboost="XGBoost",
+    lightgbm="LightGBM",
+    histgradientboosting="HistGradientBoosting",
+    svm="SVM",
+    dynamic_ensemble="DynamicEnsemble",
 )
 NET_NICE = dict(
     Resnet="ResNet",
@@ -28,11 +33,15 @@ COLOR_PALETTE: Dict[str, str] = {
     "Inception": "#d62728",
     "ResNet": "#9467bd",
     "Xception": "#8c564b",
+    "EfficientNet": "#7f7f7f",
     # classical ML learners
     "RandomForest": "#17becf",
     "XGBoost": "#bcbd22",
-    "AdaBoost": "#ff9500",
+    "LightGBM": "#aec7e8",
+    "HistGradientBoosting": "#ffbb78",
     "ExtraTrees": "#e377c2",
+    "SVM": "#98df8a",
+    "DynamicEnsemble": "#ff9500",
 }
 
 CLASSES: List[str] = [

@@ -128,30 +128,13 @@ class AlgorithmPreprocessingPipeline(ABC):
 
     @classmethod
     def load(cls, filepath: str) -> 'AlgorithmPreprocessingPipeline':
-        """Load a fitted pipeline.
-
-        Supports both the current ``ConfigurablePreprocessingPipeline`` format
-        and the legacy per-algorithm class format (e.g. ``ExtraTreesPipeline``)
-        for backward compatibility with pipelines saved before the refactor.
-        """
+        """Load a fitted pipeline saved by ``ConfigurablePreprocessingPipeline``."""
         save_data = joblib.load(filepath)
         class_name = save_data['class']
         algorithm  = save_data.get('algorithm')
 
         from preprocessing.feature.algorithm.configurable import ConfigurablePreprocessingPipeline
         from preprocessing.feature.algorithm.configs import ALGORITHM_PIPELINE_CONFIGS
-
-        # Backward-compat map: old class names → algorithm config keys
-        _legacy_map = {
-            'ExtraTreesPipeline':  'ExtraTrees',
-            'RandomForestPipeline':'RandomForest',
-            'XGBoostPipeline':     'XGBoost',
-            'AdaBoostPipeline':    'AdaBoost',
-            'SVMPipeline':         'SVM',
-        }
-
-        if algorithm is None and class_name in _legacy_map:
-            algorithm = _legacy_map[class_name]
 
         if algorithm is None or algorithm not in ALGORITHM_PIPELINE_CONFIGS:
             raise ValueError(

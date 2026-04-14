@@ -5,7 +5,7 @@ from tensorflow.keras.utils import to_categorical
 from pathlib import Path
 from typing import Tuple, Optional, Callable, Union, List
 
-from config import NUM_CLASSES, IMG_SIZE, USE_MIXUP
+from config import cfg
 
 
 def load_paths_labels(file_path: str) -> Tuple[np.ndarray, np.ndarray]:
@@ -33,22 +33,22 @@ def load_paths_labels(file_path: str) -> Tuple[np.ndarray, np.ndarray]:
 
     return np.array(paths), np.array(labels)
 
+
 def resize_image(image: np.ndarray, target_size: Optional[Tuple[int, int]] = None) -> np.ndarray:
     """
     Resize an image to the target size.
 
     Args:
         image: Input image in BGR or RGB format
-        target_size: Desired size as (height, width). If None, uses IMG_SIZE
+        target_size: Desired size as (height, width). If None, uses cfg.img_size
 
     Returns:
         Resized image
     """
     if target_size is None:
-        target_size = IMG_SIZE[:2]
+        target_size = cfg.img_size[:2]
 
-    resized_image = cv2.resize(image, (target_size[1], target_size[0]))
-    return resized_image
+    return cv2.resize(image, (target_size[1], target_size[0]))
 
 
 def load_image(image_path: str) -> Optional[np.ndarray]:
@@ -165,7 +165,7 @@ class MemoryEfficientDataGenerator:
             if image is None:
                 continue
 
-            image = resize_image(image, IMG_SIZE[:2])
+            image = resize_image(image, cfg.img_size[:2])
 
             # Convert BGR to RGB
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -184,13 +184,13 @@ class MemoryEfficientDataGenerator:
             return self.__next__()
 
         batch_images = np.array(batch_images, dtype=np.float32)
-        batch_labels = to_categorical(batch_labels, NUM_CLASSES)
+        batch_labels = to_categorical(batch_labels, cfg.num_classes)
 
         # Mixup augmentation (Zhang et al., 2018, ICLR).
         # Creates convex combinations of two training samples, forcing smoother
         # class boundaries and reducing overconfidence. Applied only during
-        # training (when augment_fn is set) and only when USE_MIXUP=True.
-        if USE_MIXUP and self.augment_fn is not None and len(batch_images) > 1:
+        # training (when augment_fn is set) and only when cfg.use_mixup=True.
+        if cfg.use_mixup and self.augment_fn is not None and len(batch_images) > 1:
             lam = np.random.beta(0.4, 0.4)
             perm = np.random.permutation(len(batch_images))
             batch_images = lam * batch_images + (1 - lam) * batch_images[perm]
@@ -205,7 +205,6 @@ class MemoryEfficientDataGenerator:
         Returns:
             generator: A generator yielding (batch_images, batch_labels)
         """
-
         def generator():
             while True:
                 try:
@@ -217,45 +216,3 @@ class MemoryEfficientDataGenerator:
                     yield next(self)
 
         return generator()
-
-
-def load_and_preprocess_dataset(paths: Union[List[str], np.ndarray],
-                                labels: Union[List[int], np.ndarray],
-                                model_name: str,
-                                augment_fn: Optional[Callable] = None) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Load and preprocess a full dataset into memory.
-
-    Args:
-        paths: List of image paths
-        labels: List of image labels
-        model_name: CNN model name for preprocessing
-        augment_fn: Function for applying data augmentation
-
-    Returns:
-        tuple: (preprocessed_images, one_hot_labels)
-    """
-    images = []
-    for path in paths:
-        image = load_image(path)
-        if image is None:
-            continue
-
-        image = resize_image(image, IMG_SIZE[:2])
-
-        # Convert BGR to RGB
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-        # Apply augmentation if available
-        if augment_fn:
-            image = augment_fn(image)
-
-        # Apply model-specific preprocessing
-        image = apply_model_preprocessing(image, model_name)
-
-        images.append(image)
-
-    images = np.array(images, dtype=np.float32)
-    labels_one_hot = to_categorical(labels, NUM_CLASSES)
-
-    return images, labels_one_hot

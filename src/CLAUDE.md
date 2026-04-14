@@ -21,13 +21,24 @@ This is the working directory for all commands. All modules use bare relative im
 All intra-package imports are bare (no `src.` prefix), e.g.:
 
 ```python
-from config import CNN_MODEL
+from config import cfg
 from utils.data_loaders import load_paths_labels
 from preprocessing.feature.pipeline import apply_feature_preprocessing
 ```
 
 This works only when the CWD is `src/`. Do not add `src.` prefixes or use relative
 dots for top-level imports — it will break.
+
+Always import the shared `cfg` object rather than individual config values:
+
+```python
+# correct
+from config import cfg
+batch = cfg.batch_size
+
+# wrong — captures value at import time, ignores CLI overrides
+from config import batch_size  # ← this would fail; cfg fields are not module-level names
+```
 
 ## Result Directory Naming
 

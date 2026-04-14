@@ -49,7 +49,10 @@ GENERAL_CSV_BASENAME = "model_performance_summary.csv"
 PER_CLASS_CSV_BASENAME = "per_class_metrics.csv"
 
 KNOWN_NETS = {"resnet", "inception", "vgg19", "xception", "efficientnet"}
-ALGO_NAMES = {"adaboost", "extratrees", "randomforest", "xgboost", "svm"}
+ALGO_NAMES = {
+    "extratrees", "randomforest", "xgboost", "lightgbm",
+    "histgradientboosting", "svm", "dynamic_ensemble",
+}
 
 # Map metadata.json pipeline name → kind column value
 _PIPELINE_TO_KIND = {

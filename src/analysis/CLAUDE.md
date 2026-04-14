@@ -27,10 +27,10 @@ python -m analysis.aggregate_results          # quiet
 python -m analysis.aggregate_results -v       # verbose
 ```
 
-**Columns inferred from path:**
-- `net`: resnet / inception / vgg19 / xception
+**Columns inferred from path (legacy format) or read directly from `metadata.json` (new format):**
+- `net`: resnet / inception / vgg19 / xception / efficientnet
 - `kind`: `cnn_classifier` or `feature_extraction`
-- `algorithm`: adaboost / extratrees / randomforest / xgboost / svm (empty for CNN classifier)
+- `algorithm`: extratrees / randomforest / xgboost / lightgbm / histgradientboosting / svm / dynamic_ensemble (empty for CNN classifier)
 - `feature_augmentation`, `data_augmentation`, `hair_removal`, `segmentation`: boolean flags
 
 ## plotter.py

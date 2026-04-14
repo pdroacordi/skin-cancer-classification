@@ -20,14 +20,6 @@ class PreprocessingPipelineFactory:
             )
         return ConfigurablePreprocessingPipeline(algorithm, **kwargs)
 
-    @classmethod
-    def register_pipeline(cls, algorithm: str, pipeline_class):
-        """Register a custom pipeline class (overrides the config-driven default)."""
-        # Dynamic registration: store custom classes on the class object.
-        if not hasattr(cls, '_custom_pipelines'):
-            cls._custom_pipelines = {}
-        cls._custom_pipelines[algorithm] = pipeline_class
-
 
 # Convenience functions for integration
 def apply_feature_preprocessing(

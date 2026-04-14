@@ -10,11 +10,11 @@ Handles all image I/O for both pipelines.
 |---|---|
 | `load_paths_labels(file_path)` | Reads a tab-separated `.txt` file → `(paths_array, labels_array)`. Skips missing files with a warning. |
 | `load_image(path)` | Loads a single BGR image with `cv2`. Returns `None` on failure. |
-| `resize_image(image, target_size)` | Resizes to `(height, width)`; defaults to `IMG_SIZE[:2]` from config. |
+| `resize_image(image, target_size)` | Resizes to `(height, width)`; defaults to `cfg.img_size[:2]`. |
 | `apply_model_preprocessing(image, model_name)` | Applies backbone-specific preprocessing (VGG19, Inception, ResNet, Xception, EfficientNet). |
 | `MemoryEfficientDataGenerator` | Iterator for the CNN pipeline. Loads images in batches on demand — never materialises the full dataset in RAM. Supports optional augmentation and Mixup. |
 
-**Mixup:** When `USE_MIXUP=True` in `config.py`, each training batch is blended with a randomly permuted copy of itself using a Beta(0.4, 0.4) coefficient. Applied only when `augment_fn` is set (training mode).
+**Mixup:** When `cfg.use_mixup=True`, each training batch is blended with a randomly permuted copy of itself using a Beta(0.4, 0.4) coefficient. Applied only when `augment_fn` is set (training mode).
 
 The text file format (used by `res/train_files.txt`, `val_files.txt`, `test_files.txt`):
 ```
