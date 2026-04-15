@@ -123,19 +123,19 @@ def _mc_dropout_pass(
     mc_steps: int,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Run MC_DROPOUT_STEPS stochastic forward passes and return the mean
+    Run *mc_steps* stochastic forward passes and return the mean
     prediction and per-sample predictive variance.
 
     Variance is computed incrementally (Welford-style accumulation)
     to avoid allocating mc_steps full tensors simultaneously.
     Gal & Ghahramani (2016, ICML, "Dropout as a Bayesian Approximation").
     """
-    # Incremental accumulation: E[x] and E[x²] tracked separately.
-    # Final variance = E[x²] − (E[x])²
-    mc_sum    = np.zeros_like(model(X_batch, training=True).numpy())
-    mc_sq_sum = np.zeros_like(mc_sum)
+    # First pass — also determines output shape for accumulators.
+    first_sample = model(X_batch, training=True).numpy()
+    mc_sum    = first_sample.copy()
+    mc_sq_sum = first_sample ** 2
 
-    for _ in range(mc_steps):
+    for _ in range(mc_steps - 1):
         sample = model(X_batch, training=True).numpy()
         mc_sum    += sample
         mc_sq_sum += sample ** 2
@@ -161,22 +161,25 @@ def _tta_pass(
     """
     Average predictions over TTA_N_STEPS augmented copies of the current batch.
     The first copy is the original (no augmentation), the rest are augmented.
+
+    Re-reads images from disk for each augmented copy because X_batch has
+    already been preprocessed (backbone-specific normalization) and cannot
+    be augmented in-place.
     """
     batch_paths  = all_paths [step_idx * batch_size: (step_idx + 1) * batch_size]
     batch_labels = all_labels[step_idx * batch_size: (step_idx + 1) * batch_size]
 
     preds = [model.predict(X_batch, verbose=0)]
 
-    tta_gen = MemoryEfficientDataGenerator(
-        paths=batch_paths,
-        labels=batch_labels,
-        batch_size=batch_size,
-        model_name=cnn_model,
-        augment_fn=tta_augment_fn,
-        shuffle=False,
-    )
-
     for _ in range(tta_n_steps - 1):
+        tta_gen = MemoryEfficientDataGenerator(
+            paths=batch_paths,
+            labels=batch_labels,
+            batch_size=len(batch_paths),
+            model_name=cnn_model,
+            augment_fn=tta_augment_fn,
+            shuffle=False,
+        )
         try:
             X_aug, _ = next(tta_gen)
             preds.append(model.predict(X_aug, verbose=0))
