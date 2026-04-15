@@ -26,16 +26,38 @@ class HairRemovalDataset:
         """Return the number of samples in the dataset"""
         return len(self.img_paths)
 
+    @staticmethod
+    def _rotate_image(image, angle, interpolation='bilinear'):
+        """Rotate an image by *angle* radians using native TF ops."""
+        cos_a = tf.math.cos(angle)
+        sin_a = tf.math.sin(angle)
+        # Affine transform expects [a0, a1, a2, b0, b1, b2, 0, 0] (projective)
+        h = tf.cast(tf.shape(image)[0], tf.float32)
+        w = tf.cast(tf.shape(image)[1], tf.float32)
+        cx, cy = w / 2.0, h / 2.0
+        # Transform matrix that rotates around the center
+        a2 = cx - cx * cos_a + cy * sin_a
+        b2 = cy - cx * sin_a - cy * cos_a
+        transform = [cos_a, -sin_a, a2, sin_a, cos_a, b2, 0.0, 0.0]
+        image_4d = tf.expand_dims(image, 0)
+        rotated = tf.raw_ops.ImageProjectiveTransformV3(
+            images=image_4d,
+            transforms=tf.expand_dims(transform, 0),
+            output_shape=tf.shape(image)[:2],
+            interpolation=interpolation.upper(),
+            fill_mode='CONSTANT',
+            fill_value=0.0,
+        )
+        return rotated[0]
+
     def _augment_pair(self, image, mask):
         """Apply synchronized augmentations to image and mask"""
-        import tensorflow_addons as tfa
-
         # Random rotation
         if tf.random.uniform(()) < self.cfg.augmentation_prob:
             angle = tf.random.uniform((), -self.cfg.rotation_range * np.pi/180,
                                      self.cfg.rotation_range * np.pi/180)
-            image = tfa.image.rotate(image, angle, interpolation='bilinear')
-            mask = tfa.image.rotate(mask, angle, interpolation='nearest')
+            image = self._rotate_image(image, angle, interpolation='bilinear')
+            mask = self._rotate_image(mask, angle, interpolation='nearest')
 
         # Random flips
         if tf.random.uniform(()) < 0.5:
