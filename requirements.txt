@@ -1,6 +1,6 @@
 pandas
 scikit-learn
-tensorflow-gpu==2.10.0
+tensorflow>=2.10.0
 opencv-contrib-python==4.9.0.80
 matplotlib
 numpy<2.0
@@ -12,5 +12,4 @@ seaborn
 scikit-image
 tqdm
 scikit-posthocs>=0.7
-tensorflow-addons
 deslib==0.3.7
