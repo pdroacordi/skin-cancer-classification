@@ -351,7 +351,7 @@ class Plotter:
             self._fig_06_pvalue_hist()
             self._fig_07_pvalue_heatmap()
 
-    print("All enhanced plots generated successfully!")
+        print("All enhanced plots generated successfully!")
 
     def _get_metric_stats(self, model_id: str, metric: str) -> Tuple[float, float]:
         """Get mean and std for a metric of a specific model."""
