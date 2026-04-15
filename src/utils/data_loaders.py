@@ -67,6 +67,31 @@ def load_image(image_path: str) -> Optional[np.ndarray]:
     return image
 
 
+def _get_preprocess_fn(model_name: str):
+    """
+    Return the backbone-specific preprocessing function for *model_name*.
+
+    Resolved once per model name and cached via the module-level dict below.
+    """
+    if model_name == "VGG19":
+        from tensorflow.keras.applications.vgg19 import preprocess_input
+    elif model_name == "Inception":
+        from tensorflow.keras.applications.inception_v3 import preprocess_input
+    elif model_name == "ResNet":
+        from tensorflow.keras.applications.resnet50 import preprocess_input
+    elif model_name == "Xception":
+        from tensorflow.keras.applications.xception import preprocess_input
+    elif model_name == "EfficientNet":
+        from tensorflow.keras.applications.efficientnet import preprocess_input
+    else:
+        raise ValueError(f"Unsupported model: {model_name}")
+    return preprocess_input
+
+
+# Module-level cache: avoids re-importing on every image.
+_PREPROCESS_FN_CACHE = {}
+
+
 def apply_model_preprocessing(image: np.ndarray, model_name: str) -> np.ndarray:
     """
     Apply model-specific preprocessing to an image.
@@ -78,24 +103,9 @@ def apply_model_preprocessing(image: np.ndarray, model_name: str) -> np.ndarray:
     Returns:
         Preprocessed image
     """
-    from tensorflow.keras.applications.vgg19 import preprocess_input as preprocess_input_vgg19
-    from tensorflow.keras.applications.inception_v3 import preprocess_input as preprocess_input_inception
-    from tensorflow.keras.applications.resnet50 import preprocess_input as preprocess_input_resnet
-    from tensorflow.keras.applications.xception import preprocess_input as preprocess_input_xception
-
-    if model_name == "VGG19":
-        return preprocess_input_vgg19(image.copy())
-    elif model_name == "Inception":
-        return preprocess_input_inception(image.copy())
-    elif model_name == "ResNet":
-        return preprocess_input_resnet(image.copy())
-    elif model_name == "Xception":
-        return preprocess_input_xception(image.copy())
-    elif model_name == "EfficientNet":
-        from tensorflow.keras.applications.efficientnet import preprocess_input as preprocess_input_efficientnet
-        return preprocess_input_efficientnet(image.copy())
-    else:
-        raise ValueError(f"Unsupported model: {model_name}")
+    if model_name not in _PREPROCESS_FN_CACHE:
+        _PREPROCESS_FN_CACHE[model_name] = _get_preprocess_fn(model_name)
+    return _PREPROCESS_FN_CACHE[model_name](image)
 
 
 class MemoryEfficientDataGenerator:
