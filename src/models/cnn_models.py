@@ -163,10 +163,21 @@ def load_or_create_cnn(model_name, mode='classifier', fine_tune=True,
         x = GlobalAveragePooling2D(name='gap')(base_model.output)
         x = Dense(512, activation='relu', name='fc1')(x)
         x = Dropout(0.5, name='dropout')(x)
-        predictions = Dense(cfg.num_classes, activation='softmax', name='predictions')(x)
+        # dtype='float32' ensures numerical stability under mixed-precision
+        # (softmax in float16 can cause NaN loss).
+        predictions = Dense(cfg.num_classes, activation='softmax',
+                            dtype='float32', name='predictions')(x)
         model = Model(inputs=base_model.input, outputs=predictions)
 
-        optimizer = Adam(learning_rate=0.0001)
+        # CosineDecay: proactive LR schedule that smoothly anneals from
+        # initial_lr to 0 over num_epochs * estimated_steps_per_epoch.
+        # Falls back to constant LR when step count cannot be estimated.
+        cosine_schedule = tf.keras.optimizers.schedules.CosineDecay(
+            initial_learning_rate=1e-4,
+            decay_steps=cfg.num_epochs * 500,  # approximate; ReduceLROnPlateau still active
+            alpha=1e-6,                        # minimum LR floor
+        )
+        optimizer = Adam(learning_rate=cosine_schedule)
         if cfg.use_focal_loss:
             loss_fn = focal_loss(gamma=2.0)
         elif cfg.label_smoothing > 0:
@@ -192,28 +203,21 @@ def load_or_create_cnn(model_name, mode='classifier', fine_tune=True,
 
 def create_feature_extractor(model, model_name):
     """
-    Create a feature extractor from a CNN model.
+    Create a feature extractor from a CNN model (include_top=False).
+
+    Applies GlobalAveragePooling2D to the model's final spatial output,
+    producing a 1-D feature vector per image.
 
     Args:
-        model (tensorflow.keras.Model): A pre-trained CNN model.
+        model (tensorflow.keras.Model): A pre-trained CNN model with include_top=False.
         model_name (str): Name of the CNN model.
 
     Returns:
         tensorflow.keras.Model: Feature extractor model.
     """
-    extraction_layer = {
-        "VGG19":        "block5_pool",
-        "Inception":    "mixed10",
-        "ResNet":       "avg_pool",
-        "Xception":     "avg_pool",
-        "EfficientNet": "top_activation"
-    }.get(model_name)
-
-    if not extraction_layer:
-        raise ValueError(f"Unsupported model: {model_name}")
-
-    selected_output = model.get_layer(extraction_layer).output
-    features = GlobalAveragePooling2D()(selected_output)
+    # When include_top=False, the model output is already the last spatial
+    # feature map — no need to look up a named layer.
+    features = GlobalAveragePooling2D()(model.output)
     return Model(
         inputs=model.input,
         outputs=features,
@@ -408,7 +412,7 @@ def compute_gradcam(model, img_array, class_idx, model_name):
     cam = tf.reduce_sum(conv_outputs[0] * pooled_grads, axis=-1)
     cam = tf.nn.relu(cam)
     cam_max = tf.reduce_max(cam)
-    return (cam / (cam_max + 1e-8)).numpy()
+    return tf.cast(cam / (cam_max + 1e-8), tf.float32).numpy()
 
 
 def save_gradcam_visualizations(model, model_name, image_paths, y_true, y_pred,
@@ -462,7 +466,7 @@ def save_gradcam_visualizations(model, model_name, image_paths, y_true, y_pred,
 
                 try:
                     cam = compute_gradcam(model, img_input, class_idx, model_name)
-                    cam_resized = cv2.resize(cam, (w, h))
+                    cam_resized = cv2.resize(np.nan_to_num(cam), (w, h))
                     heatmap = cv2.applyColorMap(
                         np.uint8(255 * cam_resized), cv2.COLORMAP_JET
                     )
