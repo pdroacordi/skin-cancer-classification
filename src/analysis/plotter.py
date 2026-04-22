@@ -254,13 +254,13 @@ class Plotter:
     def _pretty(model_id: str, flag=False) -> str:
         """
         Converte IDs canônicos em rótulos legíveis.
-            Resnet_classifier_none                → ResNet
-            Resnet_feature_extractor_xgboost_aug  → ResNet + XGBoost (Aug)
+            Convnext_classifier_none                → ConvNeXt
+            Convnext_feature_extractor_xgboost_aug  → ConvNeXt + XGBoost (Aug)
         """
         parts = model_id.split("_")
 
         net_raw = parts[0]
-        net = NET_NICE.get(net_raw, net_raw)  # Resnet→ResNet, Vgg19→VGG19 …
+        net = NET_NICE.get(net_raw, net_raw)
 
         # CNN
         if "_classifier" in model_id:
@@ -366,7 +366,7 @@ class Plotter:
         fig, ax = plt.subplots(figsize=DEFAULT_FIGSIZE)
 
         # Prepare data - match exact CSV structure
-        networks = ['Inception', 'Resnet', 'Vgg19', 'Xception']  # Match CSV naming
+        networks = ['Inception', 'Xception', 'Convnext', 'Efficientnetv2s']  # Match CSV naming
         algorithms = ['extratrees', 'randomforest', 'xgboost', 'lightgbm']
 
         bar_width = 0.15
@@ -434,7 +434,7 @@ class Plotter:
                             f'{mean:.3f}', ha='center', va='bottom', fontsize=11, fontweight='bold')
 
         ax.set_xticks(x_pos)
-        ax.set_xticklabels([net.replace('Resnet', 'ResNet').replace('Vgg19', 'VGG19')
+        ax.set_xticklabels([net.replace('Convnext', 'ConvNeXt').replace('Efficientnetv2s', 'EfficientNetV2S')
                             for net in networks], size=16)
         ax.set_ylabel("F1-Score", size=12)
         ax.set_title("CNN end-to-end vs Ensembles (com feature augmentation)")
@@ -452,7 +452,7 @@ class Plotter:
         fig, ax = plt.subplots(figsize=DEFAULT_FIGSIZE)
 
         algorithms = ['extratrees', 'randomforest', 'xgboost', 'lightgbm']
-        networks = ['Inception', 'Resnet', 'Vgg19', 'Xception']
+        networks = ['Inception', 'Xception', 'Convnext', 'Efficientnetv2s']
 
         best_scores = []
         best_networks = []
@@ -500,7 +500,7 @@ class Plotter:
         for i, (bar, net, score, std) in enumerate(zip(bars, best_networks, best_scores, best_stds)):
             # Network name below bar
             ax.text(bar.get_x() + bar.get_width() / 2, 0.02,
-                    net.replace('Resnet', 'ResNet').replace('Vgg19', 'VGG19'),
+                    net.replace('Convnext', 'ConvNeXt').replace('Efficientnetv2s', 'EfficientNetV2S'),
                     ha="center", va="bottom", fontsize=10, rotation=90, color='white', weight='bold')
             # Score above bar
             ax.text(bar.get_x() + bar.get_width() / 2, score + std + 0.01,
@@ -550,7 +550,7 @@ class Plotter:
 
     def _fig_04_cnn_metric_bars(self):
         """Enhanced CNN metrics comparison with error bars."""
-        networks = ['Inception', 'Resnet', 'Vgg19', 'Xception']
+        networks = ['Inception', 'Xception', 'Convnext', 'Efficientnetv2s']
         metrics = ['macro_avg_precision', 'macro_avg_recall', 'macro_avg_f1']
         metric_labels = ['Precisão', 'Recall', 'F1-Score']
 
@@ -589,7 +589,7 @@ class Plotter:
         ax.set_ylabel('Score')
         ax.set_title('Comparação das métricas das CNNs puras')
         ax.set_xticks(x)
-        ax.set_xticklabels([net.replace('Resnet', 'ResNet').replace('Vgg19', 'VGG19') for net in networks])
+        ax.set_xticklabels([net.replace('Convnext', 'ConvNeXt').replace('Efficientnetv2s', 'EfficientNetV2S') for net in networks])
         ax.legend(title="Métrica")
         ax.set_ylim(0, 1.05)
         ax.grid(True, alpha=0.3)
@@ -597,11 +597,11 @@ class Plotter:
 
     def _fig_05_alg_aug_vs_noaug(self):
         """
-        4 sub-plots (Inception, ResNet, VGG19, Xception) – comparação NoAug × Aug
+        4 sub-plots (Inception, Xception, ConvNeXt, EfficientNetV2S) – comparação NoAug × Aug
         para cada algoritmo (ExtraTrees, RandomForest, XGBoost, LightGBM),
         com rótulos “valor ± std”.
         “””
-        nets = [“Inception”, “Resnet”, “Vgg19”, “Xception”]
+        nets = [“Inception”, “Xception”, “Convnext”, “Efficientnetv2s”]
         algs = [“extratrees”, “randomforest”, “xgboost”, “lightgbm”]
         names = dict(extratrees=”ExtraTrees”, randomforest=”RandomForest”,
                      xgboost=”XGBoost”, lightgbm=”LightGBM”)
@@ -646,7 +646,7 @@ class Plotter:
 
             ax.set_xticks(x)
             ax.set_xticklabels([names[a] for a in algs], rotation=15)
-            ax.set_title(net.replace("Resnet", "ResNet").replace("Vgg19", "VGG19"))
+            ax.set_title(net.replace("Convnext", "ConvNeXt").replace("Efficientnetv2s", "EfficientNetV2S"))
             ax.grid(axis="y", alpha=.25)
 
             max_val = max(max(means_no), max(means_au))
@@ -718,7 +718,7 @@ class Plotter:
             kind = parts[1]
 
             # Format network name
-            net_display = net.replace('Resnet', 'ResNet').replace('Vgg19', 'VGG19')
+            net_display = net.replace('Convnext', 'ConvNeXt').replace('Efficientnetv2s', 'EfficientNetV2S')
 
             if kind == 'classifier' and len(parts) >= 3 and parts[2] == 'none':
                 return f"{net_display}"
