@@ -1,6 +1,8 @@
 pandas
 scikit-learn
+scipy
 tensorflow>=2.10.0
+optuna>=3.0
 opencv-contrib-python==4.9.0.80
 matplotlib
 numpy<2.0
