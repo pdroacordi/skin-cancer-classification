@@ -73,16 +73,14 @@ def _get_preprocess_fn(model_name: str):
 
     Resolved once per model name and cached via the module-level dict below.
     """
-    if model_name == "VGG19":
-        from tensorflow.keras.applications.vgg19 import preprocess_input
-    elif model_name == "Inception":
+    if model_name == "Inception":
         from tensorflow.keras.applications.inception_v3 import preprocess_input
-    elif model_name == "ResNet":
-        from tensorflow.keras.applications.resnet50 import preprocess_input
     elif model_name == "Xception":
         from tensorflow.keras.applications.xception import preprocess_input
-    elif model_name == "EfficientNet":
-        from tensorflow.keras.applications.efficientnet import preprocess_input
+    elif model_name == "ConvNeXt":
+        from tensorflow.keras.applications.convnext import preprocess_input
+    elif model_name == "EfficientNetV2S":
+        from tensorflow.keras.applications.efficientnet_v2 import preprocess_input
     else:
         raise ValueError(f"Unsupported model: {model_name}")
     return preprocess_input
@@ -106,6 +104,40 @@ def apply_model_preprocessing(image: np.ndarray, model_name: str) -> np.ndarray:
     if model_name not in _PREPROCESS_FN_CACHE:
         _PREPROCESS_FN_CACHE[model_name] = _get_preprocess_fn(model_name)
     return _PREPROCESS_FN_CACHE[model_name](image)
+
+
+def _apply_cutmix(images: np.ndarray, labels: np.ndarray,
+                  alpha: float = 1.0) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    CutMix (Yun et al., 2019, ICCV).
+
+    Samples a rectangular box of area ~ (1 - lam) and pastes it from a
+    permuted batch member; labels are convex-combined proportional to the
+    *actual* pasted-box area ratio.
+    """
+    n, H, W = images.shape[:3]
+    lam = np.random.beta(alpha, alpha) if alpha > 0 else 1.0
+    perm = np.random.permutation(n)
+
+    cut_ratio = np.sqrt(1.0 - lam)
+    cut_h = int(H * cut_ratio)
+    cut_w = int(W * cut_ratio)
+    cy = np.random.randint(H)
+    cx = np.random.randint(W)
+    y1 = np.clip(cy - cut_h // 2, 0, H)
+    y2 = np.clip(cy + cut_h // 2, 0, H)
+    x1 = np.clip(cx - cut_w // 2, 0, W)
+    x2 = np.clip(cx + cut_w // 2, 0, W)
+
+    if y2 > y1 and x2 > x1:
+        images = images.copy()
+        images[:, y1:y2, x1:x2, :] = images[perm, y1:y2, x1:x2, :]
+        lam_actual = 1.0 - ((y2 - y1) * (x2 - x1) / float(H * W))
+    else:
+        lam_actual = 1.0
+
+    labels = lam_actual * labels + (1.0 - lam_actual) * labels[perm]
+    return images, labels
 
 
 class MemoryEfficientDataGenerator:
@@ -196,15 +228,25 @@ class MemoryEfficientDataGenerator:
         batch_images = np.array(batch_images, dtype=np.float32)
         batch_labels = to_categorical(batch_labels, cfg.num_classes)
 
-        # Mixup augmentation (Zhang et al., 2018, ICLR).
-        # Creates convex combinations of two training samples, forcing smoother
-        # class boundaries and reducing overconfidence. Applied only during
-        # training (when augment_fn is set) and only when cfg.use_mixup=True.
-        if cfg.use_mixup and self.augment_fn is not None and len(batch_images) > 1:
-            lam = np.random.beta(0.4, 0.4)
-            perm = np.random.permutation(len(batch_images))
-            batch_images = lam * batch_images + (1 - lam) * batch_images[perm]
-            batch_labels = lam * batch_labels + (1 - lam) * batch_labels[perm]
+        # Mixup (Zhang et al., 2018) and CutMix (Yun et al., 2019).
+        # When both flags are on, each batch randomly picks one 50/50.
+        if self.augment_fn is not None and len(batch_images) > 1:
+            use_mix = cfg.use_mixup
+            use_cut = cfg.use_cutmix
+            if use_mix and use_cut:
+                if np.random.rand() < 0.5:
+                    use_cut = False
+                else:
+                    use_mix = False
+            if use_mix:
+                lam = np.random.beta(0.4, 0.4)
+                perm = np.random.permutation(len(batch_images))
+                batch_images = lam * batch_images + (1 - lam) * batch_images[perm]
+                batch_labels = lam * batch_labels + (1 - lam) * batch_labels[perm]
+            elif use_cut:
+                batch_images, batch_labels = _apply_cutmix(
+                    batch_images, batch_labels, alpha=cfg.cutmix_alpha
+                )
 
         return batch_images, batch_labels
 
