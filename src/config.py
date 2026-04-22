@@ -23,19 +23,17 @@ from typing import Dict, List, Tuple
 # Backbone → canonical input resolution  (module-level, not mutable)
 # ---------------------------------------------------------------------------
 BACKBONE_IMG_SIZE: Dict[str, Tuple[int, int, int]] = {
-    'VGG19':        (224, 224, 3),
-    'ResNet':       (224, 224, 3),
-    'Inception':    (299, 299, 3),
-    'Xception':     (299, 299, 3),
-    'EfficientNet': (380, 380, 3),
+    'Inception':       (299, 299, 3),
+    'Xception':        (299, 299, 3),
+    'ConvNeXt':        (224, 224, 3),
+    'EfficientNetV2S': (384, 384, 3),
 }
 
 FINE_TUNING_AT_LAYER: Dict[str, int] = {
-    'VGG19':        15,
-    'Inception':    280,
-    'ResNet':       140,
-    'Xception':     100,
-    'EfficientNet': 342,   # block6a_expand_conv — fine-tune last two blocks
+    'Inception':       280,
+    'Xception':        100,
+    'ConvNeXt':        60,     # last two stages of ConvNeXtTiny
+    'EfficientNetV2S': 330,    # approximately last block start
 }
 
 VALID_BACKBONES:    List[str] = list(BACKBONE_IMG_SIZE)
@@ -73,11 +71,13 @@ class Config:
 
     # ---- Callbacks ----------------------------------------------------------
     early_stopping_patience: int = 10
-    reduce_lr_patience: int = 5
-    reduce_lr_factor: float = 0.5
+
+    # ---- Optimizer / schedule ----------------------------------------------
+    weight_decay: float = 1e-4
+    warmup_epochs: int = 5
 
     # ---- Model selection ----------------------------------------------------
-    cnn_model: str = 'ResNet'
+    cnn_model: str = 'EfficientNetV2S'
     classical_classifier_model: str = 'ExtraTrees'
 
     # ---- Pipeline flags -----------------------------------------------------
@@ -101,6 +101,8 @@ class Config:
     use_tta: bool = False
     tta_n_steps: int = 8
     use_mixup: bool = False
+    use_cutmix: bool = False
+    cutmix_alpha: float = 1.0
     use_mc_dropout: bool = False
     mc_dropout_steps: int = 50
 
@@ -175,8 +177,11 @@ def apply_cli_overrides(args) -> None:
         'num_final_models':          'num_final_models',
         'tta_n_steps':               'tta_n_steps',
         'mc_dropout_steps':          'mc_dropout_steps',
+        'warmup_epochs':             'warmup_epochs',
         # float
         'label_smoothing':           'label_smoothing',
+        'weight_decay':              'weight_decay',
+        'cutmix_alpha':              'cutmix_alpha',
         # bool  (BooleanOptionalAction yields None when flag is absent)
         'use_fine_tuning':           'use_fine_tuning',
         'use_data_augmentation':     'use_data_augmentation',
@@ -190,6 +195,7 @@ def apply_cli_overrides(args) -> None:
         'use_focal_loss':            'use_focal_loss',
         'use_tta':                   'use_tta',
         'use_mixup':                 'use_mixup',
+        'use_cutmix':                'use_cutmix',
         'use_mc_dropout':            'use_mc_dropout',
         'use_dynamic_ensemble':      'use_dynamic_ensemble',
     }
