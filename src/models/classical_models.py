@@ -174,133 +174,181 @@ def create_ml_pipeline(classifier_name: str, random_state: int = 42) -> Pipeline
     return Pipeline([('classifier', classifier)])
 
 
+# ---------------------------------------------------------------------------
+# Optuna TPE search spaces — one suggest callback per classifier.
+# Each callback takes an Optuna trial and returns a dict of classifier__*
+# parameters that can be applied via sklearn's Pipeline.set_params().
+# ---------------------------------------------------------------------------
+
+def _space_rf(trial):
+    return {
+        'classifier__n_estimators':      trial.suggest_int('n_estimators', 100, 400, step=50),
+        'classifier__max_depth':         trial.suggest_categorical('max_depth', [None, 15, 30, 45]),
+        'classifier__min_samples_split': trial.suggest_int('min_samples_split', 2, 10),
+        'classifier__min_samples_leaf':  trial.suggest_int('min_samples_leaf', 1, 4),
+    }
+
+
+def _space_xgb(trial):
+    return {
+        'classifier__n_estimators':     trial.suggest_int('n_estimators', 100, 400, step=50),
+        'classifier__learning_rate':    trial.suggest_float('learning_rate', 0.01, 0.2, log=True),
+        'classifier__max_depth':        trial.suggest_int('max_depth', 3, 8),
+        'classifier__subsample':        trial.suggest_float('subsample', 0.6, 1.0),
+        'classifier__colsample_bytree': trial.suggest_float('colsample_bytree', 0.6, 1.0),
+        'classifier__reg_lambda':       trial.suggest_float('reg_lambda', 0.5, 5.0, log=True),
+    }
+
+
+def _space_lgbm(trial):
+    return {
+        'classifier__n_estimators':      trial.suggest_int('n_estimators', 100, 500, step=50),
+        'classifier__learning_rate':     trial.suggest_float('learning_rate', 0.01, 0.2, log=True),
+        'classifier__num_leaves':        trial.suggest_int('num_leaves', 31, 127),
+        'classifier__min_child_samples': trial.suggest_int('min_child_samples', 5, 50),
+    }
+
+
+def _space_hgb(trial):
+    return {
+        'classifier__max_iter':         trial.suggest_int('max_iter', 100, 500, step=50),
+        'classifier__learning_rate':    trial.suggest_float('learning_rate', 0.01, 0.2, log=True),
+        'classifier__max_leaf_nodes':   trial.suggest_int('max_leaf_nodes', 31, 127),
+        'classifier__min_samples_leaf': trial.suggest_int('min_samples_leaf', 5, 50),
+    }
+
+
+def _space_et(trial):
+    return {
+        'classifier__n_estimators':      trial.suggest_int('n_estimators', 100, 400, step=50),
+        'classifier__max_depth':         trial.suggest_categorical('max_depth', [None, 20, 40]),
+        'classifier__min_samples_split': trial.suggest_int('min_samples_split', 2, 10),
+        'classifier__min_samples_leaf':  trial.suggest_int('min_samples_leaf', 1, 4),
+    }
+
+
+def _space_svm(trial):
+    return {
+        'classifier__C':      trial.suggest_float('C', 0.1, 100.0, log=True),
+        'classifier__gamma':  trial.suggest_float('gamma', 1e-4, 1.0, log=True),
+        'classifier__kernel': trial.suggest_categorical('kernel', ['rbf', 'poly']),
+    }
+
+
+_OPTUNA_SPACES = {
+    'RandomForest':         _space_rf,
+    'XGBoost':              _space_xgb,
+    'LightGBM':             _space_lgbm,
+    'HistGradientBoosting': _space_hgb,
+    'ExtraTrees':           _space_et,
+    'SVM':                  _space_svm,
+}
+
+
+class _OptunaSearchResult:
+    """Minimal GridSearchCV-compatible facade around an Optuna study."""
+    def __init__(self, best_estimator, best_params, best_score, study):
+        self.best_estimator_ = best_estimator
+        self.best_params_    = best_params
+        self.best_score_     = best_score
+        self.study_          = study
+
+
 def tune_hyperparameters(
     pipeline: Pipeline,
     X: np.ndarray,
     y: np.ndarray,
-    param_grid: Dict[str, Any],
+    classifier_name: str,
     cv: int = 5,
-    n_jobs: int = -1,
+    n_trials: int = 50,
     tune_sample_fraction: float = 0.5,
-    verbose: int = 1,
     class_weights: Optional[Dict[int, float]] = None,
-) -> Any:
+    random_state: int = 42,
+) -> _OptunaSearchResult:
     """
-    Run ``GridSearchCV`` on a stratified subsample.
-
-    Tuning on the full dataset is prohibitively slow for large feature
-    matrices, so we draw a stratified subsample of size
-    ``tune_sample_fraction * N`` and search on that.
+    Optuna TPE hyperparameter search on a stratified subsample (§1.7 A2 audit).
 
     Args:
         pipeline:             Unfitted sklearn Pipeline (from ``create_ml_pipeline``).
         X:                    Full training feature matrix (N, D).
         y:                    Full training labels (N,).
-        param_grid:           GridSearchCV parameter grid.
-        cv:                   Number of CV folds inside GridSearchCV.
-        n_jobs:               Parallel workers for GridSearchCV.
-        tune_sample_fraction: Fraction of training data to use for the
-                              hyperparameter search (default 0.5).
-        verbose:              GridSearchCV verbosity level.
-        class_weights:        Optional per-class sample weights to pass to
-                              the classifier's ``fit`` via ``sample_weight``.
+        classifier_name:      Classifier name (resolves the Optuna search space).
+        cv:                   Stratified CV folds evaluated per trial.
+        n_trials:             Max Optuna trials (default 50).
+        tune_sample_fraction: Fraction of training data used for tuning.
+        class_weights:        Optional per-class sample weights via ``sample_weight``.
+        random_state:         Seed for reproducible TPE sampling and CV splits.
 
     Returns:
-        Fitted ``GridSearchCV`` object; best estimator is ``.best_estimator_``.
+        _OptunaSearchResult with best_estimator_ refit on the subsample.
     """
-    from sklearn.model_selection import GridSearchCV, StratifiedShuffleSplit
+    import optuna
+    from optuna.samplers import TPESampler
+    from optuna.pruners import MedianPruner
+    from sklearn.base import clone
+    from sklearn.metrics import balanced_accuracy_score
+    from sklearn.model_selection import StratifiedKFold, StratifiedShuffleSplit
 
-    # Draw a stratified subsample so the class distribution is preserved.
-    # StratifiedShuffleSplit's `test_size` here is the fraction we *want*,
-    # and we take the "test" split indices as our tuning subsample.
-    splitter = StratifiedShuffleSplit(n_splits=1, test_size=tune_sample_fraction, random_state=42)
+    if classifier_name not in _OPTUNA_SPACES:
+        raise ValueError(
+            f"No Optuna search space registered for '{classifier_name}'. "
+            f"Valid: {list(_OPTUNA_SPACES)}"
+        )
+    suggest = _OPTUNA_SPACES[classifier_name]
+
+    splitter = StratifiedShuffleSplit(
+        n_splits=1, test_size=tune_sample_fraction, random_state=random_state
+    )
     _, tune_idx = next(splitter.split(X, y))
     X_tune = X[tune_idx]
     y_tune = y[tune_idx]
 
-    print(f"Using {len(X_tune)} samples ({tune_sample_fraction * 100:.0f}%) for hyperparameter tuning")
-
-    fit_params: Dict[str, Any] = {}
+    sample_weights_full = None
     if class_weights is not None:
-        sample_weights = np.array([class_weights[label] for label in y_tune])
-        fit_params['classifier__sample_weight'] = sample_weights
-        print("Using class weights during hyperparameter tuning")
+        sample_weights_full = np.array([class_weights[label] for label in y_tune])
 
-    grid_search = GridSearchCV(
-        pipeline,
-        param_grid,
-        cv=cv,
-        n_jobs=n_jobs,
-        verbose=verbose,
-        scoring='balanced_accuracy',
-        return_train_score=True,
+    print(f"Optuna TPE tuning on {len(X_tune)} samples "
+          f"({tune_sample_fraction * 100:.0f}% subsample), n_trials={n_trials}")
+
+    inner_cv = StratifiedKFold(n_splits=cv, shuffle=True, random_state=random_state)
+
+    def objective(trial):
+        params = suggest(trial)
+        scores = []
+        for train_i, val_i in inner_cv.split(X_tune, y_tune):
+            est = clone(pipeline).set_params(**params)
+            fit_kwargs = {}
+            if sample_weights_full is not None:
+                fit_kwargs['classifier__sample_weight'] = sample_weights_full[train_i]
+            est.fit(X_tune[train_i], y_tune[train_i], **fit_kwargs)
+            pred = est.predict(X_tune[val_i])
+            scores.append(balanced_accuracy_score(y_tune[val_i], pred))
+        return float(np.mean(scores))
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    study = optuna.create_study(
+        direction='maximize',
+        sampler=TPESampler(seed=random_state),
+        pruner=MedianPruner(),
     )
-    grid_search.fit(X_tune, y_tune, **fit_params)
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
 
-    print(f"Best parameters: {grid_search.best_params_}")
-    print(f"Best CV score:   {grid_search.best_score_:.4f}")
+    best_params = {f'classifier__{k}': v for k, v in study.best_params.items()}
+    best_estimator = pipeline.set_params(**best_params)
+    fit_kwargs = {}
+    if sample_weights_full is not None:
+        fit_kwargs['classifier__sample_weight'] = sample_weights_full
+    best_estimator.fit(X_tune, y_tune, **fit_kwargs)
 
-    return grid_search
+    print(f"Best params: {study.best_params}")
+    print(f"Best CV balanced_accuracy: {study.best_value:.4f}")
 
-
-def get_default_param_grid(classifier_name: str) -> Dict[str, Any]:
-    """
-    Return the default hyperparameter grid for ``tune_hyperparameters``.
-
-    Args:
-        classifier_name: Name of the classifier.
-
-    Returns:
-        Dict suitable for ``GridSearchCV(param_grid=...)``.
-
-    Raises:
-        ValueError: If *classifier_name* is not recognised.
-    """
-    grids: Dict[str, Dict[str, Any]] = {
-        "RandomForest": {
-            'classifier__n_estimators': [50, 100, 200],
-            'classifier__max_depth': [None, 15, 30],
-            'classifier__min_samples_split': [2, 10],
-            'classifier__min_samples_leaf': [1, 4],
-        },
-        "XGBoost": {
-            'classifier__n_estimators': [50, 100, 200],
-            'classifier__learning_rate': [0.01, 0.1, 0.2],
-            'classifier__max_depth': [3, 5, 7],
-            'classifier__subsample': [0.7, 0.8, 0.9],
-            'classifier__colsample_bytree': [0.7, 0.8, 0.9],
-        },
-        "LightGBM": {
-            'classifier__n_estimators':      [100, 200, 300],
-            'classifier__learning_rate':     [0.01, 0.05, 0.1],
-            'classifier__num_leaves':        [31, 63, 127],
-            'classifier__min_child_samples': [10, 20, 50],
-        },
-        "HistGradientBoosting": {
-            'classifier__max_iter':         [100, 200, 300],
-            'classifier__learning_rate':    [0.01, 0.05, 0.1],
-            'classifier__max_leaf_nodes':   [31, 63, 127],
-            'classifier__min_samples_leaf': [10, 20, 50],
-        },
-        "ExtraTrees": {
-            'classifier__n_estimators': [50, 100, 200],
-            'classifier__max_depth': [None, 10, 20, 30],
-            'classifier__min_samples_split': [2, 5, 10],
-            'classifier__min_samples_leaf': [1, 2, 4],
-        },
-        "SVM": {
-            'classifier__C': [0.1, 10, 100],
-            'classifier__gamma': ['scale', 'auto', 0.01, 0.1, 1],
-            'classifier__kernel': ['rbf', 'linear', 'poly'],
-        },
-    }
-
-    if classifier_name not in grids:
-        raise ValueError(
-            f"Unsupported classifier: '{classifier_name}'. "
-            f"Valid: {list(grids)}"
-        )
-    return grids[classifier_name]
+    return _OptunaSearchResult(
+        best_estimator=best_estimator,
+        best_params=study.best_params,
+        best_score=study.best_value,
+        study=study,
+    )
 
 
 def save_model(model: Any, save_path: str) -> None:
