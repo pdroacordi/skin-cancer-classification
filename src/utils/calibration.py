@@ -8,7 +8,11 @@ ECE reference: Guo et al. (2017, ICML, "On Calibration of Modern Neural Networks
 Medical imaging context: Nixon et al. (2019, CVPR Workshop).
 """
 
+import json
+
 import numpy as np
+from scipy.optimize import minimize
+from scipy.special import log_softmax
 
 
 def expected_calibration_error(y_true, y_prob, n_bins=15):
@@ -42,3 +46,61 @@ def expected_calibration_error(y_true, y_prob, n_bins=15):
             ece += n_in_bin * abs(bin_accuracy - bin_confidence)
 
     return ece / len(y_true)
+
+
+class TemperatureScaler:
+    """
+    Post-hoc temperature scaling (Guo et al., 2017).
+
+    Fits a single scalar T by minimising NLL on a held-out validation set
+    (typically the fold's val split). At inference time, softmax(logits / T)
+    produces better-calibrated probabilities without altering the argmax.
+    """
+
+    def __init__(self, T: float = 1.0):
+        self.T = float(T)
+
+    def fit(self, logits_val: np.ndarray, y_val: np.ndarray):
+        """
+        Fit T on validation logits via L-BFGS on NLL.
+
+        Args:
+            logits_val: (n_samples, n_classes) pre-softmax activations.
+            y_val: (n_samples,) integer class indices.
+
+        Returns:
+            self.
+        """
+        logits_val = np.asarray(logits_val, dtype=np.float64)
+        y_val = np.asarray(y_val, dtype=np.int64)
+
+        def nll(t):
+            T = max(float(t[0]), 1e-3)
+            log_p = log_softmax(logits_val / T, axis=1)
+            return -np.mean(log_p[np.arange(len(y_val)), y_val])
+
+        res = minimize(
+            nll, x0=np.array([1.0]), method='L-BFGS-B',
+            bounds=[(0.05, 10.0)],
+        )
+        self.T = float(np.clip(res.x[0], 0.05, 10.0))
+        return self
+
+    def transform(self, logits: np.ndarray) -> np.ndarray:
+        """Return softmax(logits / T) as probabilities."""
+        logits = np.asarray(logits, dtype=np.float64)
+        # Numerically stable softmax of logits / T.
+        scaled = logits / self.T
+        scaled = scaled - scaled.max(axis=1, keepdims=True)
+        exp = np.exp(scaled)
+        return (exp / exp.sum(axis=1, keepdims=True)).astype(np.float32)
+
+    def save(self, path: str) -> None:
+        with open(path, 'w') as f:
+            json.dump({'T': self.T}, f)
+
+    @classmethod
+    def load(cls, path: str) -> "TemperatureScaler":
+        with open(path) as f:
+            data = json.load(f)
+        return cls(T=float(data['T']))
