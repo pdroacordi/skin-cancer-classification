@@ -215,7 +215,7 @@ def load_or_extract_features(
             aug_factor = n_extracted // n_original
             if aug_factor > 1:
                 metadata_features = np.repeat(metadata_features, aug_factor, axis=0)
-                print(f"  Replicated metadata {aug_factor}× → {metadata_features.shape}")
+                print(f"  Replicated metadata {aug_factor}x -> {metadata_features.shape}")
 
     combined = combine_cnn_and_metadata_features(
         cnn_features=cnn_feats,

@@ -17,7 +17,6 @@ import numpy as np
 from core.types import EvalResult
 from models.classical_models import (
     create_ml_pipeline,
-    get_default_param_grid,
     tune_hyperparameters,
 )
 from utils.metrics import compute_classification_metrics
@@ -55,13 +54,12 @@ def train_classifier(
     pipeline = create_ml_pipeline(classifier_name=classifier_name)
 
     if tune_hyperparams:
-        print("  Running GridSearchCV...")
-        param_grid = get_default_param_grid(classifier_name)
+        print("  Running Optuna TPE search...")
         model = tune_hyperparameters(
             pipeline=pipeline,
             X=X_train,
             y=train_labels,
-            param_grid=param_grid,
+            classifier_name=classifier_name,
             cv=5,
         ).best_estimator_
     else:
