@@ -17,7 +17,10 @@ from typing import Callable, Optional, Tuple
 import numpy as np
 from sklearn.utils.class_weight import compute_class_weight
 
-from models.cnn_models import load_or_create_cnn, get_callbacks
+from config import cfg
+from models.cnn_models import (
+    load_or_create_cnn, get_callbacks, compile_phase2, unfreeze_from,
+)
 from utils.data_loaders import MemoryEfficientDataGenerator
 
 
@@ -78,6 +81,7 @@ def train_one_fold(
         mode="classifier",
         fine_tune=use_fine_tuning,
         save_path=model_save_path,
+        n_train=len(train_paths),
     )
 
     if already_loaded:
@@ -88,8 +92,7 @@ def train_one_fold(
     val_steps       = math.ceil(len(val_paths)   / batch_size)
 
     # Balanced class weights compensate for HAM10000's strong class imbalance
-    # (~67 % of samples belong to 'nv').  Without weighting, the model learns
-    # to predict the majority class for most inputs.
+    # (~67 % of samples belong to 'nv').
     classes = np.unique(train_labels)
     class_weights = {
         int(c): float(w)
@@ -101,15 +104,53 @@ def train_one_fold(
 
     callbacks = get_callbacks(model_save_path, log_dir)
 
-    history = model.fit(
-        train_gen.get_keras_generator(),
-        steps_per_epoch=steps_per_epoch,
-        epochs=num_epochs,
-        validation_data=val_gen.get_keras_generator(),
-        validation_steps=val_steps,
-        callbacks=callbacks,
-        class_weight=class_weights,
-        verbose=1,
-    )
+    if use_fine_tuning:
+        warmup = max(0, min(int(cfg.warmup_epochs), num_epochs - 1))
+        # Phase 1 — head only.
+        history1 = None
+        if warmup > 0:
+            print(f"Phase 1: head-only training for {warmup} warmup epochs")
+            history1 = model.fit(
+                train_gen.get_keras_generator(),
+                steps_per_epoch=steps_per_epoch,
+                epochs=warmup,
+                validation_data=val_gen.get_keras_generator(),
+                validation_steps=val_steps,
+                callbacks=callbacks,
+                class_weight=class_weights,
+                verbose=1,
+            )
+
+        # Phase 2 — unfreeze and keep training.
+        remaining = num_epochs - warmup
+        print(f"Phase 2: unfreezing from layer {cnn_model}[{cfg.fine_tune_from_layer}] "
+              f"for {remaining} epochs")
+        unfreeze_from(model, cnn_model)
+        compile_phase2(
+            model, n_train=len(train_paths),
+            batch_size=batch_size, num_epochs=remaining,
+        )
+        history = model.fit(
+            train_gen.get_keras_generator(),
+            steps_per_epoch=steps_per_epoch,
+            initial_epoch=warmup,
+            epochs=num_epochs,
+            validation_data=val_gen.get_keras_generator(),
+            validation_steps=val_steps,
+            callbacks=callbacks,
+            class_weight=class_weights,
+            verbose=1,
+        )
+    else:
+        history = model.fit(
+            train_gen.get_keras_generator(),
+            steps_per_epoch=steps_per_epoch,
+            epochs=num_epochs,
+            validation_data=val_gen.get_keras_generator(),
+            validation_steps=val_steps,
+            callbacks=callbacks,
+            class_weight=class_weights,
+            verbose=1,
+        )
 
     return model, history
