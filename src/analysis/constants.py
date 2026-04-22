@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List, Dict
 
 # Model groups ---------------------------------------------------------------
-CNN_MODELS: List[str] = ["VGG19", "Inception", "ResNet", "Xception", "EfficientNet"]
+CNN_MODELS: List[str] = ["Inception", "Xception", "ConvNeXt", "EfficientNetV2S"]
 ML_CLASSIFIERS: List[str] = [
     "RandomForest", "XGBoost", "LightGBM", "HistGradientBoosting", "ExtraTrees", "SVM"
 ]
@@ -19,8 +19,8 @@ ALG_NICE = dict(
     dynamic_ensemble="DynamicEnsemble",
 )
 NET_NICE = dict(
-    Resnet="ResNet",
-    Vgg19="VGG19",
+    Convnext="ConvNeXt",
+    Efficientnetv2s="EfficientNetV2S",
 )
 
 # Colours --------------------------------------------------------------------
@@ -29,11 +29,10 @@ COLOR_PALETTE: Dict[str, str] = {
     "train": "#ff7f0e",  # orange
     "test": "#2ca02c",   # green
     # cnn backbones
-    "VGG19": "#1f77b4",
     "Inception": "#d62728",
-    "ResNet": "#9467bd",
     "Xception": "#8c564b",
-    "EfficientNet": "#7f7f7f",
+    "ConvNeXt": "#9467bd",
+    "EfficientNetV2S": "#1f77b4",
     # classical ML learners
     "RandomForest": "#17becf",
     "XGBoost": "#bcbd22",
