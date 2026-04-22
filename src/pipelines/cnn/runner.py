@@ -33,6 +33,7 @@ from pipelines.cnn.stages.evaluate import evaluate_predictions
 from pipelines.cnn.stages.predict import predict_batch
 from pipelines.cnn.stages.train import train_one_fold
 from preprocessing.data.augmentation import AugmentationFactory
+from utils.calibration import TemperatureScaler, expected_calibration_error
 from utils.data_loaders import load_paths_labels
 from utils.fold_utils import save_fold_results
 from utils.gpu_utils import setup_gpu_memory
@@ -306,6 +307,15 @@ def _train_and_evaluate_final_models(
                 augment_fn=augment_fn,
             )
 
+            # Fit temperature scaling on the held-out monitor split, then
+            # apply it at test time (§2.6 A2 audit — Guo et al., 2017).
+            scaler, ece_before_val, ece_after_val = _fit_temperature_on_val(
+                model, monitor_paths, monitor_labels
+            )
+            scaler.save(str(model_dir / "temperature.json"))
+            print(f"Temperature T={scaler.T:.4f}  "
+                  f"val ECE {ece_before_val:.4f} -> {ece_after_val:.4f}")
+
             y_true, y_pred, y_prob, uncertainty = predict_batch(
                 model=model,
                 paths=test_paths,
@@ -317,6 +327,7 @@ def _train_and_evaluate_final_models(
                 use_tta=cfg.use_tta,
                 tta_n_steps=cfg.tta_n_steps,
                 tta_augment_fn=tta_augment_fn,
+                temperature=scaler,
             )
 
             eval_result = evaluate_predictions(y_true, y_pred, y_prob, class_names)
@@ -364,6 +375,31 @@ def _train_and_evaluate_final_models(
 #  Private helpers                                                     #
 # ------------------------------------------------------------------ #
 
+def _fit_temperature_on_val(
+    model, val_paths: np.ndarray, val_labels: np.ndarray,
+) -> Tuple[TemperatureScaler, float, float]:
+    """
+    Run the model on the validation split, fit a TemperatureScaler via L-BFGS
+    on log-probabilities (softmax is translation-invariant so log p / T → softmax
+    is equivalent to fitting on raw logits), and return (scaler, ece_before, ece_after).
+    """
+    y_true, _, y_prob, _ = predict_batch(
+        model=model,
+        paths=val_paths,
+        labels=val_labels,
+        cnn_model=cfg.cnn_model,
+        batch_size=cfg.batch_size,
+    )
+    ece_before = float(expected_calibration_error(y_true, y_prob))
+
+    logp = np.log(np.clip(y_prob, 1e-12, 1.0))
+    scaler = TemperatureScaler().fit(logp, y_true)
+    y_prob_after = scaler.transform(logp)
+    ece_after = float(expected_calibration_error(y_true, y_prob_after))
+
+    return scaler, ece_before, ece_after
+
+
 def _make_augment_fn(enabled: bool) -> Optional[callable]:
     """Return an albumentations augmentation function if enabled, else None."""
     if not enabled:
@@ -390,6 +426,10 @@ def _build_config_snapshot() -> dict:
         "use_focal_loss":             cfg.use_focal_loss,
         "label_smoothing":            cfg.label_smoothing,
         "use_mixup":                  cfg.use_mixup,
+        "use_cutmix":                 cfg.use_cutmix,
+        "cutmix_alpha":               cfg.cutmix_alpha,
+        "weight_decay":               cfg.weight_decay,
+        "warmup_epochs":              cfg.warmup_epochs,
         "use_tta":                    cfg.use_tta,
         "tta_n_steps":                cfg.tta_n_steps,
         "use_mc_dropout":             cfg.use_mc_dropout,
