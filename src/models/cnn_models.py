@@ -2,33 +2,49 @@
 CNN model definitions and loading utilities.
 """
 
+import math
 import os
 
+import numpy as np
 import tensorflow as tf
-from tensorflow.keras.applications import VGG19, InceptionV3, ResNet50, Xception, EfficientNetB4
-from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint, TensorBoard
-from tensorflow.keras.layers import GlobalAveragePooling2D, Dense, Dropout
+from tensorflow.keras.applications import (
+    InceptionV3, Xception, ConvNeXtTiny, EfficientNetV2S,
+)
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, TensorBoard
+from tensorflow.keras.layers import (
+    GlobalAveragePooling2D, Dense, Dropout, BatchNormalization,
+)
 from tensorflow.keras.models import Model, load_model
-from tensorflow.keras.optimizers import Adam
 
 from config import cfg, FINE_TUNING_AT_LAYER
+
+
+# AdamW resolution:
+# 1) tfa.optimizers.AdamW — classic optimizer API, works with mixed precision
+#    under TF 2.10 (the experimental optimizer has an AutoCastVariable tracing bug).
+# 2) tf.keras.optimizers.AdamW — TF >= 2.11 native.
+# 3) tf.keras.optimizers.experimental.AdamW — last-resort TF 2.10 fallback.
+def _resolve_adamw():
+    try:
+        import tensorflow_addons as tfa
+        return tfa.optimizers.AdamW
+    except Exception:
+        pass
+    native = getattr(tf.keras.optimizers, 'AdamW', None)
+    if native is not None:
+        return native
+    exp = getattr(tf.keras.optimizers.experimental, 'AdamW', None)
+    if exp is not None:
+        return exp
+    raise ImportError("No AdamW optimizer available — install tensorflow_addons or TF>=2.11.")
+
+
+_AdamW_cls = _resolve_adamw()
 
 
 def focal_loss(gamma=2.0, alpha=None):
     """
     Focal Loss for multi-class classification (Lin et al., 2017 – RetinaNet).
-
-    Down-weights easy (high-confidence) examples and focuses learning on hard
-    (low-confidence) examples. Effective for HAM10000's severe class imbalance
-    (~67% nv class). Use via cfg.use_focal_loss=True in config.py.
-
-    Args:
-        gamma: Focusing parameter (typical range 0.5–5.0; 2.0 is the default).
-        alpha: Optional per-class weight tensor of shape (cfg.num_classes,).
-               Pass class-balanced weights to further address imbalance.
-
-    Returns:
-        Keras loss function.
     """
     def loss_fn(y_true, y_pred):
         y_pred = tf.clip_by_value(y_pred, 1e-8, 1.0)
@@ -40,39 +56,33 @@ def focal_loss(gamma=2.0, alpha=None):
     return loss_fn
 
 
+def resolve_loss():
+    """Pick the loss function from the active cfg flags."""
+    if cfg.use_focal_loss:
+        return focal_loss(gamma=2.0)
+    if cfg.label_smoothing > 0:
+        return tf.keras.losses.CategoricalCrossentropy(
+            label_smoothing=cfg.label_smoothing
+        )
+    return 'categorical_crossentropy'
+
+
 def get_callbacks(save_path, tensorboard_log_dir=None):
-    """
-    Get a list of callbacks for model training.
-
-    Args:
-        save_path (str): Path to save the best model.
-        tensorboard_log_dir (str, optional): Directory for TensorBoard logs.
-
-    Returns:
-        list: List of Keras callbacks.
-    """
+    """EarlyStopping + ModelCheckpoint (+ optional TensorBoard)."""
     callbacks = [
         EarlyStopping(
             monitor='val_loss',
             patience=cfg.early_stopping_patience,
             restore_best_weights=True,
-            verbose=1
-        ),
-        ReduceLROnPlateau(
-            monitor='val_loss',
-            factor=cfg.reduce_lr_factor,
-            patience=cfg.reduce_lr_patience,
-            min_lr=1e-7,
-            verbose=1
+            verbose=1,
         ),
         ModelCheckpoint(
             filepath=save_path,
             monitor='val_loss',
             save_best_only=True,
-            verbose=1
-        )
+            verbose=1,
+        ),
     ]
-
     if tensorboard_log_dir:
         callbacks.append(
             TensorBoard(
@@ -81,49 +91,133 @@ def get_callbacks(save_path, tensorboard_log_dir=None):
                 write_graph=True,
                 write_images=False,
                 update_freq='epoch',
-                profile_batch=0
+                profile_batch=0,
             )
         )
-
     return callbacks
 
 
 def create_model_name(base_model_name, mode, use_fine_tuning, use_preprocessing):
-    """
-    Create a descriptive model name based on configuration.
-
-    Args:
-        base_model_name (str): Base CNN model name.
-        mode (str): 'classifier' or 'extractor'.
-        use_fine_tuning (bool): Whether fine-tuning is used.
-        use_preprocessing (bool): Whether preprocessing is used.
-
-    Returns:
-        str: Model name.
-    """
     components = [
         base_model_name.lower(),
         mode,
         f"ft_{use_fine_tuning}",
-        f"preproc_{use_preprocessing}"
+        f"preproc_{use_preprocessing}",
     ]
     return "_".join(components)
 
 
+_BACKBONE_CTORS = {
+    "Inception":       InceptionV3,
+    "Xception":        Xception,
+    "ConvNeXt":        ConvNeXtTiny,
+    "EfficientNetV2S": EfficientNetV2S,
+}
+
+
+def _build_base_model(model_name, weights, img_size):
+    ctor = _BACKBONE_CTORS.get(model_name)
+    if ctor is None:
+        raise ValueError(
+            f"Unsupported model: {model_name}. "
+            f"Choose from {list(_BACKBONE_CTORS)}"
+        )
+    # Keras 2.10's ConvNeXt LayerScale layer creates float32 weights that
+    # multiply float16 inputs under mixed_float16, raising a TypeError at build
+    # time. Temporarily force float32 policy while constructing ConvNeXt, then
+    # restore the original policy so the rest of the graph keeps using fp16.
+    if model_name == "ConvNeXt":
+        prev = tf.keras.mixed_precision.global_policy()
+        try:
+            tf.keras.mixed_precision.set_global_policy('float32')
+            base = ctor(weights=weights, include_top=False, input_shape=img_size)
+        finally:
+            tf.keras.mixed_precision.set_global_policy(prev)
+        return base
+    return ctor(weights=weights, include_top=False, input_shape=img_size)
+
+
+def _build_classifier_head(base_model, num_classes):
+    """
+    Modern BN-regularized head with adaptive width (§1.4 of A2 audit).
+    GAP → BN → Dense(feat_dim) → BN → Dropout
+        → Dense(256) → BN → Dropout
+        → Dense(num_classes, softmax, float32)
+    """
+    feat_dim = int(base_model.output_shape[-1])
+    x = GlobalAveragePooling2D(name='gap')(base_model.output)
+    x = BatchNormalization(name='bn_gap')(x)
+    x = Dense(feat_dim, activation='relu', name='fc1')(x)
+    x = BatchNormalization(name='bn_fc1')(x)
+    x = Dropout(0.3, name='dropout1')(x)
+    x = Dense(256, activation='relu', name='fc2')(x)
+    x = BatchNormalization(name='bn_fc2')(x)
+    x = Dropout(0.3, name='dropout2')(x)
+    predictions = Dense(
+        num_classes, activation='softmax',
+        dtype='float32', name='predictions',
+    )(x)
+    return predictions
+
+
+def _make_adamw(initial_lr, decay_steps, weight_decay):
+    """AdamW with CosineDecay schedule."""
+    schedule = tf.keras.optimizers.schedules.CosineDecay(
+        initial_learning_rate=initial_lr,
+        decay_steps=max(1, decay_steps),
+        alpha=1e-6,
+    )
+    return _AdamW_cls(
+        learning_rate=schedule,
+        weight_decay=weight_decay,
+    )
+
+
+def compile_phase1(model, weight_decay=None):
+    """
+    Phase 1: head-only training. Backbone frozen by caller.
+    AdamW at lr=1e-3, cosine over cfg.warmup_epochs worth of steps is done
+    implicitly via a separate .fit() call; here we use a constant-ish LR via
+    CosineDecay over the warmup span (caller passes decay_steps).
+    """
+    wd = cfg.weight_decay if weight_decay is None else weight_decay
+    opt = _AdamW_cls(learning_rate=1e-3, weight_decay=wd)
+    model.compile(
+        optimizer=opt,
+        loss=resolve_loss(),
+        metrics=['accuracy', tf.keras.metrics.Recall(), tf.keras.metrics.Precision()],
+    )
+
+
+def compile_phase2(model, n_train, batch_size, num_epochs, weight_decay=None):
+    """
+    Phase 2: unfrozen backbone + head. AdamW with CosineDecay over the
+    remaining training span.
+    """
+    wd = cfg.weight_decay if weight_decay is None else weight_decay
+    steps_per_epoch = max(1, math.ceil(n_train / max(1, batch_size)))
+    decay_steps = steps_per_epoch * max(1, num_epochs)
+    opt = _make_adamw(initial_lr=1e-4, decay_steps=decay_steps, weight_decay=wd)
+    model.compile(
+        optimizer=opt,
+        loss=resolve_loss(),
+        metrics=['accuracy', tf.keras.metrics.Recall(), tf.keras.metrics.Precision()],
+    )
+
+
 def load_or_create_cnn(model_name, mode='classifier', fine_tune=True,
-                       weights='imagenet', save_path=None):
+                       weights='imagenet', save_path=None, n_train=None):
     """
     Load an existing CNN model or create a new one.
 
-    Args:
-        model_name (str): Name of the CNN model ('VGG19', 'Inception', 'ResNet', 'Xception', 'EfficientNet').
-        mode (str): 'classifier' or 'extractor'.
-        fine_tune (bool): Whether to fine-tune the model.
-        weights (str): Pre-trained weights to use.
-        save_path (str, optional): Path to save/load the model.
+    When mode='classifier', the returned model is compiled for Phase 1
+    (head-only, backbone frozen) — progressive unfreezing is driven by
+    `train.py` calling `compile_phase2` after the warmup epochs.
 
-    Returns:
-        tuple: (model, loaded) where loaded is True if model was loaded from disk.
+    Args:
+        n_train: Training-set size used to compute Phase-2 decay_steps. Only
+            needed when mode='classifier' and use_fine_tuning=True at the
+            caller's discretion; not used in Phase-1 compilation here.
     """
     if save_path and os.path.exists(save_path):
         print(f"Loading existing model from: {save_path}")
@@ -132,66 +226,14 @@ def load_or_create_cnn(model_name, mode='classifier', fine_tune=True,
     print(f"Creating new {model_name} model as {mode}...")
 
     img_size = cfg.img_size
-    fine_tune_at = FINE_TUNING_AT_LAYER.get(model_name, 0)
-
-    if model_name == "VGG19":
-        base_model = VGG19(weights=weights, include_top=False, input_shape=img_size)
-    elif model_name == "Inception":
-        base_model = InceptionV3(weights=weights, include_top=False, input_shape=img_size)
-    elif model_name == "ResNet":
-        base_model = ResNet50(weights=weights, include_top=False, input_shape=img_size)
-    elif model_name == "Xception":
-        base_model = Xception(weights=weights, include_top=False, input_shape=img_size)
-    elif model_name == "EfficientNet":
-        base_model = EfficientNetB4(weights=weights, include_top=False, input_shape=img_size)
-    else:
-        raise ValueError(
-            f"Unsupported model: {model_name}. "
-            f"Choose from 'VGG19', 'Inception', 'ResNet', 'Xception', 'EfficientNet'"
-        )
-
-    if fine_tune:
-        print(f"Applying fine-tuning starting from layer {fine_tune_at}")
-        for layer in base_model.layers[:fine_tune_at]:
-            layer.trainable = False
-        for layer in base_model.layers[fine_tune_at:]:
-            layer.trainable = True
-    else:
-        base_model.trainable = False
+    base_model = _build_base_model(model_name, weights, img_size)
 
     if mode == 'classifier':
-        x = GlobalAveragePooling2D(name='gap')(base_model.output)
-        x = Dense(512, activation='relu', name='fc1')(x)
-        x = Dropout(0.5, name='dropout')(x)
-        # dtype='float32' ensures numerical stability under mixed-precision
-        # (softmax in float16 can cause NaN loss).
-        predictions = Dense(cfg.num_classes, activation='softmax',
-                            dtype='float32', name='predictions')(x)
+        # Phase 1: freeze entire backbone.
+        base_model.trainable = False
+        predictions = _build_classifier_head(base_model, cfg.num_classes)
         model = Model(inputs=base_model.input, outputs=predictions)
-
-        # CosineDecay: proactive LR schedule that smoothly anneals from
-        # initial_lr to 0 over num_epochs * estimated_steps_per_epoch.
-        # Falls back to constant LR when step count cannot be estimated.
-        cosine_schedule = tf.keras.optimizers.schedules.CosineDecay(
-            initial_learning_rate=1e-4,
-            decay_steps=cfg.num_epochs * 500,  # approximate; ReduceLROnPlateau still active
-            alpha=1e-6,                        # minimum LR floor
-        )
-        optimizer = Adam(learning_rate=cosine_schedule)
-        if cfg.use_focal_loss:
-            loss_fn = focal_loss(gamma=2.0)
-        elif cfg.label_smoothing > 0:
-            loss_fn = tf.keras.losses.CategoricalCrossentropy(
-                label_smoothing=cfg.label_smoothing
-            )
-        else:
-            loss_fn = 'categorical_crossentropy'
-
-        model.compile(
-            optimizer=optimizer,
-            loss=loss_fn,
-            metrics=['accuracy', tf.keras.metrics.Recall(), tf.keras.metrics.Precision()]
-        )
+        compile_phase1(model)
     else:
         model = base_model
 
@@ -201,49 +243,48 @@ def load_or_create_cnn(model_name, mode='classifier', fine_tune=True,
     return model, False
 
 
+def unfreeze_from(model, model_name):
+    """
+    Unfreeze backbone layers from FINE_TUNING_AT_LAYER[model_name] onward.
+    BatchNormalization layers stay frozen to avoid destabilising imagenet
+    statistics during fine-tuning.
+    """
+    at = FINE_TUNING_AT_LAYER.get(model_name, 0)
+    # The classifier has the head appended; identify the backbone layers by
+    # walking until we hit the head's first layer (named 'gap').
+    backbone_layers = []
+    for layer in model.layers:
+        if layer.name == 'gap':
+            break
+        backbone_layers.append(layer)
+
+    for i, layer in enumerate(backbone_layers):
+        if i < at:
+            layer.trainable = False
+        else:
+            layer.trainable = not isinstance(layer, tf.keras.layers.BatchNormalization)
+
+    # Head always trainable.
+    for layer in model.layers[len(backbone_layers):]:
+        layer.trainable = True
+
+
 def create_feature_extractor(model, model_name):
-    """
-    Create a feature extractor from a CNN model (include_top=False).
-
-    Applies GlobalAveragePooling2D to the model's final spatial output,
-    producing a 1-D feature vector per image.
-
-    Args:
-        model (tensorflow.keras.Model): A pre-trained CNN model with include_top=False.
-        model_name (str): Name of the CNN model.
-
-    Returns:
-        tensorflow.keras.Model: Feature extractor model.
-    """
-    # When include_top=False, the model output is already the last spatial
-    # feature map — no need to look up a named layer.
     features = GlobalAveragePooling2D()(model.output)
     return Model(
         inputs=model.input,
         outputs=features,
-        name=f"{model_name.lower()}_feature_extractor"
+        name=f"{model_name.lower()}_feature_extractor",
     )
 
 
 def get_feature_extractor_model(model_name, fine_tune=True, weights='imagenet', save_path=None):
-    """
-    Get a feature extractor model based on a pre-trained CNN.
-
-    Args:
-        model_name (str): Name of the CNN model.
-        fine_tune (bool): Whether to fine-tune the model.
-        weights (str): Pre-trained weights to use.
-        save_path (str, optional): Path to save/load the model.
-
-    Returns:
-        tuple: (feature_extractor, loaded)
-    """
     base_model, loaded = load_or_create_cnn(
         model_name=model_name,
         mode='extractor',
         fine_tune=fine_tune,
         weights=weights,
-        save_path=save_path
+        save_path=save_path,
     )
 
     if loaded:
@@ -259,15 +300,6 @@ def get_feature_extractor_model(model_name, fine_tune=True, weights='imagenet', 
 
 
 def find_trained_cnn_model(results_dir='./results'):
-    """
-    Find the best trained CNN model based on macro-F1 in model_performance_summary.csv.
-
-    Args:
-        results_dir (str): Base results directory.
-
-    Returns:
-        str: Path to the best model file, or None if not found.
-    """
     import pandas as pd
     from utils.result_naming import cnn_result_dir
 
@@ -301,17 +333,6 @@ def find_trained_cnn_model(results_dir='./results'):
 
 
 def get_feature_extractor_from_cnn(feature_extractor_save_path, cnn_model_path=None):
-    """
-    Obtain a feature extractor from a trained CNN, or create one from ImageNet weights.
-
-    Args:
-        feature_extractor_save_path (str): Path to save/load the feature extractor.
-        cnn_model_path (str, optional): Path to a trained CNN model; auto-detected if None.
-
-    Returns:
-        tuple: (feature_extractor, from_pretrained) where from_pretrained is True
-               when the extractor was derived from a trained CNN.
-    """
     if os.path.exists(feature_extractor_save_path):
         print(f"Loading existing feature extractor: {feature_extractor_save_path}")
         return tf.keras.models.load_model(feature_extractor_save_path), True
@@ -324,7 +345,6 @@ def get_feature_extractor_from_cnn(feature_extractor_save_path, cnn_model_path=N
         try:
             trained_model = tf.keras.models.load_model(cnn_model_path)
 
-            # Find the last non-Dense layer
             extraction_layer = None
             dense_found = False
             for i in range(len(trained_model.layers) - 1, -1, -1):
@@ -342,7 +362,7 @@ def get_feature_extractor_from_cnn(feature_extractor_save_path, cnn_model_path=N
 
             feature_extractor = tf.keras.Model(
                 inputs=trained_model.input,
-                outputs=extraction_layer.output
+                outputs=extraction_layer.output,
             )
 
             os.makedirs(os.path.dirname(feature_extractor_save_path), exist_ok=True)
@@ -359,81 +379,140 @@ def get_feature_extractor_from_cnn(feature_extractor_save_path, cnn_model_path=N
     feature_extractor, _ = get_feature_extractor_model(
         model_name=cfg.cnn_model,
         fine_tune=cfg.use_fine_tuning,
-        save_path=feature_extractor_save_path
+        save_path=feature_extractor_save_path,
     )
 
     return feature_extractor, False
 
 
 # ---------------------------------------------------------------------------
-# Grad-CAM – Gradient-weighted Class Activation Mapping
-# Selvaraju et al. (2017, ICCV). Produces spatial heatmaps that show which
-# image regions drove a specific class prediction.
+# Grad-CAM++ and Score-CAM (replace standard Grad-CAM per A2 audit §1.9/§2.7)
+# Chattopadhay et al. 2018 (Grad-CAM++); Wang et al. 2020 (Score-CAM).
 # ---------------------------------------------------------------------------
 
 GRADCAM_LAYER = {
-    "VGG19":        "block5_conv4",
-    "Inception":    "mixed10",
-    "ResNet":       "conv5_block3_out",
-    "Xception":     "block14_sepconv2_act",
-    "EfficientNet": "top_activation",
+    "Inception":       "mixed10",
+    "Xception":        "block14_sepconv2_act",
+    "ConvNeXt":        None,   # auto-detect last 4D output
+    "EfficientNetV2S": "top_activation",
 }
 
 
-def compute_gradcam(model, img_array, class_idx, model_name):
+def _resolve_cam_layer(model, model_name):
     """
-    Compute a Grad-CAM heatmap for the given image and class.
+    Return a Keras layer suitable for CAM extraction for the active model.
 
-    Args:
-        model: Trained Keras classifier model.
-        img_array: Input image as float32 array of shape (1, H, W, 3) in [0,1].
-        class_idx: Integer index of the target class.
-        model_name: One of 'VGG19', 'Inception', 'ResNet', 'Xception', 'EfficientNet'.
-
-    Returns:
-        2-D numpy array in [0, 1] — the normalized CAM heatmap.
+    If GRADCAM_LAYER has an explicit name, use it. Otherwise scan from the
+    end of the model for the last layer whose output is a 4-D spatial tensor.
     """
-    layer_name = GRADCAM_LAYER.get(model_name)
-    if layer_name is None:
-        raise ValueError(f"No Grad-CAM layer configured for model '{model_name}'")
+    name = GRADCAM_LAYER.get(model_name)
+    if name is not None:
+        try:
+            return model.get_layer(name)
+        except ValueError:
+            pass
+
+    for layer in reversed(model.layers):
+        try:
+            shape = layer.output.shape
+        except AttributeError:
+            continue
+        if len(shape) == 4:
+            return layer
+    raise ValueError(f"No 4-D output layer found for model '{model_name}'")
+
+
+def compute_gradcam_pp(model, img_array, class_idx, model_name):
+    """
+    Grad-CAM++ (Chattopadhay et al. 2018).
+
+    Higher-order gradient weighting produces tighter, better-localized
+    heatmaps than standard Grad-CAM for multiple or small target objects.
+    """
+    layer = _resolve_cam_layer(model, model_name)
 
     grad_model = tf.keras.Model(
         inputs=model.inputs,
-        outputs=[model.get_layer(layer_name).output, model.output]
+        outputs=[layer.output, model.output],
     )
 
-    with tf.GradientTape() as tape:
-        img_tensor = tf.cast(img_array, tf.float32)
-        conv_outputs, predictions = grad_model(img_tensor)
-        loss = predictions[:, class_idx]
+    img_tensor = tf.cast(img_array, tf.float32)
+    with tf.GradientTape() as tape3:
+        with tf.GradientTape() as tape2:
+            with tf.GradientTape() as tape1:
+                conv_outputs, predictions = grad_model(img_tensor)
+                y_c = predictions[:, class_idx]
+            grads_1 = tape1.gradient(y_c, conv_outputs)
+        grads_2 = tape2.gradient(grads_1, conv_outputs)
+    grads_3 = tape3.gradient(grads_2, conv_outputs)
 
-    grads = tape.gradient(loss, conv_outputs)
-    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
-    cam = tf.reduce_sum(conv_outputs[0] * pooled_grads, axis=-1)
+    # Per-channel weights (Chattopadhay eq. 19).
+    sum_feature = tf.reduce_sum(conv_outputs[0], axis=(0, 1))
+    g2 = grads_2[0]
+    g3 = grads_3[0]
+    denom = 2.0 * g2 + sum_feature * g3
+    denom = tf.where(denom != 0.0, denom, tf.ones_like(denom))
+    alphas = g2 / denom
+
+    weights = tf.reduce_sum(alphas * tf.nn.relu(grads_1[0]), axis=(0, 1))
+    cam = tf.reduce_sum(conv_outputs[0] * weights, axis=-1)
     cam = tf.nn.relu(cam)
     cam_max = tf.reduce_max(cam)
     return tf.cast(cam / (cam_max + 1e-8), tf.float32).numpy()
 
 
+def compute_score_cam(model, img_array, class_idx, model_name, max_channels=64):
+    """
+    Score-CAM (Wang et al. 2020).
+
+    Gradient-free: weights each feature-map channel by the class score of
+    the image masked with that channel's upsampled activation.
+
+    max_channels: since Score-CAM needs one forward pass per channel, cap
+    at `max_channels` top-activated channels to keep runtime manageable.
+    """
+    layer = _resolve_cam_layer(model, model_name)
+
+    feature_model = tf.keras.Model(inputs=model.inputs, outputs=layer.output)
+    img_tensor = tf.cast(img_array, tf.float32)
+    feature_maps = feature_model(img_tensor)[0].numpy()   # H' × W' × C
+    h, w, c = feature_maps.shape
+
+    activations = feature_maps.sum(axis=(0, 1))
+    top_ch = np.argsort(activations)[::-1][:min(max_channels, c)]
+
+    img_np = img_array[0]
+    H, W = img_np.shape[:2]
+
+    masked_batch = np.zeros((len(top_ch), H, W, img_np.shape[2]), dtype=np.float32)
+    for i, ch in enumerate(top_ch):
+        fmap = feature_maps[..., ch]
+        fmap_max = fmap.max()
+        fmap_min = fmap.min()
+        if fmap_max - fmap_min < 1e-8:
+            continue
+        norm = ((fmap - fmap_min) / (fmap_max - fmap_min)).astype(np.float32)
+        import cv2
+        upsampled = cv2.resize(norm, (W, H))
+        masked_batch[i] = img_np * upsampled[..., None]
+
+    scores = model.predict(masked_batch, verbose=0)[:, class_idx]
+
+    cam = np.zeros((h, w), dtype=np.float32)
+    for i, ch in enumerate(top_ch):
+        cam += scores[i] * feature_maps[..., ch]
+    cam = np.maximum(cam, 0.0)
+    cam_max = cam.max()
+    return cam / (cam_max + 1e-8)
+
+
 def save_gradcam_visualizations(model, model_name, image_paths, y_true, y_pred,
                                 y_pred_prob, class_names, result_dir, n_per_class=3):
     """
-    Save Grad-CAM heatmap overlays for the highest-confidence correct and incorrect
-    predictions, one set per class.
-
-    Args:
-        model: Trained Keras classifier.
-        model_name: Backbone name (e.g. 'ResNet').
-        image_paths: Array of test image paths.
-        y_true: True class indices (1-D int array).
-        y_pred: Predicted class indices (1-D int array).
-        y_pred_prob: Softmax probabilities (2-D float array, n_samples × n_classes).
-        class_names: List of class name strings.
-        result_dir: Directory where gradcam/ sub-folder will be created.
-        n_per_class: How many examples to save per class (default: 3).
+    Save side-by-side visualizations (original | Grad-CAM++ | Score-CAM) for
+    the highest-confidence correct and incorrect predictions per class.
     """
     import cv2
-    import numpy as np
 
     gradcam_dir = os.path.join(result_dir, "gradcam")
     os.makedirs(gradcam_dir, exist_ok=True)
@@ -465,15 +544,22 @@ def save_gradcam_visualizations(model, model_name, image_paths, y_true, y_pred,
                 img_input = np.expand_dims(img_array, axis=0)
 
                 try:
-                    cam = compute_gradcam(model, img_input, class_idx, model_name)
-                    cam_resized = cv2.resize(np.nan_to_num(cam), (w, h))
-                    heatmap = cv2.applyColorMap(
-                        np.uint8(255 * cam_resized), cv2.COLORMAP_JET
-                    )
-                    overlay = cv2.addWeighted(img_bgr, 0.6, heatmap, 0.4, 0)
-                    fname = f"{class_label}_{subset_name}_rank{rank + 1}.jpg"
-                    cv2.imwrite(os.path.join(gradcam_dir, fname), overlay)
-                except Exception as exc:
-                    print(f"Grad-CAM failed for {path}: {exc}")
+                    cam_pp = compute_gradcam_pp(model, img_input, class_idx, model_name)
+                    cam_sc = compute_score_cam(model, img_input, class_idx, model_name)
 
-    print(f"Grad-CAM overlays saved to: {gradcam_dir}")
+                    def _overlay(cam):
+                        cam_r = cv2.resize(np.nan_to_num(cam).astype(np.float32), (w, h))
+                        hm = cv2.applyColorMap(
+                            np.uint8(255 * cam_r), cv2.COLORMAP_JET
+                        )
+                        return cv2.addWeighted(img_bgr, 0.6, hm, 0.4, 0)
+
+                    overlay_pp = _overlay(cam_pp)
+                    overlay_sc = _overlay(cam_sc)
+                    grid = np.concatenate([img_bgr, overlay_pp, overlay_sc], axis=1)
+                    fname = f"{class_label}_{subset_name}_rank{rank + 1}.jpg"
+                    cv2.imwrite(os.path.join(gradcam_dir, fname), grid)
+                except Exception as exc:
+                    print(f"CAM failed for {path}: {exc}")
+
+    print(f"CAM overlays (Grad-CAM++ + Score-CAM) saved to: {gradcam_dir}")
