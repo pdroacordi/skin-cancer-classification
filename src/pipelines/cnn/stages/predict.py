@@ -35,6 +35,7 @@ def predict_batch(
     use_tta: bool = False,
     tta_n_steps: int = 8,
     tta_augment_fn: Optional[Callable] = None,
+    temperature=None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]]:
     """
     Run inference on a set of images.
@@ -76,7 +77,6 @@ def predict_batch(
     n_steps = math.ceil(len(paths) / batch_size)
 
     y_true_list:  list = []
-    y_pred_list:  list = []
     y_prob_list:  list = []
     uncertainty_list: Optional[list] = [] if use_mc_dropout else None
 
@@ -102,12 +102,18 @@ def predict_batch(
             prob_batch = model.predict(X_batch, verbose=0)
 
         y_true_list.extend(np.argmax(y_batch, axis=1))
-        y_pred_list.extend(np.argmax(prob_batch, axis=1))
         y_prob_list.extend(prob_batch)
 
     y_true = np.array(y_true_list)
-    y_pred = np.array(y_pred_list)
     y_prob = np.array(y_prob_list)
+
+    # Temperature scaling (Guo et al., 2017). log(softmax) + divide by T + softmax
+    # is equivalent to logits/T → softmax because softmax is translation-invariant.
+    if temperature is not None:
+        logp = np.log(np.clip(y_prob, 1e-12, 1.0))
+        y_prob = temperature.transform(logp)
+
+    y_pred = np.argmax(y_prob, axis=1)
     uncertainty = np.array(uncertainty_list) if uncertainty_list is not None else None
 
     return y_true, y_pred, y_prob, uncertainty
