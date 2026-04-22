@@ -6,8 +6,8 @@ All config flags can be overridden from the command line — no editing of
 config.py required between experiments.  Example:
 
     python main.py --cnn-model Xception --use-augmentation
-    python main.py --cnn-model ResNet --classifier RandomForest
-    python main.py --cnn-model EfficientNet --use-focal-loss --label-smoothing 0.1
+    python main.py --cnn-model ConvNeXt --classifier RandomForest
+    python main.py --cnn-model EfficientNetV2S --use-focal-loss --label-smoothing 0.1
     python main.py --batch-size 32 --num-kfolds 3 --no-use-fine-tuning
 """
 
@@ -70,7 +70,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # Model selection                                                      #
     # ------------------------------------------------------------------ #
     parser.add_argument("--cnn-model",
-                        choices=["VGG19", "Inception", "ResNet", "Xception", "EfficientNet"],
+                        choices=["Inception", "Xception", "ConvNeXt", "EfficientNetV2S"],
                         default=None, metavar="BACKBONE",
                         help=f"CNN backbone (default: {cfg.cnn_model})")
     parser.add_argument("--classifier",
@@ -87,6 +87,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num-iterations",  type=int,   default=None)
     parser.add_argument("--num-final-models",type=int,   default=None)
     parser.add_argument("--label-smoothing", type=float, default=None)
+    parser.add_argument("--weight-decay",    type=float, default=None)
+    parser.add_argument("--warmup-epochs",   type=int,   default=None)
+    parser.add_argument("--cutmix-alpha",    type=float, default=None)
     parser.add_argument("--tta-n-steps",     type=int,   default=None)
     parser.add_argument("--mc-dropout-steps",type=int,   default=None)
 
@@ -114,6 +117,8 @@ def _build_parser() -> argparse.ArgumentParser:
     _bool("use-tta",                   dest="use_tta",
           help_text=f"Test-Time Augmentation (default steps: {cfg.tta_n_steps})")
     _bool("use-mixup",                 dest="use_mixup")
+    _bool("use-cutmix",                dest="use_cutmix",
+          help_text="CutMix batch augmentation (coin-flip with Mixup when both on)")
     _bool("use-mc-dropout",            dest="use_mc_dropout",
           help_text=f"MC-Dropout uncertainty ({cfg.mc_dropout_steps} passes)")
     _bool("use-dynamic-ensemble",      dest="use_dynamic_ensemble",
@@ -228,7 +233,7 @@ def print_experiment_configuration() -> None:
     print(f"  Image size:             {cfg.img_size[:2]}")
     print(f"  Batch size:             {cfg.batch_size}")
     print(f"  Epochs:                 {cfg.num_epochs}")
-    print(f"  K-folds × iterations:   {cfg.num_kfolds} × {cfg.num_iterations}")
+    print(f"  K-folds x iterations:   {cfg.num_kfolds} x {cfg.num_iterations}")
     print(f"  Fine-tuning:            {cfg.use_fine_tuning}")
     print(f"  Data augmentation:      {cfg.use_data_augmentation}")
     print(f"  Graphic preprocessing:  {cfg.use_graphic_preprocessing}")
@@ -236,6 +241,8 @@ def print_experiment_configuration() -> None:
     print(f"  TTA:                    {cfg.use_tta}  (steps={cfg.tta_n_steps})")
     print(f"  MC Dropout:             {cfg.use_mc_dropout}  (steps={cfg.mc_dropout_steps})")
     print(f"  Mixup:                  {cfg.use_mixup}")
+    print(f"  CutMix:                 {cfg.use_cutmix}  (alpha={cfg.cutmix_alpha})")
+    print(f"  Warmup epochs:          {cfg.warmup_epochs}  (weight_decay={cfg.weight_decay})")
     print(f"  Metadata:               {cfg.use_metadata}")
     print(f"  Feature preprocessing:  {cfg.use_feature_preprocessing}")
     print(f"  Feature augmentation:   {cfg.use_feature_augmentation}")
