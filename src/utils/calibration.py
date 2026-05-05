@@ -15,6 +15,41 @@ from scipy.optimize import minimize
 from scipy.special import log_softmax
 
 
+def ece_per_neighbors(probs: np.ndarray, correct: np.ndarray, n_bins: int = 5) -> float:
+    """
+    ECE computed on a small local neighborhood (K~7 neighbors).
+
+    Uses fewer bins than the global ECE (5 vs 15) to avoid empty bins when
+    sample count equals the DES neighborhood size K.
+
+    Parameters
+    ----------
+    probs   : (K, n_classes) float — per-neighbor predicted probabilities from
+              ONE classifier.  Uses max confidence as the confidence value.
+    correct : (K,) bool/int — per-neighbor correctness indicator.
+    n_bins  : int — number of equal-width bins (default 5).
+
+    Returns
+    -------
+    float — ECE in [0, 1].  Returns 0.0 when K < 2 (trivially calibrated).
+    """
+    if len(probs) < 2:
+        return 0.0
+
+    confidences = np.max(probs, axis=1)          # (K,)
+    correct_f   = np.asarray(correct, dtype=float)
+
+    bins = np.linspace(0.0, 1.0, n_bins + 1)
+    ece  = 0.0
+    for lo, hi in zip(bins[:-1], bins[1:]):
+        mask = (confidences > lo) & (confidences <= hi)
+        n_in = mask.sum()
+        if n_in > 0:
+            ece += n_in * abs(correct_f[mask].mean() - confidences[mask].mean())
+
+    return ece / max(len(probs), 1)
+
+
 def expected_calibration_error(y_true, y_prob, n_bins=15):
     """
     Compute Expected Calibration Error (ECE).
