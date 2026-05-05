@@ -51,7 +51,16 @@ PER_CLASS_CSV_BASENAME = "per_class_metrics.csv"
 KNOWN_NETS = {"resnet", "inception", "vgg19", "xception", "efficientnet"}
 ALGO_NAMES = {
     "extratrees", "randomforest", "xgboost", "lightgbm",
-    "histgradientboosting", "svm", "dynamic_ensemble",
+    "histgradientboosting", "svm",
+    # DES variants — stored as dynamic_ensemble_<algorithm>
+    "dynamic_ensemble_knorau",
+    "dynamic_ensemble_knorau_ece",
+    "dynamic_ensemble_knorau_temp",
+    "dynamic_ensemble_conformal_targeted",
+    "dynamic_ensemble_conformal_targeted_ece",
+    "dynamic_ensemble_conformal_targeted_random",
+    # Legacy (pre-per-algorithm naming)
+    "dynamic_ensemble",
 }
 
 # Map metadata.json pipeline name → kind column value

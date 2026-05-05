@@ -731,7 +731,13 @@ class Plotter:
                     'histgradientboosting': 'HistGradientBoosting',
                     'extratrees': 'ExtraTrees',
                     'svm': 'SVM',
-                    'dynamic_ensemble': 'DynamicEnsemble',
+                    'dynamic_ensemble':                      'DynamicEnsemble',
+                    'dynamic_ensemble_knorau':               'DES-KNORAU',
+                    'dynamic_ensemble_knorau_ece':           'DES-ECE',
+                    'dynamic_ensemble_knorau_temp':          'DES-TempScaled',
+                    'dynamic_ensemble_conformal_targeted':   'CT-DES',
+                    'dynamic_ensemble_conformal_targeted_ece':    'CT-DES+ECE',
+                    'dynamic_ensemble_conformal_targeted_random': 'CT-DES-Random',
                 }.get(algorithm, algorithm.title())
                 return f"{net_display}+{alg_display}"
 

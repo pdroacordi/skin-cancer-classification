@@ -16,7 +16,14 @@ ALG_NICE = dict(
     lightgbm="LightGBM",
     histgradientboosting="HistGradientBoosting",
     svm="SVM",
+    # DES variants
     dynamic_ensemble="DynamicEnsemble",
+    dynamic_ensemble_knorau="DES-KNORAU",
+    dynamic_ensemble_knorau_ece="DES-ECE",
+    dynamic_ensemble_knorau_temp="DES-TempScaled",
+    dynamic_ensemble_conformal_targeted="CT-DES",
+    dynamic_ensemble_conformal_targeted_ece="CT-DES+ECE",
+    dynamic_ensemble_conformal_targeted_random="CT-DES-Random",
 )
 NET_NICE = dict(
     Convnext="ConvNeXt",
@@ -40,7 +47,13 @@ COLOR_PALETTE: Dict[str, str] = {
     "HistGradientBoosting": "#ffbb78",
     "ExtraTrees": "#e377c2",
     "SVM": "#98df8a",
-    "DynamicEnsemble": "#ff9500",
+    "DynamicEnsemble":          "#ff9500",
+    "DES-KNORAU":               "#ff9500",
+    "DES-ECE":                  "#e65c00",
+    "DES-TempScaled":           "#ffbb78",
+    "CT-DES":                   "#2196f3",
+    "CT-DES+ECE":               "#0d47a1",
+    "CT-DES-Random":            "#90caf9",
 }
 
 CLASSES: List[str] = [
