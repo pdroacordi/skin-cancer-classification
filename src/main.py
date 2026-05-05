@@ -125,9 +125,22 @@ def _build_parser() -> argparse.ArgumentParser:
           help_text="Dynamic Ensemble Selection via DESlib (feature-extraction pipeline only)")
 
     parser.add_argument("--des-algorithm",
-                        choices=["knorau", "desmi", "metades", "singlebest"],
+                        choices=[
+                            "knorau", "desmi", "metades", "singlebest",
+                            "knorau-ece", "knorau-temp",
+                            "conformal-targeted", "conformal-targeted-ece",
+                            "conformal-targeted-random",
+                        ],
                         default=None,
                         help=f"DES algorithm (default: {cfg.des_algorithm})")
+
+    _bool("use-conformal", dest="use_conformal",
+          help_text="Enable APS conformal prediction (required for conformal-targeted DES)")
+    parser.add_argument("--conformal-alpha", type=float, default=None,
+                        help=f"APS miscoverage level α (default: {cfg.conformal_alpha})")
+    parser.add_argument("--conformal-calibration-fraction", type=float, default=None,
+                        help=("Fraction of train+val used to calibrate APS for final models "
+                              f"(default: {cfg.conformal_calibration_fraction})"))
 
     return parser
 

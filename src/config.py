@@ -41,7 +41,16 @@ VALID_CLASSIFIERS:  List[str] = [
     'RandomForest', 'XGBoost', 'LightGBM',
     'HistGradientBoosting', 'ExtraTrees', 'SVM',
 ]
-VALID_DES_ALGORITHMS: List[str] = ['knorau', 'desmi', 'metades', 'singlebest']
+VALID_DES_ALGORITHMS: List[str] = [
+    'knorau', 'desmi', 'metades', 'singlebest',
+    # H3 — ECE-guided DES
+    'knorau-ece',
+    'knorau-temp',
+    # H16 — Conformal-Targeted DES
+    'conformal-targeted',
+    'conformal-targeted-ece',
+    'conformal-targeted-random',
+]
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +124,11 @@ class Config:
     des_dsel_fraction: float = 0.30
     des_k_neighbors: int = 7
 
+    # ---- Conformal Prediction (H7 / H16 prerequisite) ----------------------
+    use_conformal: bool = False
+    conformal_alpha: float = 0.10
+    conformal_calibration_fraction: float = 0.20
+
     # ---- Derived values (properties, not stored fields) ---------------------
 
     @property
@@ -182,6 +196,8 @@ def apply_cli_overrides(args) -> None:
         'label_smoothing':           'label_smoothing',
         'weight_decay':              'weight_decay',
         'cutmix_alpha':              'cutmix_alpha',
+        'conformal_alpha':           'conformal_alpha',
+        'conformal_calibration_fraction': 'conformal_calibration_fraction',
         # bool  (BooleanOptionalAction yields None when flag is absent)
         'use_fine_tuning':           'use_fine_tuning',
         'use_data_augmentation':     'use_data_augmentation',
@@ -198,6 +214,7 @@ def apply_cli_overrides(args) -> None:
         'use_cutmix':                'use_cutmix',
         'use_mc_dropout':            'use_mc_dropout',
         'use_dynamic_ensemble':      'use_dynamic_ensemble',
+        'use_conformal':             'use_conformal',
     }
     for arg_attr, cfg_attr in _field_map.items():
         val = getattr(args, arg_attr, None)
