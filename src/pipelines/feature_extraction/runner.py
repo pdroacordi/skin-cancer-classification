@@ -29,6 +29,7 @@ from core.types import EvalResult, FoldResult, RunArtifact
 from models.classical_models import create_ml_pipeline, save_model
 from models.cnn_models import get_feature_extractor_from_cnn
 from models.dynamic_ensemble import DynamicEnsembleSelector
+from utils.conformal import APSConformalPredictor
 from pipelines.feature_extraction.stages.evaluate import evaluate_classifier
 from pipelines.feature_extraction.stages.extract import load_or_extract_features
 from pipelines.feature_extraction.stages.train import train_classifier
@@ -89,12 +90,12 @@ def run_feature_extraction_pipeline(
     result_dir = Path(feature_extraction_experiment_dir())
     result_dir.mkdir(parents=True, exist_ok=True)
 
-    # When DES is active, results live under dynamic_ensemble/ so they are
-    # clearly distinguishable from single-classifier runs in aggregate_results.
-    subdir_name = (
-        "dynamic_ensemble" if cfg.use_dynamic_ensemble
-        else cfg.classical_classifier_model.lower()
-    )
+    # Result subdir: per-algorithm for DES (enables side-by-side comparison in
+    # aggregate_results), single-classifier name otherwise.
+    if cfg.use_dynamic_ensemble:
+        subdir_name = "dynamic_ensemble_" + cfg.des_algorithm.replace("-", "_")
+    else:
+        subdir_name = cfg.classical_classifier_model.lower()
     classifier_dir = result_dir / subdir_name
     classifier_dir.mkdir(parents=True, exist_ok=True)
 
@@ -594,6 +595,8 @@ def _build_config_snapshot() -> dict:
         "use_dynamic_ensemble":       cfg.use_dynamic_ensemble,
         "des_algorithm":              cfg.des_algorithm if cfg.use_dynamic_ensemble else None,
         "des_pool_classifiers":       cfg.des_pool_classifiers if cfg.use_dynamic_ensemble else None,
+        "use_conformal":              cfg.use_conformal,
+        "conformal_alpha":            cfg.conformal_alpha if cfg.use_conformal else None,
     }
 
 
@@ -633,8 +636,8 @@ def _train_des_ensemble(
     Train DES pool on a stratified subset of (train_feats, train_labs) and
     calibrate on the remaining DSEL split.  Evaluate on (val_feats, val_labs).
 
-    The DSEL split (cfg.des_dsel_fraction of the fold training data) is kept
-    out of pool-classifier training so DES competence estimates are unbiased.
+    For conformal-targeted algorithms the APS predictor is calibrated on the
+    fold's val split and applied to val_feats before evaluation.
 
     Returns (fitted DynamicEnsembleSelector, EvalResult on val set).
     """
@@ -657,11 +660,31 @@ def _train_des_ensemble(
 
     pool = _build_pool_classifiers(X_tr, y_tr, cfg.des_pool_classifiers)
 
+    is_conformal = cfg.des_algorithm.startswith('conformal-targeted')
+    is_temp      = cfg.des_algorithm == 'knorau-temp'
+
     des = DynamicEnsembleSelector(
         algorithm=cfg.des_algorithm,
         k_neighbors=cfg.des_k_neighbors,
     )
-    des.fit(pool, X_dsel, y_dsel)
+    des.fit(
+        pool, X_dsel, y_dsel,
+        X_val=val_feats if is_temp else None,
+        y_val=val_labs  if is_temp else None,
+    )
+
+    # --- Conformal-targeted: calibrate APS on val, apply to val for eval ---
+    if is_conformal:
+        aps = _fit_conformal_predictor(des, val_feats, val_labs)
+        S_val = aps.predict_set(
+            _get_pool_proba(des, val_feats)
+        )
+        des.set_conformal_sets(S_val)
+        report = aps.coverage_report(val_labs,
+                                      _get_pool_proba(des, val_feats))
+        print(f"  APS coverage={report['empirical_coverage']:.3f} "
+              f"(target={1-cfg.conformal_alpha:.2f})  "
+              f"mean |S|={report['mean_set_size']:.2f}")
 
     _, _, _, eval_result = evaluate_classifier(
         model=des,
@@ -686,7 +709,11 @@ def _train_and_evaluate_des_final(
 ) -> List[EvalResult]:
     """
     Train cfg.num_final_models DES ensembles on all training data and evaluate
-    on the test set.  Each model uses a fresh stratified DSEL split.
+    on the test set.
+
+    For conformal-targeted algorithms, a held-out calibration slice
+    (cfg.conformal_calibration_fraction of train) is used to fit the APS
+    predictor; this slice is shared across all num_final_models.
     """
     from sklearn.model_selection import StratifiedShuffleSplit
 
@@ -696,33 +723,82 @@ def _train_and_evaluate_des_final(
     print(f"Pool: {cfg.des_pool_classifiers}")
     print(f"{'=' * 60}")
 
+    is_conformal = cfg.des_algorithm.startswith('conformal-targeted')
+    is_temp      = cfg.des_algorithm == 'knorau-temp'
+
+    # For conformal: carve out a fixed calibration slice once (shared)
+    cal_idx = None
+    if is_conformal:
+        cal_splitter = StratifiedShuffleSplit(
+            n_splits=1,
+            test_size=cfg.conformal_calibration_fraction,
+            random_state=0,
+        )
+        pool_idx, cal_idx = next(
+            cal_splitter.split(train_feats, train_labs)
+        )
+        X_cal = train_feats[cal_idx]
+        y_cal = train_labs[cal_idx]
+        print(f"  APS calibration slice: {len(X_cal)} samples "
+              f"(α={cfg.conformal_alpha})")
+
     model_evals: List[EvalResult] = []
 
     for model_idx in range(1, cfg.num_final_models + 1):
         print(f"\n--- Final DES model {model_idx}/{cfg.num_final_models} ---")
 
         try:
+            # DSEL split drawn from the full training set (or pool subset for conformal)
+            dsel_source_feats = train_feats if cal_idx is None else train_feats[pool_idx]
+            dsel_source_labs  = train_labs  if cal_idx is None else train_labs[pool_idx]
+
             splitter = StratifiedShuffleSplit(
                 n_splits=1,
                 test_size=cfg.des_dsel_fraction,
                 random_state=42 + model_idx,
             )
-            tr_idx, dsel_idx = next(splitter.split(train_feats, train_labs))
-            X_tr,   y_tr   = train_feats[tr_idx],   train_labs[tr_idx]
-            X_dsel, y_dsel = train_feats[dsel_idx], train_labs[dsel_idx]
+            tr_idx, dsel_idx = next(splitter.split(dsel_source_feats,
+                                                    dsel_source_labs))
+            X_tr,   y_tr   = dsel_source_feats[tr_idx],   dsel_source_labs[tr_idx]
+            X_dsel, y_dsel = dsel_source_feats[dsel_idx], dsel_source_labs[dsel_idx]
 
             print(f"  Pool training: {len(X_tr)} | DSEL: {len(X_dsel)}")
 
             pool = _build_pool_classifiers(X_tr, y_tr, cfg.des_pool_classifiers)
 
+            # For knorau-temp the val split for temperature fitting is the
+            # DSEL portion (independent from pool training).
             des = DynamicEnsembleSelector(
                 algorithm=cfg.des_algorithm,
                 k_neighbors=cfg.des_k_neighbors,
             )
-            des.fit(pool, X_dsel, y_dsel)
+            des.fit(
+                pool, X_dsel, y_dsel,
+                X_val=X_dsel if is_temp else None,
+                y_val=y_dsel if is_temp else None,
+            )
+
+            # Conformal-targeted: fit APS on calibration slice, apply to test
+            if is_conformal:
+                aps = _fit_conformal_predictor(des, X_cal, y_cal)
+                S_test = aps.predict_set(
+                    _get_pool_proba(des, test_feats)
+                )
+                des.set_conformal_sets(S_test)
+                np.save(
+                    str(final_models_dir /
+                        f"conformal_sets_model{model_idx}.npy"),
+                    S_test,
+                )
+                report = aps.coverage_report(
+                    y_cal, _get_pool_proba(des, X_cal)
+                )
+                print(f"  APS coverage={report['empirical_coverage']:.3f}  "
+                      f"mean |S|={report['mean_set_size']:.2f}")
 
             des_save_path = str(
-                final_models_dir / f"des_{cfg.des_algorithm}_model{model_idx}.joblib"
+                final_models_dir /
+                f"des_{cfg.des_algorithm.replace('-', '_')}_model{model_idx}.joblib"
             )
             des.save(des_save_path)
 
@@ -746,6 +822,35 @@ def _train_and_evaluate_des_final(
             gc.collect()
 
     return model_evals
+
+
+def _fit_conformal_predictor(
+    des: DynamicEnsembleSelector,
+    X_cal: np.ndarray,
+    y_cal: np.ndarray,
+) -> APSConformalPredictor:
+    """Calibrate an APS conformal predictor using the fitted DES pool."""
+    p_cal = _get_pool_proba(des, X_cal)
+    aps   = APSConformalPredictor(alpha=cfg.conformal_alpha)
+    aps.fit(y_cal, p_cal)
+    return aps
+
+
+def _get_pool_proba(
+    des: DynamicEnsembleSelector,
+    X: np.ndarray,
+) -> np.ndarray:
+    """
+    Return averaged pool probabilities for X.
+
+    Uses the pool classifiers directly (not the DES selection mechanism)
+    so the APS calibration is based on the ensemble's raw probability
+    distribution, independent of which DES algorithm is active.
+    """
+    clf_list = des._des._knorau.pool_classifiers_ if hasattr(
+        des._des, '_knorau') else des._des.pool_classifiers_
+    probas = np.stack([c.predict_proba(X) for c in clf_list], axis=0)  # (n_clf, n, K)
+    return probas.mean(axis=0).astype(np.float32)                       # (n, K)
 
 
 def _list_artifacts(ctx: RunContext, final_models_dir: Path) -> List[RunArtifact]:
